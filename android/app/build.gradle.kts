@@ -98,7 +98,7 @@ flutter {
 dependencies {
     // MainActivity's handshake reader (CompletableDeferred/await against the
     // wireguard_flutter_plus plugin's backend).
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // Typed access to the same tunnel artifact the plugin uses
     // (GoBackend/Tunnel/Config). Must stay on the exact version the plugin
     // bundles so both load the same classes.
