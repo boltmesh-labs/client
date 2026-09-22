@@ -404,14 +404,23 @@ flutter test --coverage && bash tool/coverage_gate.sh 80
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
+# Native-platform contracts (systemd units + staged Linux payload, the
+# Android manifest the background tunnel needs, the Windows helper channel):
+bash tool/verify_native.sh
 ```
 
 `tool/check_generated.sh` regenerates `flutter gen-l10n` + `build_runner`
 output and fails on drift: those files are excluded from analysis, so a stale
 one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
 (currently 80%) on hand-written lines only — generated code is excluded.
-Timer behaviour is tested with `package:fake_async` (`async.elapse`), never
-real sleeps, so the suite is deterministic and fast.
+`tool/verify_native.sh` covers checks the Dart suite cannot reach (see the
+`validate-native` CI job). Timer behaviour is tested with `package:fake_async`
+(`async.elapse`), never real sleeps, so the suite is deterministic and fast.
+
+The Windows named-pipe transport is covered by a Flutter-free C++ test
+(`windows/runner/tests/helper_pipe_io_test.cpp`, built as
+`helper_pipe_io_tests` and run by the `validate-windows` job); Android is
+additionally checked by `./gradlew :app:lintDebug` in `validate-android`.
 
 Test paths mirror `lib/` (e.g. `flutter test
 test/features/vpn/data/wg_conf_test.dart`). Shared doubles live in

@@ -33,6 +33,26 @@ const (
 	commandTimeout = 30 * time.Second
 )
 
+// toolDirs are the only directories searched for the privileged tools the
+// daemon executes. They are fixed, root-owned system paths on purpose: the
+// daemon runs as root, so resolving a bare name through PATH on a manual
+// launch would let a caller-influenced PATH (or a stray wg-quick in the
+// working directory) execute as root. wg-quick's own child lookups (wg, ip,
+// resolvconf) remain PATH-based — that is the tool's behaviour, not ours.
+var toolDirs = []string{"/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// findTool returns the absolute path of name under [toolDirs], or an error
+// when it is not installed there. Tests replace [toolDirs] with a temp dir.
+func findTool(name string) (string, error) {
+	for _, dir := range toolDirs {
+		path := filepath.Join(dir, name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found under %v (is wireguard-tools installed?)", name, toolDirs)
+}
+
 type runFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 // Manager brings the interface up/down and reports its state. Construct with
@@ -48,6 +68,7 @@ type Manager struct {
 	busy atomic.Bool
 
 	run        runFunc
+	lookup     func(name string) (string, error)
 	linkExists func(name string) bool
 	device     func(name string) (*wgtypes.Device, error)
 }
@@ -58,9 +79,21 @@ func NewManager(dir, iface string) *Manager {
 		iface:      iface,
 		dir:        dir,
 		run:        runCommand,
+		lookup:     findTool,
 		linkExists: linkExists,
 		device:     queryDevice,
 	}
+}
+
+// tool resolves a privileged tool against [toolDirs]. Resolution happens per
+// operation rather than at construction so a read-only status path never
+// requires wireguard-tools to be installed.
+func (m *Manager) tool(name string) (string, error) {
+	path, err := m.lookup(name)
+	if err != nil {
+		return "", &protocol.OpError{Code: protocol.CodeInternal, Err: err}
+	}
+	return path, nil
 }
 
 // Up validates the config, writes it to the root-only path, and starts the
@@ -83,6 +116,12 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	m.busy.Store(true)
 	defer m.busy.Store(false)
 
+	// Resolve before writing anything: a missing tool must not leave a
+	// privileged config behind.
+	wgQuick, err := m.tool(wgQuickBinary)
+	if err != nil {
+		return nil, err
+	}
 	if m.linkExists(m.iface) {
 		if err := m.down(ctx); err != nil {
 			return nil, err
@@ -94,7 +133,7 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	if err := os.WriteFile(m.configPath(), []byte(wgQuickConfig), 0o600); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
 	}
-	if _, err := m.run(ctx, wgQuickBinary, "up", m.configPath()); err != nil {
+	if _, err := m.run(ctx, wgQuick, "up", m.configPath()); err != nil {
 		_ = os.Remove(m.configPath())
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("wg-quick up: %w", err)}
 	}
@@ -160,11 +199,19 @@ func (m *Manager) down(ctx context.Context) error {
 		_ = os.Remove(m.configPath())
 		return nil
 	}
-	if _, err := m.run(ctx, wgQuickBinary, "down", m.configPath()); err != nil {
+	wgQuick, err := m.tool(wgQuickBinary)
+	if err != nil {
+		return err
+	}
+	if _, err := m.run(ctx, wgQuick, "down", m.configPath()); err != nil {
 		// wg-quick can strand a link when its own bookkeeping is gone
 		// (missing config, stale DNS). Delete the link directly so `down`
 		// stays idempotent; addresses and routes die with the link.
-		if _, delErr := m.run(ctx, ipBinary, "link", "del", m.iface); delErr != nil {
+		ip, ipErr := m.tool(ipBinary)
+		if ipErr != nil {
+			return ipErr
+		}
+		if _, delErr := m.run(ctx, ip, "link", "del", m.iface); delErr != nil {
 			return &protocol.OpError{
 				Code: protocol.CodeInternal,
 				Err:  fmt.Errorf("wg-quick down: %w; ip link del: %w", err, delErr),

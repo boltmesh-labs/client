@@ -13,6 +13,8 @@ flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 flutter test --coverage
 bash tool/coverage_gate.sh 80       # floor on hand-written lines only
+bash tool/verify_native.sh          # systemd units + staged Linux helper,
+                                    # Android manifest, Windows helper channel
 ```
 
 - Single test: `flutter test test/features/vpn/data/wg_conf_test.dart` (test paths mirror `lib/`).

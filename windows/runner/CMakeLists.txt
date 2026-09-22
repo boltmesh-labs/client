@@ -11,6 +11,8 @@ add_executable(${BINARY_NAME} WIN32
   "main.cpp"
   "helper_pipe.cpp"
   "helper_pipe.h"
+  "helper_pipe_io.cpp"
+  "helper_pipe_io.h"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -40,3 +42,16 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Standalone test for the boltmeshd named-pipe transport. It links no Flutter
+# libraries, so it can be built and run on the Windows CI runner (see the
+# validate-windows job) even though the app itself needs a GUI toolchain.
+# It is not installed into the bundle.
+add_executable(helper_pipe_io_tests
+  "tests/helper_pipe_io_test.cpp"
+  "helper_pipe_io.cpp"
+  "helper_pipe_io.h"
+)
+apply_standard_settings(helper_pipe_io_tests)
+target_compile_definitions(helper_pipe_io_tests PRIVATE "NOMINMAX")
+target_link_libraries(helper_pipe_io_tests PRIVATE "kernel32.lib")

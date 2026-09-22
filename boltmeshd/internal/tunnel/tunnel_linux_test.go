@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -55,9 +56,63 @@ func deviceWithPeers(t *testing.T) *wgtypes.Device {
 func newTestManager(t *testing.T, linkUp bool, dev *wgtypes.Device, devErr error) *Manager {
 	t.Helper()
 	m := NewManager(t.TempDir(), DefaultInterface)
+	// Passthrough resolver: tests assert on the bare tool names they already
+	// know, while the real resolver is exercised by the findTool tests.
+	m.lookup = func(name string) (string, error) { return name, nil }
 	m.linkExists = func(string) bool { return linkUp }
 	m.device = func(string) (*wgtypes.Device, error) { return dev, devErr }
 	return m
+}
+
+func overrideToolDirs(t *testing.T, dirs []string) {
+	t.Helper()
+	old := toolDirs
+	toolDirs = dirs
+	t.Cleanup(func() { toolDirs = old })
+}
+
+func writeTool(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindToolUsesFixedDirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeTool(t, dir, wgQuickBinary)
+	overrideToolDirs(t, []string{dir, "/does/not/exist"})
+
+	got, err := findTool(wgQuickBinary)
+	if err != nil {
+		t.Fatalf("findTool(%q) = %v", wgQuickBinary, err)
+	}
+	if want := filepath.Join(dir, wgQuickBinary); got != want {
+		t.Fatalf("findTool = %q, want %q", got, want)
+	}
+}
+
+func TestFindToolMissingIsAnError(t *testing.T) {
+	overrideToolDirs(t, []string{t.TempDir()})
+
+	if _, err := findTool(wgQuickBinary); err == nil {
+		t.Fatal("findTool(missing) = nil, want error")
+	}
+}
+
+func TestUpFailsWithoutWgQuickAndWritesNothing(t *testing.T) {
+	m := newTestManager(t, false, deviceWithPeers(t), nil)
+	m.lookup = findTool
+	overrideToolDirs(t, []string{t.TempDir()})
+
+	_, err := m.Up(context.Background(), validConfig)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up(no wg-quick) = %v, want internal", err)
+	}
+	if _, statErr := os.Stat(m.configPath()); !os.IsNotExist(statErr) {
+		t.Fatal("config written despite the tool being missing")
+	}
 }
 
 func recordRuns() (*[]runCall, runFunc) {

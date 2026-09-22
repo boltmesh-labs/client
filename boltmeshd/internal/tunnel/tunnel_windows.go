@@ -71,16 +71,25 @@ type Manager struct {
 	service tunnelService
 	device  deviceReader
 	exeDir  func() (string, error)
+
+	// protectDir/protectFile tighten the ACL on the privileged config path.
+	// os.Chmod is a no-op protection on Windows, so these are the real
+	// control over who can read the WireGuard private key. Tests replace them
+	// with no-ops so a temp dir is never locked down.
+	protectDir  func(string) error
+	protectFile func(string) error
 }
 
 // NewManager returns a Manager for iface storing its config in dir.
 func NewManager(dir, iface string) *Manager {
 	return &Manager{
-		iface:   iface,
-		dir:     dir,
-		service: newWindowsService(iface),
-		device:  newWireGuardReader(),
-		exeDir:  executableDir,
+		iface:       iface,
+		dir:         dir,
+		service:     newWindowsService(iface),
+		device:      newWireGuardReader(),
+		exeDir:      executableDir,
+		protectDir:  protectConfigDir,
+		protectFile: protectConfigFile,
 	}
 }
 
@@ -111,8 +120,18 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("create config dir: %w", err)}
 	}
+	// Restrict the directory before writing: the config carries the private
+	// key, and 0o600 does nothing on Windows.
+	if err := m.protectDir(m.dir); err != nil {
+		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("protect config dir: %w", err)}
+	}
 	if err := os.WriteFile(m.configPath(), []byte(wgQuickConfig), 0o600); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
+	}
+	// The file may pre-date a protected directory (or a previous build), so
+	// tighten it explicitly rather than relying on inheritance alone.
+	if err := m.protectFile(m.configPath()); err != nil {
+		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("protect config file: %w", err)}
 	}
 
 	// Tear down any running tunnel so the restarted service reads the file

@@ -12,11 +12,12 @@ on:
       - main
       - develop
 
+# Least privilege by default: every job only reads the repository. Jobs that
+# need more (the release job writes contents) grant it themselves, so a
+# compromised third-party action cannot mint OIDC tokens or touch the security
+# tab from the validate/scan jobs.
 permissions:
-  id-token: write
   contents: read
-  pull-requests: write
-  security-events: write
 
 jobs:
   validate:
@@ -83,6 +84,19 @@ jobs:
       - name: Build Windows runner (debug)
         run: flutter build windows --debug
 
+      # Compiles and runs the Flutter-free named-pipe transport test. Runs the
+      # freshly built exe from wherever the generator placed it.
+      - name: Run Windows helper pipe tests
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build/windows -Recurse -Filter helper_pipe_io_tests.exe |
+            Select-Object -First 1
+          if ($null -eq $exe) { throw 'helper_pipe_io_tests.exe was not built' }
+          & $exe.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "helper_pipe_io_tests.exe failed (exit $LASTEXITCODE)"
+          }
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -124,6 +138,31 @@ jobs:
       # Uses the debug fallback, so no keystore secret is needed here.
       - name: Build Android APK (debug)
         run: flutter build apk --debug
+
+      # Android Lint needs the SDK path flutter build wrote to
+      # android/local.properties, hence after the build. It catches
+      # manifest/resource/API misuse the Dart suite cannot see.
+      - name: Run Android Lint
+        working-directory: android
+        run: ./gradlew :app:lintDebug
+
+  validate-native:
+    name: "Validate native platform contracts"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
+
+      # systemd units + staged Linux payload, the Android manifest contract,
+      # and the Windows helper channel wiring.
+      - name: Verify native platform contracts
+        run: bash tool/verify_native.sh
 
   validate-boltmeshd:
     name: "Validate boltmeshd"
@@ -203,7 +242,7 @@ jobs:
 
   build-android:
     name: "Build Android"
-    needs: [validate, validate-android, security]
+    needs: [validate, validate-android, validate-native, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
@@ -277,7 +316,7 @@ jobs:
 
   build-linux:
     name: "Build Linux"
-    needs: [validate, validate-boltmeshd, security]
+    needs: [validate, validate-boltmeshd, validate-native, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
@@ -334,7 +373,7 @@ jobs:
 
   build-windows:
     name: "Build Windows"
-    needs: [validate, validate-windows, security]
+    needs: [validate, validate-windows, validate-native, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
 
@@ -421,7 +460,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
+      # Write the drafted release; read this run's artifacts for download.
       contents: write
+      actions: read
 
     steps:
       - name: Download Android Artifact
@@ -442,6 +483,16 @@ jobs:
           name: windows-installer
           path: artifacts/windows
 
+      # SHA-256 of every published installer, keyed by the asset basename so
+      # the manifest matches the release's file names.
+      - name: Generate checksum manifest
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.aab' -o -name '*.apk' -o -name '*.deb' -o -name '*.rpm' -o -name '*.exe' \) -exec sha256sum {} + \
+            | while read -r hash path; do printf '%s  %s\n' "$hash" "$(basename "$path")"; done \
+            | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Draft GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -449,6 +500,7 @@ jobs:
             artifacts/android/**/*.aab
             artifacts/linux/**/*
             artifacts/windows/**/*.exe
+            artifacts/SHA256SUMS
           draft: true
           prerelease: false
           generate_release_notes: true

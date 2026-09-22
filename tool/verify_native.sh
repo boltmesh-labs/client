@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Native-platform contract checks the Dart and Go unit suites cannot cover:
+# the systemd units and staged Linux package payload, the Android manifest the
+# background tunnel depends on, and the Windows helper channel wiring.
+#
+# Runs on Linux (CI's validate-native job). The Windows named-pipe transport
+# itself is compiled and exercised by the validate-windows job.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+fail=0
+
+ok() { printf 'ok    %s\n' "$*"; }
+bad() {
+  printf 'FAIL  %s\n' "$*" >&2
+  fail=1
+}
+
+# --- Linux: the systemd units parse ---------------------------------------
+if command -v systemd-analyze >/dev/null 2>&1; then
+  # The one expected diagnostic is the missing ExecStart target: the deb/rpm
+  # postinstall installs it, so it is absent on the runner. Everything else
+  # (unknown directives, bad references, syntax) must be clean.
+  verify_out="$(systemd-analyze verify \
+    boltmeshd/deploy/boltmeshd.service \
+    boltmeshd/deploy/boltmeshd.socket 2>&1 || true)"
+  unexpected="$(printf '%s\n' "$verify_out" | grep -v -E 'is not executable|^$' || true)"
+  if [[ -n "$unexpected" ]]; then
+    bad "systemd unit verification"
+    printf '%s\n' "$unexpected" >&2
+  else
+    ok "systemd units verify"
+  fi
+else
+  printf 'skip  systemd-analyze unavailable\n'
+fi
+
+# --- Linux: the helper stages into a bundle and runs ----------------------
+if command -v go >/dev/null 2>&1; then
+  bundle="$(mktemp -d)"
+  trap 'rm -rf "$bundle"' EXIT
+  if BUILD_OUTPUT_DIRECTORY="$bundle" bash boltmeshd/packaging/stage.sh >/dev/null 2>&1; then
+    for artifact in boltmeshd boltmeshd.service boltmeshd.socket 99-boltmesh-unmanaged.conf; do
+      [[ -f "$bundle/boltmeshd/$artifact" ]] || bad "staged payload is missing $artifact"
+    done
+    if [[ -x "$bundle/boltmeshd/boltmeshd" ]] &&
+      "$bundle/boltmeshd/boltmeshd" --version >/dev/null 2>&1; then
+      ok "boltmeshd stages into the bundle and reports a version"
+    else
+      bad "staged boltmeshd binary is not executable"
+    fi
+  else
+    bad "boltmeshd/packaging/stage.sh failed"
+  fi
+else
+  printf 'skip  go unavailable\n'
+fi
+
+# --- Android: the manifest contract the background tunnel relies on -------
+manifest="android/app/src/main/AndroidManifest.xml"
+require_manifest() {
+  if grep -qE "$1" "$manifest"; then
+    ok "Android manifest: $2"
+  else
+    bad "Android manifest is missing $2"
+  fi
+}
+require_manifest 'android.permission.INTERNET' 'INTERNET'
+require_manifest 'android.permission.ACCESS_NETWORK_STATE' 'ACCESS_NETWORK_STATE'
+require_manifest 'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE' \
+  'FOREGROUND_SERVICE_CONNECTED_DEVICE'
+require_manifest "com\\.wireguard\\.android\\.backend\\.GoBackend\\\$VpnService" 'VpnService entry'
+require_manifest 'BIND_VPN_SERVICE' 'BIND_VPN_SERVICE permission'
+require_manifest 'orban\.group\.wireguard_flutter\.VpnForegroundService' \
+  'plugin foreground service'
+require_manifest 'android:stopWithTask="false"' \
+  'stopWithTask=false (cached engine survives a task swipe)'
+require_manifest 'android:scheme="boltmesh"' 'OAuth callback scheme'
+
+# --- Windows: the helper channel is wired end to end ----------------------
+channel='com.boltmesh/helper'
+if grep -qF "$channel" windows/runner/helper_pipe.cpp; then
+  ok "Windows helper channel is registered"
+else
+  bad "windows/runner/helper_pipe.cpp does not register $channel"
+fi
+if grep -qF "MethodChannel('$channel')" lib/features/vpn/data/helper_socket_io.dart; then
+  ok "Dart helper channel matches the native one"
+else
+  bad "NativePipeHelperSocket does not use $channel"
+fi
+if grep -qF 'helper_pipe_io.cpp' windows/runner/CMakeLists.txt; then
+  ok "Windows helper transport is compiled"
+else
+  bad "helper_pipe_io.cpp is not built by windows/runner/CMakeLists.txt"
+fi
+
+if [[ "$fail" -ne 0 ]]; then
+  echo "native platform contract checks failed" >&2
+  exit 1
+fi
+echo "native platform contract checks passed"

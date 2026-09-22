@@ -61,7 +61,9 @@ app's health policy decides.
   `wireguard_svc.exe` installed beside it), never taken from the client. A
   client that could name the service binary would turn a LocalSystem service
   into arbitrary code execution. The named pipe is ACL'd to SYSTEM,
-  Administrators and Interactive Users.
+  Administrators and Interactive Users, and the persisted wg-quick config
+  directory/file to SYSTEM and Administrators only (a protected DACL, so
+  ProgramData inheritance cannot widen it).
 - **Linux**: the socket is `0660 root:boltmesh`; only members of the
   `boltmesh` group can connect. The daemon runs as root with
   `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`,
@@ -74,6 +76,12 @@ make build        # Linux amd64/arm64 + Windows amd64/arm64 to bin/
 make test         # go test ./... -v -count=1
 make all          # clean + format + lint + vet + test + build + checksums
 ```
+
+`bin/` is gitignored and never committed: the privileged helper is built
+locally (`make build`) and by the packaging hooks (`boltmeshd/packaging/stage.sh`
+for deb/rpm, `windows/packaging/stage_boltmeshd.ps1` for the Inno installer), so
+a checked-in binary cannot drift from the reviewed source. `make checksums`
+writes `bin/checksums.txt` for a local build.
 
 The Windows manager and its tests are build-tagged, so `go test ./...` on
 Linux covers the shared and Linux code; CI runs the Windows-tagged tests on a
@@ -120,9 +128,12 @@ The `boltmeshd` service is auto-start. The GUI needs no elevation: it talks to
 the named pipe and the daemon creates/starts the `boltmesh0` tunnel service on
 demand. `-console` runs the daemon in the foreground for development.
 
-> The config lives under `%ProgramData%\BoltMesh`. Restricting that
-> directory's ACL to SYSTEM + Administrators (its default machine-wide
-> inheritance is close) is a hardening follow-up.
+The config lives under `%ProgramData%\BoltMesh`. The daemon tightens that
+directory and the config file to a protected DACL granting only SYSTEM and
+Administrators on every `up` (`internal/tunnel/security_windows.go`), so
+ProgramData's default `BUILTIN\Users` inheritance cannot expose the WireGuard
+private key. `os.Chmod` is a no-op protection on Windows, so this is the real
+control.
 
 ## Linux: run from source (development)
 

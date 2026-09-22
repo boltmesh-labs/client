@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"boltmeshd/internal/protocol"
 )
 
@@ -150,7 +152,90 @@ func newTestManager(t *testing.T) (*Manager, *fakeService, *fakeDevice) {
 	m.service = svc
 	m.device = dev
 	m.exeDir = func() (string, error) { return `C:\app`, nil }
+	// The ACL helpers are exercised by their own tests; no-op here so the
+	// temp config dir stays writable for the rest of the suite.
+	m.protectDir = func(string) error { return nil }
+	m.protectFile = func(string) error { return nil }
 	return m, svc, dev
+}
+
+// aceSIDs returns the SID strings of every ACE in acl.
+func aceSIDs(t *testing.T, acl *windows.ACL) map[string]bool {
+	t.Helper()
+	sids := make(map[string]bool)
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			t.Fatalf("GetAce(%d) = %v", i, err)
+		}
+		sids[(*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()] = true
+	}
+	return sids
+}
+
+// TestConfigACLPolicy pins the policy: exactly SYSTEM and Administrators, no
+// BUILTIN\Users (which ProgramData inheritance would otherwise add).
+func TestConfigACLPolicy(t *testing.T) {
+	acl, err := configACL(windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+	if err != nil {
+		t.Fatalf("configACL() = %v", err)
+	}
+	if acl.AceCount != 2 {
+		t.Fatalf("AceCount = %d, want 2", acl.AceCount)
+	}
+	sids := aceSIDs(t, acl)
+	if !sids[localSystemSID] || !sids[administratorsSID] {
+		t.Fatalf("ACL SIDs = %v, want %s and %s", sids, localSystemSID, administratorsSID)
+	}
+}
+
+// TestProtectConfigDirAppliesACL proves the syscall path works end to end.
+func TestProtectConfigDirAppliesACL(t *testing.T) {
+	dir := t.TempDir()
+	// Grant cleanup access back afterwards: the protected DACL denies the
+	// invoking (non-SYSTEM) test account, which would otherwise make
+	// t.TempDir() removal fail.
+	t.Cleanup(func() {
+		everyone, err := windows.StringToSid("S-1-1-0")
+		if err != nil {
+			return
+		}
+		acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
+				TrusteeValue: windows.TrusteeValueFromSID(everyone),
+			},
+		}}, nil)
+		if err != nil {
+			return
+		}
+		_ = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+	})
+
+	if err := protectConfigDir(dir); err != nil {
+		t.Fatalf("protectConfigDir() = %v", err)
+	}
+
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatalf("GetNamedSecurityInfo() = %v", err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatalf("DACL() = %v", err)
+	}
+	if dacl.AceCount != 2 {
+		t.Fatalf("applied DACL has %d ACEs, want 2", dacl.AceCount)
+	}
+	sids := aceSIDs(t, dacl)
+	if !sids[localSystemSID] || !sids[administratorsSID] {
+		t.Fatalf("applied DACL SIDs = %v, want %s and %s", sids, localSystemSID, administratorsSID)
+	}
 }
 
 func TestUpWritesConfigAndStartsService(t *testing.T) {
