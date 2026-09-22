@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -25,6 +26,28 @@ const windowsServiceName = "boltmeshd"
 func defaultSocketPath() string  { return "" }
 func defaultSocketGroup() string { return "" }
 func defaultPipeName() string    { return `\\.\pipe\boltmesh\boltmeshd` }
+
+// defaultLogFile is where failures are persisted, beside the privileged config
+// under the machine-wide ProgramData directory.
+func defaultLogFile() string {
+	return filepath.Join(tunnel.DefaultConfigDir, "logs", "boltmeshd.log")
+}
+
+// prepareLogFile creates the log directory and tightens it to SYSTEM and
+// Administrators, matching the config directory. ProgramData's default ACE lets
+// every local user read, and the failure log records privileged operation
+// errors, so it gets the same protected DACL. os.Chmod is a no-op on Windows,
+// so the ACL is the real control.
+func prepareLogFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	return tunnel.ProtectDir(dir)
+}
 
 // run installs/uninstalls the service, runs in the foreground for
 // development, or hands control to the service control manager.

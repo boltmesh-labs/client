@@ -4,6 +4,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,12 +55,19 @@ type testClient struct {
 
 func newClient(t *testing.T, m Manager) *testClient {
 	t.Helper()
+	return newClientLogging(t, m, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// newClientLogging is newClient with an injectable logger, so a test can
+// capture the server's operational-failure records.
+func newClientLogging(t *testing.T, m Manager, log *slog.Logger) *testClient {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.sock")
 	ln, err := Listen(path, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	srv := New(m, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := New(m, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -324,5 +332,38 @@ func TestValidCapsAccepted(t *testing.T) {
 	})
 	if !resp.OK {
 		t.Fatalf("response = %+v, want ok", resp)
+	}
+}
+
+// TestFailureRecordIsStructured pins the persisted failure-log contract: the
+// daemon emits one machine-readable record per privileged-operation failure,
+// carrying the op and code but never the client's config (which holds the
+// WireGuard private key).
+func TestFailureRecordIsStructured(t *testing.T) {
+	var buf bytes.Buffer
+	m := &fakeManager{upErr: &protocol.OpError{
+		Code: protocol.CodeInternal,
+		Err:  errors.New("wg-quick up: exit status 1"),
+	}}
+	c := newClientLogging(t, m, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	const secretConfig = "[Interface]\nPrivateKey = super-secret-key\n"
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: secretConfig})
+	if resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeInternal {
+		t.Fatalf("response = %+v, want internal failure", resp)
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("failure record is not JSON: %v (%q)", err, buf.String())
+	}
+	if rec["msg"] != "tunnel operation failed" {
+		t.Fatalf("record msg = %v, want tunnel operation failed", rec["msg"])
+	}
+	if rec["op"] != protocol.OpUp || rec["code"] != protocol.CodeInternal {
+		t.Fatalf("record = %v, want op=up code=internal", rec)
+	}
+	if strings.Contains(buf.String(), "super-secret-key") || strings.Contains(buf.String(), "PrivateKey") {
+		t.Fatalf("failure record leaked the config: %s", buf.String())
 	}
 }

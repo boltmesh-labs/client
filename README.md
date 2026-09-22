@@ -109,12 +109,16 @@ in `test/support/fakes.dart`.
   (it tears the tunnel down locally even when the server is unreachable),
   then `ncpa.cpl` → physical adapter Properties → re-check
   `Internet Protocol Version 4/6` → `route print -4` (no stale `0.0.0.0`
-  via `boltmesh0`). Reboot only as a last resort. Packaging: see
+  via `boltmesh0`). Reboot only as a last resort. Privileged-helper failures
+  are persisted as JSON lines at `%ProgramData%\BoltMesh\logs\boltmeshd.log`
+  (SYSTEM/Administrators only); see `boltmeshd/README.md`. Packaging: see
   [Windows release build](#windows-release-build) (Inno Setup `.exe`).
 - **Linux**: hands all privileged work to the `boltmeshd` helper
   (`boltmeshd/`, installed by the deb/rpm, socket-activated, `boltmesh`
   group). The app itself holds no privilege and never runs
   `sudo`/`wg`/`wg-quick`; the daemon needs `wireguard-tools` for `wg-quick`.
+  Persistent helper failures land in `/var/log/boltmesh/boltmeshd.log`
+  (JSON lines); see `boltmeshd/README.md`.
   OAuth uses the same ephemeral loopback listener as Windows
   (`http://127.0.0.1:{port}/callback`) opened in the system browser, so the
   browser must be able to reach `API_BASE_URL` — the packaged deb/rpm pins

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 
+	"boltmeshd/internal/logging"
 	"boltmeshd/internal/tunnel"
 )
 
@@ -31,6 +32,7 @@ type options struct {
 	pipeName    string
 	iface       string
 	configDir   string
+	logFile     string
 	console     bool
 	install     bool
 	uninstall   bool
@@ -44,12 +46,36 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func configureLogging() {
+// configureLogging installs the daemon logger: human-readable records on
+// stdout (journald/dev) plus a durable JSON-lines file that persists failures
+// across restarts. A log target that cannot be prepared or opened degrades to
+// stdout-only instead of taking the daemon down.
+func configureLogging(opts options) {
 	level := slog.LevelInfo
 	if err := level.UnmarshalText([]byte(getEnv("LOG_LEVEL", "INFO"))); err != nil {
 		level = slog.LevelInfo
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+
+	logFile := opts.logFile
+	prepErr := prepareLogFile(logFile)
+	if prepErr != nil {
+		logFile = ""
+	}
+
+	logger, closer, setupErr := logging.Setup(logging.Options{
+		ConsoleLevel: level,
+		FilePath:     logFile,
+	})
+	slog.SetDefault(logger)
+	// Writes are synchronous; the OS reclaims the descriptor at exit.
+	_ = closer
+
+	switch {
+	case prepErr != nil:
+		slog.Warn("file logging disabled", "path", opts.logFile, "error", prepErr)
+	case setupErr != nil:
+		slog.Warn("file logging disabled", "path", logFile, "error", setupErr)
+	}
 }
 
 func main() {
@@ -60,18 +86,21 @@ func main() {
 	fs.StringVar(&opts.pipeName, "pipe", getEnv("BOLTMESHD_PIPE", defaultPipeName()), "Named pipe path (Windows)")
 	fs.StringVar(&opts.iface, "interface", getEnv("BOLTMESHD_INTERFACE", tunnel.DefaultInterface), "WireGuard interface name")
 	fs.StringVar(&opts.configDir, "config-dir", getEnv("BOLTMESHD_CONFIG_DIR", tunnel.DefaultConfigDir), "Directory for the privileged wg-quick config")
+	fs.StringVar(&opts.logFile, "log-file", getEnv("BOLTMESHD_LOG_FILE", defaultLogFile()), "Persistent JSON-lines failure log (empty disables file logging)")
 	fs.BoolVar(&opts.console, "console", false, "Run in the foreground instead of as a service (Windows)")
 	fs.BoolVar(&opts.install, "install", false, "Install and start the boltmeshd service, then exit (Windows)")
 	fs.BoolVar(&opts.uninstall, "uninstall", false, "Stop and remove the boltmeshd service, then exit (Windows)")
 	fs.BoolVar(&opts.showVersion, "version", false, "Print version and exit")
 	_ = fs.Parse(os.Args[1:])
 
-	configureLogging()
-
 	if opts.showVersion {
 		fmt.Printf("boltmeshd %s (%s, built %s)\n", Version, GitCommit, BuildTime)
 		return
 	}
+
+	// Configured after the version short-circuit so `--version` touches no
+	// filesystem state.
+	configureLogging(opts)
 
 	if err := run(opts); err != nil {
 		slog.Error("boltmeshd stopped", "error", err)

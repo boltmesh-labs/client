@@ -100,6 +100,32 @@ capabilities). `status` keeps its line lean and carries no `caps`.
   `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`,
   restricted address families, and no new namespaces.
 
+## Logging
+
+The daemon logs twice, with independent levels:
+
+- **stdout** — human-readable `key=value` records at `LOG_LEVEL` (default
+  `INFO`). This is what journald captures on Linux and what `-console` prints
+  on Windows.
+- **a persistent JSON-lines file** — one JSON object per line, only
+  `WARN` and above, so it records failures without duplicating the access
+  log. The file rotates at 5 MiB, keeping 5 backups (`boltmeshd.log`,
+  `boltmeshd.log.1` … `.5`), for a ~25 MiB ceiling.
+
+| OS | Path |
+| --- | --- |
+| Linux | `/var/log/boltmesh/boltmeshd.log` (systemd `LogsDirectory=boltmesh`, mode `0750`) |
+| Windows | `%ProgramData%\BoltMesh\logs\boltmeshd.log` (protected DACL: SYSTEM + Administrators) |
+
+Override the path with `-log-file` or `BOLTMESHD_LOG_FILE`; an empty value
+disables file logging. A path that cannot be created or opened is reported and
+the daemon continues with stdout only — logging never blocks startup.
+
+Failure records carry the operation, the protocol error code and the error
+text (e.g. `{"level":"WARN","msg":"tunnel operation failed","op":"up","code":"unavailable","error":"…"}`).
+The client's wg-quick config — which holds the WireGuard private key — is never
+logged.
+
 ## Build
 
 ```sh

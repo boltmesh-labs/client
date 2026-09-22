@@ -31,6 +31,11 @@ func protectConfigDir(dir string) error {
 	return setConfigDACL(dir, acl)
 }
 
+// ProtectDir applies the same SYSTEM + Administrators protected DACL to dir.
+// Exported so the persistent failure log can live in a directory beside the
+// config without inheriting ProgramData's world-readable ACE.
+func ProtectDir(dir string) error { return protectConfigDir(dir) }
+
 // protectConfigFile applies the same ACEs to an existing config file without
 // inheritance, so a file left with a loose DACL by an older build is tightened
 // on the next write.
