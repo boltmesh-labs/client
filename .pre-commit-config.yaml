@@ -6,134 +6,48 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
-        exclude: '^client/assets/'
+        exclude: "^assets/"
       - id: check-merge-conflict
 
   - repo: local
     hooks:
-      # --- Ruff (Backend) ---
-      - id: ruff-check
-        name: ruff check
-        entry: uv run --project backend ruff check --fix
-        language: system
-        types: [python]
-        files: ^backend/
-        exclude: ^backend/alembic/
-
-      - id: ruff-format
-        name: ruff format
-        entry: uv run --project backend ruff format
-        language: system
-        types: [python]
-        files: ^backend/
-
-      # --- Pyright (Backend) ---
-      - id: pyright
-        name: pyright
-        entry: uv run --project backend pyright -p backend
-        language: system
-        files: ^backend/
-        pass_filenames: false
-
-      # --- Lint Imports (Backend) ---
-      - id: lint-imports
-        name: lint imports
-        entry: uv run --project backend lint-imports --config backend/pyproject.toml
-        language: system
-        types: [python]
-        files: ^backend/
-        pass_filenames: false
-
-      # --- Shellcheck (Provisioning Scripts) ---
+      # --- Shellcheck ---
       - id: shellcheck
         name: shellcheck
         entry: shellcheck -x
         language: system
         types: [shell]
-        files: ^backend/scripts/
-
-      # --- Go Fmt ---
-      - id: go-fmt
-        name: go fmt
-        entry: make -C node-agent format
-        language: system
-        types: [go]
-        files: ^node-agent/
-        pass_filenames: false
-
-      # --- Golangci Lint ---
-      - id: golangci-lint
-        name: golangci-lint
-        entry: make -C node-agent lint
-        language: system
-        types: [go]
-        files: ^node-agent/
-        pass_filenames: false
 
       # --- Go Fmt (boltmeshd) ---
       - id: go-fmt-boltmeshd
         name: go fmt (boltmeshd)
-        entry: make -C client/linux/boltmeshd format
+        entry: make -C linux/boltmeshd format
         language: system
         types: [go]
-        files: ^client/linux/boltmeshd/
+        files: ^linux/boltmeshd/
         pass_filenames: false
 
       # --- Golangci Lint (boltmeshd) ---
       - id: golangci-lint-boltmeshd
         name: golangci-lint (boltmeshd)
-        entry: make -C client/linux/boltmeshd lint
+        entry: make -C linux/boltmeshd lint
         language: system
         types: [go]
-        files: ^client/linux/boltmeshd/
+        files: ^linux/boltmeshd/
         pass_filenames: false
 
-      # --- ESLint (Frontend) ---
-      - id: eslint
-        name: eslint
-        entry: npx --prefix frontend eslint --config frontend/eslint.config.js --fix
-        language: system
-        files: ^frontend/src/
-        types_or: [javascript, jsx, ts, tsx]
-
-      # --- Dart Format (Client) ---
+      # --- Dart Format ---
       - id: dart-format
         name: dart format
-        entry: bash -c 'cd client && exec dart format "$@"' --
+        entry: dart format .
         language: system
-        files: ^client/
         types: [dart]
 
-      # --- Flutter Analyze (Client) ---
+      # --- Flutter Analyze ---
       - id: flutter-analyze
         name: flutter analyze
-        entry: flutter analyze client
+        entry: flutter analyze
         language: system
-        files: ^client/
-        pass_filenames: false
-
-      # --- Terraform Format ---
-      - id: terraform-fmt
-        name: terraform fmt
-        entry: make -C infra fmt
-        language: system
-        files: ^infra/aws/terraform/.*\.(tf|tfvars)$
-        pass_filenames: false
-
-      # --- Terraform Validate ---
-      - id: terraform-validate
-        name: terraform validate
-        entry: make -C infra validate-all
-        language: system
-        files: ^infra/aws/terraform/.*\.(tf|tfvars)$
-        pass_filenames: false
-
-      # --- Packer Validate ---
-      - id: packer-validate
-        name: packer validate
-        entry: make -C infra packer-validate
-        language: system
-        files: ^infra/aws/packer/.*\.(tf|tfvars|pkr\.hcl|json)$
         pass_filenames: false
 
       # --- Prettier ---

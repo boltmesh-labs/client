@@ -39,35 +39,12 @@ CI runs on every push and pull request targeting `main`/`develop` through the wo
 
 - **Trivy filesystem scanning** (`security.yml`): fails the build on CRITICAL findings and ignores advisories without available fixes. Results are uploaded to the GitHub Security tab as SARIF (even when the scan fails). Trivy also evaluates third-party dependencies from lockfiles (`uv.lock`, `go.sum`, `package-lock.json`). Suppressions are reviewed individually in `.trivyignore`, and each entry documents its rationale (e.g., an upstream version constraint in `fastapi-mail`).
 - **Checkov static analysis of Terraform** (`infra.yml`): fails the pipeline on findings, with documented skips.
-- **Pre-commit hooks** (`.pre-commit-config.yaml`): Ruff lint/format plus Pyright static typing for Python, ESLint/Prettier for JavaScript, Terraform fmt/validate, Packer validate, and whitespace/YAML/large-file/merge-conflict guards.
+- **Pre-commit hooks** (`.pre-commit-config.yaml`): Ruff lint/format, ESLint/Prettier for JavaScript and whitespace/YAML/large-file/merge-conflict guards.
 - **Test coverage gates**: pytest enforces a minimum of 80% backend coverage (`fail_under = 80`); frontend Vitest runs with coverage in CI.
 - **Release integrity**: the Go node agent is built by `make all` (vet + test + cross-compile) into `bin/` with SHA-256 checksums; CI verifies `sha256sum -c checksums.txt` before publishing artifacts to GitHub Releases.
 - **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and cloud credentials are supplied only through GitHub Actions secrets — never committed to the repository.
 
 Note: automated dependency-update automation (e.g., Dependabot) is **not yet configured** in this repository. Updates land through normal review, gated by the Trivy scan above.
-
-## Application Security (Backend)
-
-- **Password storage**: bcrypt hashing with a work factor of 12. Inputs beyond bcrypt's 72-byte limit are rejected outright rather than silently truncated (`app/core/security/passwords.py`).
-- **Timing-equalized authentication**: login verifies against a pre-computed dummy hash so non-existent accounts and wrong passwords are indistinguishable by response time; password-reset requests are deliberately neutral (tokens are minted against fixed sentinel keys and never emailed) to prevent account enumeration.
-- **Sessions**: short-lived JWT access tokens with rotating refresh tokens guarded by explicit reuse-detection and rotation-race errors (`TokenReusedError`, `TokenRotationRaceError`); sessions are Redis-backed and can be revoked server-side at any time. Account activation tokens are minted *before* the database commit so a Redis failure rolls back consistently, and confirmed password resets revoke all active sessions.
-- **Refresh-token cookie**: HttpOnly, Secure, scoped to the `/v1/auth` path. SameSite/Secure derive from the environment (`lax` for same-site development; `None` in cross-site production, which pairs with the origin check below).
-- **CSRF mitigation**: state-changing, cookie-authenticated requests whose `Origin` header is not on the CORS allowlist are rejected with 403 (`require_safe_origin`), closing the cross-site request forgery window created by `SameSite=None` cookies. Non-browser clients (curl, native apps) that omit the header are unaffected.
-- **CORS**: strict allowlists of origins, methods, and headers — nothing is wildcarded; credentials are allowed only for explicitly listed origins.
-- **OAuth**: Google/GitHub sign-in delegated to Authlib clients using authorization-code flows with provider metadata discovery.
-- **Input validation and SQL safety**: Pydantic validates every request/response boundary; data access goes exclusively through SQLAlchemy parameterized queries — no string-built SQL.
-- **Client IP trust**: `TRUST_PROXY_HEADERS` defaults to false, so rate limiting keys off the direct connection unless the backend intentionally runs behind a trusted reverse proxy that sets `X-Forwarded-For`.
-
-See [backend/README.md](backend/README.md) for endpoint-level documentation.
-
-## Node-Agent Control Plane
-
-- Agent endpoints under `/v1/control-plane/` authenticate with short-lived per-node JWTs presented as `Authorization: Bearer <node JWT>`. Bootstrap secrets are stored as HMAC-SHA256 digests peppered with `BOOTSTRAP_SECRET_PEPPER` (minimum 32 characters) and are used only during enrollment.
-- Zero-trust self-registration (`register`) has no shared secret. **AWS IID mode** (EC2 nodes): the agent posts its hypervisor-signed Instance Identity Document + IMDSv2 PKCS#7 signature; the backend verifies the signature with `openssl` against pinned signer fingerprints (`AWS_IID_SIGNER_FINGERPRINTS`, fail-closed when unconfigured), binds the verified `accountId` to `AWS_IID_ACCOUNT_ID`, and requires `instanceId == server_name` and `region == region_id`. **Per-server secret mode** (manual nodes): the admin-issued one-liner embeds a single-server `vpn_boot_...` secret (shown once, stored hashed); the node presents it as `Authorization: Bearer`, bound to its own server row with a rolling `MANUAL_BOOTSTRAP_SECRET_TTL_DAYS` expiry refreshed on every boot — blast radius is one server. Every 401 (`BOOTSTRAP_IDENTITY_INVALID`, `BOOTSTRAP_TOKEN_INVALID`) is definitive. Node registration of a *live* node — any row with a heartbeat inside the staleness window, whatever its status label — is refused so a stolen bootstrap credential cannot refresh a node's JWT or extend its bootstrap expiry by impersonating its server name; the agent treats that specific conflict as retryable and waits out the staleness window (the 409 carries a `Retry-After` hint with the remaining staleness, so fast reboots converge without operator intervention).
-- Agents refresh their short-lived node JWTs periodically and retry rapidly on renewal failures to maintain authentication before expiration, minimizing the validity window of any compromised credential.
-- Agent binaries are distributed exclusively through official GitHub Releases with SHA-256 checksums (verified in CI).
-
-See [node-agent/README.md](node-agent/README.md) for the agent's full documentation.
 
 ## Rate Limiting & Abuse Prevention
 

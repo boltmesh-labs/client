@@ -35,33 +35,18 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 ### Pull Requests
 
 * Fill in the required template
-* Follow the project's style guides (Ruff for Python, ESLint/Prettier for JavaScript, `gofmt`/`go vet` for Go)
+* Follow the project's style guides (ESLint/Prettier for JavaScript, `gofmt`/`go vet` for Go)
 * Include appropriate test cases
-* Update documentation as needed (README.md, backend/README.md, DEPLOYMENT.md)
+* Update documentation as needed (README.md, DEPLOYMENT.md)
 * End all files with a newline
-* Note: the **backend is proprietary** — all backend PRs require a signed Contributor License Agreement (CLA) before they can be merged. See the License section of [README.md](README.md).
 
 ## Style Guides
-
-### Python Style Guide
-
-The backend follows [PEP 8](https://www.python.org/dev/peps/pep-0008/) (line length 100, Python 3.13) with Ruff and Pyright:
-
-```bash
-cd backend
-uv run ruff check .
-uv run ruff format .
-uv run pyright .
-```
-
-Ruff enforces linting and formatting; Pyright performs static type checking. All functions and classes should have docstrings and type hints.
 
 ### JavaScript/React Style Guide
 
 The frontend uses ESLint and Prettier:
 
 ```bash
-cd frontend
 npm run lint
 npm run format
 ```
@@ -71,7 +56,6 @@ npm run format
 The node agent follows standard Go conventions; use `gofmt` and run the project checks:
 
 ```bash
-cd node-agent
 make vet
 make test
 ```
@@ -99,58 +83,28 @@ Fixes #123
 ### Running Tests
 
 ```bash
-# Backend tests (run from backend/)
-uv sync
-uv run pytest
-
-# Frontend tests
-cd frontend
-npm test
-
-# Node agent tests
-cd node-agent
-make test
-
-# Terraform checks
-cd infra
-make validate-all
+TODO
 ```
 
 ### Writing Tests
 
 * Write tests for all new features
-* Aim for >80% code coverage (backend coverage gate is 80%)
+* Aim for >80% code coverage
 * Use descriptive test names
-* Group related tests with `pytest.mark.group_name` where appropriate
 
 ### Test Locations
 
 Backend tests live next to the code they test:
 
 ```text
-    backend/app/{module}/tests/
-    ├── test_auth.py
-    ├── test_users.py
-    └── test_billing.py
-```
-
-Frontend tests are colocated under `frontend/src/` and run with Vitest:
-
-```text
-frontend/src/components/
-├── Button.jsx
-└── Button.test.jsx
+TODO
 ```
 
 ## Documentation
 
 * Update README.md if you change functionality
-* Update backend/README.md if you change API endpoints
-* Update infra/README.md if you change terraform/packer files
-* Update node-agent/README.md if you change Node Agent files
 * Update DEPLOYMENT.md if you change deployment procedures
 * Add docstrings to all functions and classes
-* Use type hints in Python code
 
 ## Issue and Pull Request Labels
 

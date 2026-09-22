@@ -1,6 +1,6 @@
 # BoltMesh Client
 
-WireGuard VPN client. Backend contract: `backend/app/vpn/` (user routes
+WireGuard VPN client. Backend contract: `../backend/app/vpn/` (user routes
 `/vpn-devices`, `/vpn-regions` under `/v1`).
 
 ## Prereqs
@@ -17,7 +17,6 @@ loop): see [SETUP.md](SETUP.md).
 `lib/` + `pubspec.yaml` are checked in; native shells are generated once:
 
 ```sh
-cd client
 flutter create --org com.boltmesh --project-name boltmesh .
 flutter pub get
 ```

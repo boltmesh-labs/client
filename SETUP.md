@@ -9,7 +9,7 @@ secrets and the test suite, see [README.md](README.md).
 - Flutter SDK 3.47.x stable (`flutter --version`).
 - JDK 21 (Gradle 9.x rejects much newer JDKs).
 - Git.
-- A running backend (`podman-compose up -d` from the repo root) plus a user
+- A running backend (`podman-compose up -d` from the infra repo) plus a user
   account (`POST /v1/auth/register`).
 
 ## Windows

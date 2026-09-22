@@ -1,4 +1,4 @@
-name: 'Client CI/CD'
+name: "Client CI/CD"
 
 on:
   push:
@@ -6,27 +6,17 @@ on:
       - main
       - develop
     tags:
-      - 'v*'
-    paths:
-      - 'client/**'
-      - '.github/workflows/client.yml'
+      - "v*"
   pull_request:
     branches:
       - main
       - develop
-    paths:
-      - 'client/**'
-      - '.github/workflows/client.yml'
 
 permissions:
   id-token: write
   contents: read
   pull-requests: write
   security-events: write
-
-defaults:
-  run:
-    working-directory: client
 
 jobs:
   validate:
@@ -37,8 +27,8 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Install dependencies
@@ -66,11 +56,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: client-coverage
-          path: ${{ github.workspace }}/client/coverage/lcov.info
+          path: ${{ github.workspace }}/coverage/lcov.info
           if-no-files-found: error
 
   validate-windows:
-    name: 'Validate Windows runner'
+    name: "Validate Windows runner"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -78,8 +68,8 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Enable Windows desktop
@@ -95,7 +85,7 @@ jobs:
         run: flutter build windows --debug
 
   validate-android:
-    name: 'Validate Android build'
+    name: "Validate Android build"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -103,15 +93,15 @@ jobs:
       - name: Set up Java 21
         uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Install dependencies
@@ -124,20 +114,20 @@ jobs:
         run: flutter build apk --debug
 
   validate-boltmeshd:
-    name: 'Validate boltmeshd'
+    name: "Validate boltmeshd"
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: client/linux/boltmeshd
+        working-directory: linux/boltmeshd
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: "1.26"
           cache: true
-          cache-dependency-path: client/linux/boltmeshd/go.sum
+          cache-dependency-path: linux/boltmeshd/go.sum
 
       - name: Check Formatting (gofmt)
         run: |
@@ -151,7 +141,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
-          working-directory: client/linux/boltmeshd
+          working-directory: linux/boltmeshd
 
       - name: Check for unreachable functions (deadcode)
         run: |
@@ -166,7 +156,7 @@ jobs:
         run: go test -v ./...
 
   security:
-    name: 'Security Scan'
+    name: "Security Scan"
     runs-on: ubuntu-latest
 
     steps:
@@ -178,15 +168,14 @@ jobs:
       - name: Run Trivy Filesystem Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: 'fs'
-          scan-ref: 'client'
-          format: 'table'
+          scan-type: "fs"
+          format: "table"
           ignore-unfixed: true
-          severity: 'CRITICAL'
-          exit-code: '1'
+          severity: "CRITICAL"
+          exit-code: "1"
 
   build-android:
-    name: 'Build Android'
+    name: "Build Android"
     needs: [validate, validate-android, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -197,15 +186,15 @@ jobs:
       - name: Set up Java 21
         uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Install dependencies
@@ -228,7 +217,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           if [ -z "$ANDROID_KEYSTORE" ]; then
-            echo "::error::ANDROID_KEYSTORE is not set; refusing to publish a debug-signed release. See client/README.md (Android release build)."
+            echo "::error::ANDROID_KEYSTORE is not set; refusing to publish a debug-signed release. See README.md (Android release build)."
             exit 1
           fi
           printf '%s' "$ANDROID_KEYSTORE" | tr -d '[:space:]' | base64 -d > android/app/upload-keystore.jks
@@ -255,12 +244,12 @@ jobs:
         with:
           name: app-release-android
           path: |
-            ${{ github.workspace }}/client/build/app/outputs/bundle/release/app-release.aab
-            ${{ github.workspace }}/client/build/app/outputs/flutter-apk/app-release.apk
+            ${{ github.workspace }}/build/app/outputs/bundle/release/app-release.aab
+            ${{ github.workspace }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
   build-linux:
-    name: 'Build Linux'
+    name: "Build Linux"
     needs: [validate, validate-boltmeshd, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -276,15 +265,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: "1.26"
           cache: true
-          cache-dependency-path: client/linux/boltmeshd/go.sum
+          cache-dependency-path: linux/boltmeshd/go.sum
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Enable Linux desktop
@@ -312,12 +301,12 @@ jobs:
         with:
           name: linux-packages
           path: |
-            ${{ github.workspace }}/client/dist/**/*.deb
-            ${{ github.workspace }}/client/dist/**/*.rpm
+            ${{ github.workspace }}/dist/**/*.deb
+            ${{ github.workspace }}/dist/**/*.rpm
           if-no-files-found: error
 
   build-windows:
-    name: 'Build Windows'
+    name: "Build Windows"
     needs: [validate, validate-windows, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
@@ -328,8 +317,8 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.x'
-          channel: 'stable'
+          flutter-version: "3.47.x"
+          channel: "stable"
           cache: true
 
       - name: Enable Windows desktop
@@ -364,7 +353,7 @@ jobs:
         run: |
           $pfx = Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx'
           if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
-            Write-Host '::error::WINDOWS_CERTIFICATE is not set; refusing to publish an unsigned release. See client/README.md (Windows code signing).'
+            Write-Host '::error::WINDOWS_CERTIFICATE is not set; refusing to publish an unsigned release. See README.md (Windows code signing).'
             exit 1
           }
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
@@ -386,11 +375,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-installer
-          path: ${{ github.workspace }}/client/dist/**/*.exe
+          path: ${{ github.workspace }}/dist/**/*.exe
           if-no-files-found: error
 
   release:
-    name: 'Create Release'
+    name: "Create Release"
     needs: [build-android, build-linux, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
