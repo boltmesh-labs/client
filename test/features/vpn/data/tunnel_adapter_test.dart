@@ -58,6 +58,23 @@ class HangingTunnel implements WireGuardFlutterInterface {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // The global `test/flutter_test_config.dart` stubs the host channels with
+  // "absent" answers so unrelated suites stay quiet. Clear them here so the
+  // missing-handler contract below keeps exercising the real
+  // `MissingPluginException` path instead of a stub returning null.
+  setUp(() {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      WireGuardTunnelAdapter.handshakeChannel,
+      null,
+    );
+    messenger.setMockMethodCallHandler(
+      WireGuardTunnelAdapter.ghostChannel,
+      null,
+    );
+  });
+
   test('wedged stop retries the hard-kill and returns', () {
     // Field case: graceful teardown hangs (3s timeout), the automated
     // retry lands — `stop` never throws and the tunnel is down.
