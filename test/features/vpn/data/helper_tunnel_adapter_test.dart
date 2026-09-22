@@ -21,7 +21,11 @@ class _QueueSocket implements HelperSocket {
     }
     final step = _steps.removeAt(0);
     if (step is Exception) throw step;
-    return step as Map<String, dynamic>;
+    // The daemon echoes the request id; the client now enforces correlation,
+    // so a scripted response must do the same.
+    final response = Map<String, dynamic>.from(step as Map<String, dynamic>);
+    response['id'] = request['id'];
+    return response;
   }
 }
 

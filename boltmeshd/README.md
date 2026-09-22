@@ -36,16 +36,47 @@ OS transport above.
 
 | op | meaning |
 | --- | --- |
-| `ping` | liveness + version check; returns status |
+| `ping` | liveness + version check; returns status and the daemon's `caps` |
 | `status` | current stage, newest handshake, summed rx/tx, live peer |
 | `up` | validate `config`, persist it privileged, start the tunnel |
 | `down` | idempotent teardown |
 
+Every request must carry `v`, a well-formed `id`, and a known `op`. The
+daemon enforces the envelope before any privileged work:
+
+- **`id`** is required, 1–64 characters from `[A-Za-z0-9._:-]`. It is echoed
+  verbatim on the response; an id the daemon would reject is never echoed.
+- **`config` is only valid for `up`**, where it is required. A `config` on
+  `ping`/`status`/`down` is rejected.
+- **Unknown fields and trailing tokens are rejected**, so one line frames
+  exactly one request.
+- **Response correlation is strict**: the client checks the echoed `id`, the
+  `v`, and that exactly one of `error`/`status` is present.
+
 Error codes: `bad_request`, `bad_config`, `unavailable`, `internal`.
+`bad_request` covers envelope violations; `bad_config` is reserved for config
+content that fails validation.
 
 Stages: `connected`, `connecting` (an `up` is in flight), `disconnected`.
 A zero `lastHandshake` or empty counters mean *unknown*, never *dead* — the
 app's health policy decides.
+
+### Capability negotiation
+
+Negotiation is optional and informational. A client may send a `caps` array
+(≤16 short lowercase tokens) of the capabilities it understands, and the
+daemon advertises its own list on the `ping` response:
+
+```json
+{"v":1,"id":"1","op":"ping"}
+{"v":1,"id":"1","ok":true,"caps":["strict-validation","caps"],"status":{...}}
+```
+
+The daemon always enforces request validation regardless of the tokens
+present; `caps` lets the two sides learn about each other without a version
+bump, and its absence (an older or simpler peer) is tolerated. Current tokens:
+`strict-validation` (hardened request envelope) and `caps` (advertises
+capabilities). `status` keeps its line lean and carries no `caps`.
 
 ## Security model
 

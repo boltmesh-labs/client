@@ -21,38 +21,70 @@ class _ScriptedSocket implements HelperSocket {
   }
 }
 
-Map<String, dynamic> _ok(Map<String, dynamic> status) => {
-  'v': helperProtocolVersion,
-  'id': '1',
-  'ok': true,
-  'status': status,
+/// A complete, well-formed status object. The client validates the full
+/// schema, so partial fixtures are no longer accepted.
+Map<String, dynamic> _status({
+  bool up = true,
+  String stage = 'connected',
+  int rx = 0,
+  int tx = 0,
+  int handshake = 0,
+}) => {
+  'interface': 'boltmesh0',
+  'up': up,
+  'stage': stage,
+  'rxBytes': rx,
+  'txBytes': tx,
+  'lastHandshake': handshake,
 };
 
+Map<String, dynamic> _ok(
+  Object? id,
+  Map<String, dynamic> status, {
+  List<String>? caps,
+}) => {
+  'v': helperProtocolVersion,
+  'id': id,
+  'ok': true,
+  'status': status,
+  'caps': ?caps,
+};
+
+/// A responder that echoes the request id, like the daemon.
+Future<Map<String, dynamic>> Function(Map<String, dynamic>) _reply(
+  Map<String, dynamic> Function(Object? id) build,
+) =>
+    (req) async => build(req['id']);
+
 void main() {
-  test('ping sends the protocol version and decodes status', () async {
-    final socket = _ScriptedSocket(
-      (_) async => _ok({
-        'interface': 'boltmesh0',
-        'up': true,
-        'stage': 'connected',
-        'rxBytes': 10,
-        'txBytes': 20,
-      }),
-    );
-    final client = HelperClient(socket: socket);
+  test(
+    'ping sends the protocol version, id and caps, then decodes status',
+    () async {
+      final socket = _ScriptedSocket(
+        _reply(
+          (id) => _ok(id, _status(rx: 10, tx: 20), caps: helperCapabilities),
+        ),
+      );
+      final client = HelperClient(socket: socket);
 
-    final status = await client.ping();
+      final status = await client.ping();
 
-    expect(socket.requests.single['v'], helperProtocolVersion);
-    expect(socket.requests.single['op'], 'ping');
-    expect(status.interfaceName, 'boltmesh0');
-    expect(status.up, isTrue);
-    expect(status.rxBytes, 10);
-    expect(status.txBytes, 20);
-  });
+      expect(socket.requests.single['v'], helperProtocolVersion);
+      expect(socket.requests.single['op'], 'ping');
+      expect(socket.requests.single['id'], isA<String>());
+      expect(socket.requests.single['caps'], helperCapabilities);
+      expect(status.interfaceName, 'boltmesh0');
+      expect(status.up, isTrue);
+      expect(status.rxBytes, 10);
+      expect(status.txBytes, 20);
+      expect(client.capabilities, containsAll(helperCapabilities));
+    },
+  );
 
   test('up carries the config text', () async {
-    final socket = _ScriptedSocket((_) async => _ok({'up': false}));
+    final socket = _ScriptedSocket(
+      _reply((id) => _ok(id, _status(up: false, stage: 'disconnected'))),
+    );
     final client = HelperClient(socket: socket);
 
     await client.up('[Interface]\nPrivateKey = x\n');
@@ -63,12 +95,14 @@ void main() {
 
   test('error responses raise HelperException with the daemon code', () async {
     final socket = _ScriptedSocket(
-      (_) async => {
-        'v': helperProtocolVersion,
-        'id': '1',
-        'ok': false,
-        'error': {'code': 'bad_config', 'message': 'nope'},
-      },
+      _reply(
+        (id) => {
+          'v': helperProtocolVersion,
+          'id': id,
+          'ok': false,
+          'error': {'code': 'bad_config', 'message': 'nope'},
+        },
+      ),
     );
     final client = HelperClient(socket: socket);
 
@@ -84,7 +118,7 @@ void main() {
 
   test('protocol version mismatch is rejected', () async {
     final socket = _ScriptedSocket(
-      (_) async => {'v': helperProtocolVersion + 1, 'id': '1', 'ok': true},
+      _reply((id) => {'v': helperProtocolVersion + 1, 'id': id, 'ok': true}),
     );
     final client = HelperClient(socket: socket);
 
@@ -96,9 +130,27 @@ void main() {
     );
   });
 
+  test('a mismatched response id is rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply((_) => _ok('not-the-request-id', _status())),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('id mismatch'),
+        ),
+      ),
+    );
+  });
+
   test('a response without status is rejected', () async {
     final socket = _ScriptedSocket(
-      (_) async => {'v': helperProtocolVersion, 'id': '1', 'ok': true},
+      _reply((id) => {'v': helperProtocolVersion, 'id': id, 'ok': true}),
     );
     final client = HelperClient(socket: socket);
 
@@ -108,11 +160,151 @@ void main() {
     );
   });
 
+  test('ok must be a bool', () async {
+    final socket = _ScriptedSocket(
+      _reply((id) => {'v': helperProtocolVersion, 'id': id, 'ok': 'yes'}),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('missing ok'),
+        ),
+      ),
+    );
+  });
+
+  test('a success carrying an error is rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply(
+        (id) => {
+          'v': helperProtocolVersion,
+          'id': id,
+          'ok': true,
+          'status': _status(),
+          'error': {'code': 'internal', 'message': 'x'},
+        },
+      ),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('success carries an error'),
+        ),
+      ),
+    );
+  });
+
+  test('a failure carrying a status is rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply(
+        (id) => {
+          'v': helperProtocolVersion,
+          'id': id,
+          'ok': false,
+          'error': {'code': 'internal', 'message': 'x'},
+          'status': _status(),
+        },
+      ),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('error carries a status'),
+        ),
+      ),
+    );
+  });
+
+  test('a malformed error object is rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply(
+        (id) => {
+          'v': helperProtocolVersion,
+          'id': id,
+          'ok': false,
+          'error': {'code': 7},
+        },
+      ),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('malformed'),
+        ),
+      ),
+    );
+  });
+
+  test('a status with a mistyped or missing field is rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply(
+        (id) => _ok(id, {
+          'interface': 'boltmesh0',
+          'up': true,
+          'stage': 'connected',
+          'lastHandshake': 0,
+          'txBytes': 0,
+          // rxBytes intentionally missing.
+        }),
+      ),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('malformed'),
+        ),
+      ),
+    );
+  });
+
+  test('malformed caps are rejected', () async {
+    final socket = _ScriptedSocket(
+      _reply((id) => _ok(id, _status(), caps: const ['ok', ''])),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.ping(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('caps are malformed'),
+        ),
+      ),
+    );
+  });
+
   test(
     'lastHandshake converts epoch seconds to UTC, 0 means unknown',
     () async {
       final socket = _ScriptedSocket(
-        (_) async => _ok({'up': true, 'lastHandshake': 1718000000}),
+        _reply((id) => _ok(id, _status(handshake: 1718000000))),
       );
       final client = HelperClient(socket: socket);
 
@@ -123,9 +315,7 @@ void main() {
         DateTime.fromMillisecondsSinceEpoch(1718000000 * 1000, isUtc: true),
       );
 
-      final noHandshake = _ScriptedSocket(
-        (_) async => _ok({'up': true, 'lastHandshake': 0}),
-      );
+      final noHandshake = _ScriptedSocket(_reply((id) => _ok(id, _status())));
       expect(
         await HelperClient(socket: noHandshake)
             .status()
@@ -138,9 +328,10 @@ void main() {
   test('concurrent status reads share one exchange', () async {
     var calls = 0;
     final completer = Completer<Map<String, dynamic>>();
-    final socket = _ScriptedSocket((_) {
+    final socket = _ScriptedSocket((req) {
       calls++;
-      return completer.future;
+      if (calls == 1) return completer.future;
+      return Future.value(_ok(req['id'], _status()));
     });
     final client = HelperClient(socket: socket);
 
@@ -152,7 +343,7 @@ void main() {
     expect(identical(a, b), isTrue);
     expect(identical(b, c), isTrue);
 
-    completer.complete(_ok({'up': true}));
+    completer.complete(_ok('1', _status()));
     await Future.wait([a, b, c]);
     expect(calls, 1);
 
@@ -198,5 +389,17 @@ void main() {
     ).firstMatch(source);
     expect(match, isNotNull, reason: 'protocol.Version not found');
     expect(int.parse(match!.group(1)!), helperProtocolVersion);
+  });
+
+  test('helperCapabilities are declared by the Go daemon', () {
+    final source = File('boltmeshd/internal/protocol/protocol.go')
+        .readAsStringSync();
+    for (final cap in helperCapabilities) {
+      expect(
+        source,
+        contains('"$cap"'),
+        reason: '$cap is not declared in protocol.go',
+      );
+    }
   });
 }

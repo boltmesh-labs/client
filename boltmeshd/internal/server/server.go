@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"time"
@@ -88,8 +89,21 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		}
 
 		var req protocol.Request
-		if err := json.Unmarshal(line, &req); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(line))
+		// Reject fields the daemon does not know: both sides ship together,
+		// and an unknown field is far more likely a bug or a probe than a
+		// forward-compatible extension.
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
 			if err := writeResponse(writer, protocol.Fail("", protocol.CodeBadRequest, "invalid JSON")); err != nil {
+				return
+			}
+			continue
+		}
+		// Reject trailing tokens after the object so a line frames exactly one
+		// request.
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			if err := writeResponse(writer, protocol.Fail("", protocol.CodeBadRequest, "trailing data after request")); err != nil {
 				return
 			}
 			continue
@@ -101,31 +115,47 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) dispatch(parent context.Context, req *protocol.Request) protocol.Response {
+	// Never echo an ID we would reject: a malformed or oversized ID is not
+	// correlation data, and reflecting it is needless attacker-controlled
+	// output.
+	id := req.ID
+	if !protocol.ValidID(id) {
+		id = ""
+	}
+
 	if req.V != protocol.Version {
-		return protocol.Fail(req.ID, protocol.CodeBadRequest,
+		return protocol.Fail(id, protocol.CodeBadRequest,
 			fmt.Sprintf("unsupported protocol version %d", req.V))
+	}
+	if err := req.Validate(); err != nil {
+		return protocol.Fail(id, protocol.CodeBadRequest, err.Error())
 	}
 
 	ctx, cancel := context.WithTimeout(parent, requestTimeout)
 	defer cancel()
 
 	switch req.Op {
-	case protocol.OpPing, protocol.OpStatus:
-		return protocol.OK(req.ID, s.manager.Status())
+	case protocol.OpPing:
+		// `ping` is the negotiation entry point: it carries the daemon's
+		// capability tokens alongside the status.
+		return protocol.OKCapabilities(id, s.manager.Status())
+	case protocol.OpStatus:
+		return protocol.OK(id, s.manager.Status())
 	case protocol.OpUp:
 		status, err := s.manager.Up(ctx, req.Config)
 		if err != nil {
-			return s.failure(req.ID, "up", err)
+			return s.failure(id, "up", err)
 		}
-		return protocol.OK(req.ID, status)
+		return protocol.OK(id, status)
 	case protocol.OpDown:
 		status, err := s.manager.Down(ctx)
 		if err != nil {
-			return s.failure(req.ID, "down", err)
+			return s.failure(id, "down", err)
 		}
-		return protocol.OK(req.ID, status)
+		return protocol.OK(id, status)
 	default:
-		return protocol.Fail(req.ID, protocol.CodeBadRequest, fmt.Sprintf("unsupported op %q", req.Op))
+		// Validate already rejects unknown ops; kept for exhaustiveness.
+		return protocol.Fail(id, protocol.CodeBadRequest, fmt.Sprintf("unsupported op %q", req.Op))
 	}
 }
 

@@ -187,3 +187,142 @@ func TestOversizeRequestKeepsFraming(t *testing.T) {
 		t.Fatalf("second response = %+v, want ok", resp)
 	}
 }
+
+// rejected asserts that req is rejected with bad_request, then confirms the
+// connection still frames the next request.
+func rejected(t *testing.T, c *testClient, req protocol.Request) protocol.Response {
+	t.Helper()
+	resp := c.request(req)
+	if resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeBadRequest {
+		t.Fatalf("response = %+v, want bad_request", resp)
+	}
+	if next := c.request(protocol.Request{V: protocol.Version, ID: "999", Op: protocol.OpPing}); !next.OK {
+		t.Fatalf("follow-up response = %+v, want ok", next)
+	}
+	return resp
+}
+
+func TestEmptyIDRejected(t *testing.T) {
+	resp := rejected(t, newClient(t, &fakeManager{}), protocol.Request{V: protocol.Version, Op: protocol.OpPing})
+	if resp.ID != "" {
+		t.Fatalf("rejected response echoed id %q, want empty", resp.ID)
+	}
+}
+
+func TestOverlongIDRejected(t *testing.T) {
+	resp := rejected(t, newClient(t, &fakeManager{}), protocol.Request{
+		V:  protocol.Version,
+		ID: strings.Repeat("a", protocol.MaxIDLength+1),
+		Op: protocol.OpPing,
+	})
+	if resp.ID != "" {
+		t.Fatalf("rejected response echoed id %q, want empty", resp.ID)
+	}
+}
+
+func TestInvalidIDCharactersRejected(t *testing.T) {
+	resp := rejected(t, newClient(t, &fakeManager{}), protocol.Request{
+		V:  protocol.Version,
+		ID: "a b",
+		Op: protocol.OpPing,
+	})
+	if resp.ID != "" {
+		t.Fatalf("rejected response echoed id %q, want empty", resp.ID)
+	}
+}
+
+func TestConfigRejectedForNonUpOps(t *testing.T) {
+	for _, op := range []string{protocol.OpPing, protocol.OpStatus, protocol.OpDown} {
+		t.Run(op, func(t *testing.T) {
+			// A well-formed ID is echoed even on rejection, so the client can
+			// correlate the failure to its request.
+			resp := rejected(t, newClient(t, &fakeManager{}), protocol.Request{
+				V:      protocol.Version,
+				ID:     "1",
+				Op:     op,
+				Config: "x",
+			})
+			if resp.ID != "1" {
+				t.Fatalf("rejected response id = %q, want %q", resp.ID, "1")
+			}
+		})
+	}
+}
+
+func TestUpRequiresConfig(t *testing.T) {
+	m := &fakeManager{}
+	rejected(t, newClient(t, m), protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp})
+	if m.upConfig != "" {
+		t.Fatalf("manager was called with %q", m.upConfig)
+	}
+}
+
+func TestUnknownFieldRejected(t *testing.T) {
+	c := newClient(t, &fakeManager{})
+
+	c.sendRaw(`{"v":1,"id":"1","op":"ping","bogus":true}`)
+	if resp := c.read(); resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeBadRequest {
+		t.Fatalf("response = %+v, want bad_request", resp)
+	}
+	if next := c.request(protocol.Request{V: protocol.Version, ID: "2", Op: protocol.OpPing}); !next.OK {
+		t.Fatalf("follow-up response = %+v, want ok", next)
+	}
+}
+
+func TestTrailingDataRejected(t *testing.T) {
+	c := newClient(t, &fakeManager{})
+
+	c.sendRaw(`{"v":1,"id":"1","op":"ping"} {"v":1}`)
+	if resp := c.read(); resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeBadRequest {
+		t.Fatalf("response = %+v, want bad_request", resp)
+	}
+	if next := c.request(protocol.Request{V: protocol.Version, ID: "2", Op: protocol.OpPing}); !next.OK {
+		t.Fatalf("follow-up response = %+v, want ok", next)
+	}
+}
+
+func TestResponseEchoesRequestID(t *testing.T) {
+	c := newClient(t, &fakeManager{status: protocol.Status{Interface: "boltmesh0"}})
+
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "abc-123", Op: protocol.OpPing})
+	if !resp.OK || resp.ID != "abc-123" {
+		t.Fatalf("response = %+v, want echoed id", resp)
+	}
+}
+
+func TestPingAdvertisesCapabilities(t *testing.T) {
+	c := newClient(t, &fakeManager{})
+
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpPing})
+	if !containsCap(resp.Caps, protocol.CapCapabilities) {
+		t.Fatalf("ping caps = %v, want capabilities token", resp.Caps)
+	}
+	// `status` stays lean: no capability list on every read.
+	status := c.request(protocol.Request{V: protocol.Version, ID: "2", Op: protocol.OpStatus})
+	if len(status.Caps) != 0 {
+		t.Fatalf("status caps = %v, want none", status.Caps)
+	}
+}
+
+func containsCap(caps []string, token string) bool {
+	for _, cap := range caps {
+		if cap == token {
+			return true
+		}
+	}
+	return false
+}
+
+func TestValidCapsAccepted(t *testing.T) {
+	c := newClient(t, &fakeManager{})
+
+	resp := c.request(protocol.Request{
+		V:    protocol.Version,
+		ID:   "1",
+		Op:   protocol.OpPing,
+		Caps: []string{protocol.CapStrictValidation},
+	})
+	if !resp.OK {
+		t.Fatalf("response = %+v, want ok", resp)
+	}
+}
