@@ -1,0 +1,243 @@
+name: "Client CI"
+
+# Validation only. The tag-driven release pipeline lives in `default.yml`,
+# which reuses this workflow via `workflow_call` so a tagged release is built
+# on the same validated commit without duplicating every check.
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_call:
+
+# Least privilege: every job only reads the repository. The release job in
+# `default.yml` grants itself the extra scopes it needs (contents/id-token/
+# attestations) so a compromised third-party action cannot mint OIDC tokens or
+# touch the security tab from these validate/scan jobs.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.x"
+          channel: "stable"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Regenerates l10n/build_runner output and fails if it differs from the
+      # committed tree: those files are excluded from analyze, so a stale one
+      # could otherwise ship green.
+      - name: Verify generated code is up to date
+        run: bash tool/check_generated.sh
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Format Check
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Run Tests
+        run: flutter test --coverage
+
+      - name: Enforce coverage floor
+        run: bash tool/coverage_gate.sh 80
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-coverage
+          path: ${{ github.workspace }}/coverage/lcov.info
+          if-no-files-found: error
+
+  validate-windows:
+    name: "Validate Windows runner"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.x"
+          channel: "stable"
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Compiles the native runner (helper_pipe.cpp) so a Windows-only C++
+      # break is caught even though the platform ships no installer yet.
+      - name: Build Windows runner (debug)
+        run: flutter build windows --debug
+
+      # Compiles and runs the Flutter-free named-pipe transport test. Runs the
+      # freshly built exe from wherever the generator placed it.
+      - name: Run Windows helper pipe tests
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build/windows -Recurse -Filter helper_pipe_io_tests.exe |
+            Select-Object -First 1
+          if ($null -eq $exe) { throw 'helper_pipe_io_tests.exe was not built' }
+          & $exe.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "helper_pipe_io_tests.exe failed (exit $LASTEXITCODE)"
+          }
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
+
+      # Runs the Windows-tagged boltmeshd tests (SCM/DLL-layout seams), which
+      # cannot run on the Linux validate job.
+      - name: Test boltmeshd (Windows)
+        working-directory: boltmeshd
+        run: go test ./... -count=1
+
+  validate-android:
+    name: "Validate Android build"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.x"
+          channel: "stable"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Configures and compiles the Android app so a broken Gradle edit (e.g.
+      # the release signing config) fails on the PR instead of a release tag.
+      # Uses the debug fallback, so no keystore secret is needed here.
+      - name: Build Android APK (debug)
+        run: flutter build apk --debug
+
+      # Android Lint needs the SDK path flutter build wrote to
+      # android/local.properties, hence after the build. It catches
+      # manifest/resource/API misuse the Dart suite cannot see.
+      - name: Run Android Lint
+        working-directory: android
+        run: ./gradlew :app:lintDebug
+
+  validate-native:
+    name: "Validate native platform contracts"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
+
+      # systemd units + staged Linux payload, the Android manifest contract,
+      # and the Windows helper channel wiring.
+      - name: Verify native platform contracts
+        run: bash tool/verify_native.sh
+
+  validate-boltmeshd:
+    name: "Validate boltmeshd"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: boltmeshd
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
+
+      - name: Check Formatting (gofmt)
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted properly according to gofmt:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: boltmeshd
+
+      # The Windows backend is build-tagged, so lint it separately or it is
+      # never analysed on this runner.
+      - name: Run golangci-lint (Windows)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: windows
+        with:
+          version: v2.13.2
+          working-directory: boltmeshd
+
+      - name: Cross-compile for Windows
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
+
+      - name: Check for unreachable functions (deadcode)
+        run: |
+          out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)"
+          if [ -n "$out" ]; then
+            echo "Unreachable functions detected:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Run Go Unit Tests
+        run: go test -v ./...
+
+  security:
+    name: "Security Scan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Run Trivy Filesystem Vulnerability Scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          format: "table"
+          ignore-unfixed: true
+          severity: "CRITICAL"
+          exit-code: "1"

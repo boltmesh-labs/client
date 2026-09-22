@@ -8,7 +8,7 @@
 # reviewable on its own.
 #
 # Every Dependabot PR opens against `main`/`develop` and therefore runs the
-# `validate*` and `security` jobs in `.github/workflows/default.yml`, which
+# `validate*` and `security` jobs in `.github/workflows/ci.yml`, which
 # need no secrets. Dependabot's own security updates bypass the `schedule`
 # and `groups` below and open immediately.
 version: 2
