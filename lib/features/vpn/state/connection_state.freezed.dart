@@ -28,14 +28,18 @@ mixin _$ConnState {
 /// operation starts, so the UI can decide whether [message] warrants a
 /// snack without parsing its (localizable, controller-owned) wording.
  bool get opFailed;/// Auto-heal restarts for this connected session. Retries on every
-/// corroborated stall (the 10s health-tick cadence is the backoff), so a
-/// flaky tunnel recovers without user action. Same reset points as
+/// corroborated stall (the health-tick cadence is the backoff), so a
+/// flaky tunnel recovers without user action — until the move budget is
+/// spent and the trailing retries are used up, at which point recovery
+/// surfaces an actionable error. Same reset points as
 /// [autoFailoverAttempts].
  int get autoHealAttempts;/// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the
 /// controller's max so two dead servers can't ping-pong forever.
-/// Reset on manual connect/switch, disconnect, and the next successful
-/// status poll (backend reachable again means the outage is over).
+/// Reset on manual connect/switch, disconnect, and a successful status
+/// poll that lands on a *healthy* tunnel path (an observed, fresh
+/// handshake): an out-of-band poll success while the WireGuard path stays
+/// dead is not the outage ending, so it must not restore the ladder.
  int get autoFailoverAttempts;
 /// Create a copy of ConnState
 /// with the given fields replaced by the non-null parameter values.
@@ -302,15 +306,19 @@ class _ConnState implements ConnState {
 /// snack without parsing its (localizable, controller-owned) wording.
 @override@JsonKey() final  bool opFailed;
 /// Auto-heal restarts for this connected session. Retries on every
-/// corroborated stall (the 10s health-tick cadence is the backoff), so a
-/// flaky tunnel recovers without user action. Same reset points as
+/// corroborated stall (the health-tick cadence is the backoff), so a
+/// flaky tunnel recovers without user action — until the move budget is
+/// spent and the trailing retries are used up, at which point recovery
+/// surfaces an actionable error. Same reset points as
 /// [autoFailoverAttempts].
 @override@JsonKey() final  int autoHealAttempts;
 /// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the
 /// controller's max so two dead servers can't ping-pong forever.
-/// Reset on manual connect/switch, disconnect, and the next successful
-/// status poll (backend reachable again means the outage is over).
+/// Reset on manual connect/switch, disconnect, and a successful status
+/// poll that lands on a *healthy* tunnel path (an observed, fresh
+/// handshake): an out-of-band poll success while the WireGuard path stays
+/// dead is not the outage ending, so it must not restore the ladder.
 @override@JsonKey() final  int autoFailoverAttempts;
 
 /// Create a copy of ConnState

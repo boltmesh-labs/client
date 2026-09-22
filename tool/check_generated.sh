@@ -3,7 +3,7 @@
 #
 # `lib/l10n/gen/**`, `*.freezed.dart` and `*.g.dart` are excluded from
 # analysis and generated on the developer's machine, so a stale file can
-# otherwise ship green. Run from anywhere; the script cd's to `client/`.
+# otherwise ship green.
 #
 # Only the generated files are compared, so a working tree with unrelated
 # uncommitted edits still gets a clean signal. The installed build_runner
@@ -41,7 +41,7 @@ dirty=$(git status --porcelain -- "${generated[@]}")
 if [[ -n "$dirty" ]]; then
   echo "$dirty" >&2
   echo >&2
-  echo "Generated code is stale. Regenerate it (client/tool/check_generated.sh)" >&2
+  echo "Generated code is stale. Regenerate it (tool/check_generated.sh)" >&2
   echo "and commit the result." >&2
   exit 1
 fi
