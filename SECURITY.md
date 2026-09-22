@@ -54,8 +54,9 @@ CI runs on every push and pull request targeting `main`/`develop` through `.gith
 - **Release artifact integrity**: tagged releases publish SHA-256 checksums, CycloneDX/SPDX SBOMs, keyless cosign signatures for the Linux packages, and Sigstore build-provenance/SBOM attestations, so downloads are verifiable with `gh attestation verify` and `cosign verify-blob` (see [DEPLOYMENT.md](DEPLOYMENT.md#verifying-a-release)).
 - **Pre-commit hooks** (`.pre-commit-config.yaml`): gofmt/golangci-lint for `boltmeshd`, `dart format` + `flutter analyze`, shellcheck, and whitespace/YAML/large-file/merge-conflict guards.
 - **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and signing material is supplied only through GitHub Actions secrets — never committed to the repository.
+- **Automated dependency updates** (`.github/dependabot.yml`): Dependabot opens weekly, grouped PRs per ecosystem — Flutter (`pub`), Android (Gradle), `boltmeshd` (`gomod`) and GitHub Actions — with a release cooldown, so updates land through normal review gated by the `validate*` and `security` jobs above.
 
-Note: automated dependency-update automation (e.g., Dependabot) is **not yet configured** in this repository. Updates land through normal review, gated by the Trivy scan above.
+Dependabot's **security** updates are a separate pipeline: an advisory with a fix opens a PR immediately, bypassing the weekly schedule and grouping rather than waiting for the next batch.
 
 ## Privilege Model
 

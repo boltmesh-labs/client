@@ -83,6 +83,11 @@ for deb/rpm, `windows/packaging/stage_boltmeshd.ps1` for the Inno installer), so
 a checked-in binary cannot drift from the reviewed source. `make checksums`
 writes `bin/checksums.txt` for a local build.
 
+The Windows arm64 binary is a standalone cross-build for manual use. The
+BoltMesh Windows client packages the x64 helper only (the bundled
+`wireguard_flutter_plus` plugin provides amd64 tunnel/wireguard DLLs), and
+`windows/packaging/stage_boltmeshd.ps1` refuses a non-x64 bundle.
+
 The Windows manager and its tests are build-tagged, so `go test ./...` on
 Linux covers the shared and Linux code; CI runs the Windows-tagged tests on a
 Windows runner (and `GOOS=windows go vet` on Linux).

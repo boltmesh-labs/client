@@ -96,6 +96,25 @@ else
   bad "helper_pipe_io.cpp is not built by windows/runner/CMakeLists.txt"
 fi
 
+# --- Windows: the app ships x64-only --------------------------------------
+# The wireguard_flutter_plus plugin bundles amd64 tunnel/wireguard DLLs only,
+# so the staging hook must refuse an arm64 bundle and the installer must stay
+# pinned to x64 (which still installs on Windows on ARM via emulation).
+stage_ps1='windows/packaging/stage_boltmeshd.ps1'
+if grep -qF 'Windows arm64 is not supported' "$stage_ps1" &&
+  grep -qF "GOARCH = 'amd64'" "$stage_ps1"; then
+  ok "Windows staging rejects non-x64 bundles and pins GOARCH=amd64"
+else
+  bad "windows/packaging/stage_boltmeshd.ps1 no longer enforces the x64-only contract"
+fi
+inno_config='windows/packaging/exe/make_config.yaml'
+if grep -qE '^[[:space:]]*architectures_allowed:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config" &&
+  grep -qE '^[[:space:]]*architectures_install_in_64bit_mode:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config"; then
+  ok "Windows installer pins x64compatible"
+else
+  bad "windows/packaging/exe/make_config.yaml is not pinned to x64compatible"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "native platform contract checks failed" >&2
   exit 1

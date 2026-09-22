@@ -23,6 +23,13 @@ setup_icon_file: windows\runner\resources\app_icon.ico
 # The installer needs elevation to write Program Files and install the
 # boltmeshd service; the app it launches runs unprivileged.
 privileges_required: admin
+# The Windows client ships x64-only (the wireguard_flutter_plus plugin bundles
+# amd64 tunnel/wireguard DLLs only); `x64compatible` still allows install on
+# Windows on ARM, where the x64 app runs under emulation. These are the
+# packager defaults, pinned here so the intent is explicit and checked by
+# tool/verify_native.sh.
+architectures_allowed: x64compatible
+architectures_install_in_64bit_mode: x64compatible
 script_template: boltmesh.iss
 locales:
   - en

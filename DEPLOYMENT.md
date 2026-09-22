@@ -53,6 +53,11 @@ The build jobs run only on tags and depend on the matching validate job plus
 its own fastforge jobs, which is why the same `--name=production` release works
 from both the Linux and Windows runners.
 
+Dependency updates are automated separately by `.github/dependabot.yml`:
+weekly grouped PRs (Flutter `pub`, Android Gradle, `boltmeshd` `gomod`, GitHub
+Actions) run these same `validate*`/`security` jobs before merge, and
+security-advisory updates open immediately rather than waiting for the batch.
+
 ## 3. Artifacts and signing
 
 | Platform | Artifact | Integrity |

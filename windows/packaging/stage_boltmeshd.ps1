@@ -34,6 +34,18 @@ if (-not (Test-Path -LiteralPath $BuildDir)) {
     throw "Build output directory not found: $BuildDir"
 }
 
+# The Windows client ships x64-only: the bundled wireguard_flutter_plus plugin
+# provides only amd64 tunnel/wireguard DLLs, so an arm64 bundle could not load
+# them. Derive the target from the bundle fastforge built (e.g.
+# build/windows/x64/runner/Release) and refuse anything else instead of
+# silently dropping an amd64 helper into a mismatched bundle.
+$buildPath = (Resolve-Path -LiteralPath $BuildDir).Path
+if ($buildPath -match '(?i)[\\/]arm64([\\/]|$)') {
+    throw "Windows arm64 is not supported: the bundled wireguard_flutter_plus plugin ships only amd64 tunnel/wireguard DLLs (build output: $buildPath). x64 builds run on Windows on ARM under emulation."
+} elseif ($buildPath -notmatch '(?i)[\\/]x64([\\/]|$)') {
+    throw "Could not determine the Windows architecture from '$buildPath'; expected a build/windows/x64/runner/... path."
+}
+
 $env:CGO_ENABLED = '0'
 $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'

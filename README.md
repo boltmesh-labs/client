@@ -221,6 +221,12 @@ work lives in the helper. The installer itself is per-machine into
 `fastforge release --name=production` also lists the Linux jobs but skips
 those unsupported on the host, so the same command works from either OS.
 
+The package is **x64-only**: `wireguard_flutter_plus` bundles only amd64
+`tunnel.dll`/`wireguard.dll`, so the staging hook rejects an arm64 bundle and
+the installer is pinned to Inno's `x64compatible`. An x64 install still runs
+on Windows on ARM under emulation. The helper's `make build-windows-arm64`
+target remains a standalone artifact and is not part of this package.
+
 ### Code signing (Authenticode)
 
 `windows/packaging/sign.ps1` runs as the `windows-exe` job's pre/post hooks:
