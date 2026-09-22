@@ -13,9 +13,9 @@ on:
       - develop
 
 # Least privilege by default: every job only reads the repository. Jobs that
-# need more (the release job writes contents) grant it themselves, so a
-# compromised third-party action cannot mint OIDC tokens or touch the security
-# tab from the validate/scan jobs.
+# need more (the release job writes contents and mints OIDC tokens for keyless
+# signing/attestation) grant it themselves, so a compromised third-party action
+# cannot mint OIDC tokens or touch the security tab from the validate/scan jobs.
 permissions:
   contents: read
 
@@ -460,11 +460,19 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      # Write the drafted release; read this run's artifacts for download.
+      # Write the drafted release and its assets; read this run's artifacts.
       contents: write
       actions: read
+      # Mint the OIDC identity that keyless cosign and the Sigstore attestations
+      # sign with, and persist the attestations under the repository.
+      id-token: write
+      attestations: write
 
     steps:
+      # The release job SBOMs the tag's source (Dart pubspec.lock, Go modules),
+      # so it needs the repository, not just the downloaded build outputs.
+      - uses: actions/checkout@v7
+
       - name: Download Android Artifact
         uses: actions/download-artifact@v8
         with:
@@ -483,6 +491,34 @@ jobs:
           name: windows-installer
           path: artifacts/windows
 
+      - name: Install Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      # Source SBOM: catalogues Dart (pubspec.lock), Go (boltmeshd/go.mod) and
+      # any other lockfiles at the tag. Excludes the downloaded binaries, which
+      # the package SBOM below covers.
+      - name: Generate source SBOMs
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          mkdir -p artifacts/sbom
+          "$SYFT" scan dir:. \
+            --exclude './.git/**' --exclude './artifacts/**' \
+            -o cyclonedx-json="artifacts/sbom/boltmesh-${{ github.ref_name }}.cdx.json" \
+            -o spdx-json="artifacts/sbom/boltmesh-${{ github.ref_name }}.spdx.json"
+
+      # Package SBOM: Syft catalogs the .deb/.rpm contents (and any embedded Go
+      # binaries) so consumers can map the shipped packages back to versions.
+      - name: Generate package SBOMs
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          "$SYFT" scan dir:artifacts \
+            --exclude './sbom/**' --exclude '**/sbom/**' \
+            -o cyclonedx-json="artifacts/sbom/boltmesh-${{ github.ref_name }}-packages.cdx.json" \
+            -o spdx-json="artifacts/sbom/boltmesh-${{ github.ref_name }}-packages.spdx.json"
+
       # SHA-256 of every published installer, keyed by the asset basename so
       # the manifest matches the release's file names.
       - name: Generate checksum manifest
@@ -493,14 +529,72 @@ jobs:
             | sort -k2 > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
+
+      # Keyless signing: the signature carries this workflow's OIDC identity and
+      # is recorded in the public Rekor transparency log, so no long-lived key
+      # is stored in the repository. Detached bundles land next to each package
+      # and are published with it.
+      - name: Sign Linux packages and checksum manifest
+        run: |
+          while IFS= read -r -d '' pkg; do
+            cosign sign-blob --yes --bundle "${pkg}.sigstore.json" "$pkg"
+          done < <(find artifacts/linux -type f \( -name '*.deb' -o -name '*.rpm' \) -print0)
+          cosign sign-blob --yes --bundle artifacts/SHA256SUMS.sigstore.json artifacts/SHA256SUMS
+
+      # Publishes signed SLSA build provenance for every distributable to the
+      # repository's attestation API (verifiable with `gh attestation verify`).
+      - name: Attest build provenance
+        id: attest-provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            artifacts/android/**/*.aab
+            artifacts/android/**/*.apk
+            artifacts/linux/**/*.deb
+            artifacts/linux/**/*.rpm
+            artifacts/windows/**/*.exe
+
+      # Binds the source SBOM to the same subjects. `actions/attest-sbom` is
+      # deprecated in favour of `actions/attest` with `sbom-path`.
+      - name: Attest source SBOM
+        id: attest-sbom
+        uses: actions/attest@v4
+        with:
+          sbom-path: artifacts/sbom/boltmesh-${{ github.ref_name }}.cdx.json
+          subject-path: |
+            artifacts/android/**/*.aab
+            artifacts/android/**/*.apk
+            artifacts/linux/**/*.deb
+            artifacts/linux/**/*.rpm
+            artifacts/windows/**/*.exe
+          # Nothing is pushed to a registry, so no storage record is created and
+          # the artifact-metadata permission is not needed.
+          create-storage-record: false
+
+      # The attestation API is the source of truth; also publish the raw Sigstore
+      # bundles so a release can be verified offline.
+      - name: Collect attestation bundles
+        run: |
+          mkdir -p artifacts/attestations
+          cp "${{ steps.attest-provenance.outputs.bundle-path }}" \
+            "artifacts/attestations/boltmesh-${{ github.ref_name }}-provenance.sigstore.json"
+          cp "${{ steps.attest-sbom.outputs.bundle-path }}" \
+            "artifacts/attestations/boltmesh-${{ github.ref_name }}-sbom.sigstore.json"
+
       - name: Draft GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/android/**/*.aab
+            artifacts/android/**/*.apk
             artifacts/linux/**/*
             artifacts/windows/**/*.exe
+            artifacts/sbom/**/*
+            artifacts/attestations/**/*
             artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.sigstore.json
           draft: true
           prerelease: false
           generate_release_notes: true

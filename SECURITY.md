@@ -51,6 +51,7 @@ CI runs on every push and pull request targeting `main`/`develop` through `.gith
 - **Test coverage gate**: `flutter test --coverage` plus `tool/coverage_gate.sh 80` enforces a floor on hand-written Dart lines; `validate-boltmeshd` runs `gofmt`, golangci-lint, `deadcode` and `go test ./...` on the Go helper.
 - **Generated-code drift check**: `tool/check_generated.sh` regenerates l10n/build_runner output and fails when the committed tree is stale (those files are excluded from analysis).
 - **Release signing gates**: tagged `build-android`/`build-windows` jobs fail when their signing secrets are missing rather than publish a debug-signed or unsigned artifact.
+- **Release artifact integrity**: tagged releases publish SHA-256 checksums, CycloneDX/SPDX SBOMs, keyless cosign signatures for the Linux packages, and Sigstore build-provenance/SBOM attestations, so downloads are verifiable with `gh attestation verify` and `cosign verify-blob` (see [DEPLOYMENT.md](DEPLOYMENT.md#verifying-a-release)).
 - **Pre-commit hooks** (`.pre-commit-config.yaml`): gofmt/golangci-lint for `boltmeshd`, `dart format` + `flutter analyze`, shellcheck, and whitespace/YAML/large-file/merge-conflict guards.
 - **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and signing material is supplied only through GitHub Actions secrets — never committed to the repository.
 
@@ -90,7 +91,7 @@ The app is designed to hold no privilege:
 If you deploy the BoltMesh client, please:
 
 1. **Run supported versions** — update promptly when patch releases ship.
-2. **Verify downloads** — obtain installers and packages only from official GitHub Releases for this repository.
+2. **Verify downloads** — obtain installers and packages only from official GitHub Releases for this repository, then check them against `SHA256SUMS` and the published Sigstore attestations/signatures (see [DEPLOYMENT.md](DEPLOYMENT.md#verifying-a-release)).
 3. **Keep TLS verification on** — do not weaken `API_BASE_URL` to `http://` outside throwaway development, and prefer an SPKI pin for pinned deployments.
 4. **Keep privilege minimal** — on Linux, only add desktop users who should control the tunnel to the `boltmesh` group; `boltmeshd` runs as root on their behalf. On Windows, the pipe is limited to SYSTEM, Administrators and Interactive Users, and only the installer needs elevation.
 5. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/`, the signing hooks under `windows/packaging/` and `boltmeshd/packaging/`, and `tool/` with the same scrutiny as source changes.

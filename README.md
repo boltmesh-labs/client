@@ -133,6 +133,12 @@ from `GITHUB_RUN_NUMBER`) before every build job, because both the Android
 The checked-in `version: 0.1.0+1` is a dev placeholder and is not meaningful
 for tagged artifacts.
 
+The release job also emits supply-chain metadata for every tagged build:
+SHA-256 checksums, CycloneDX/SPDX SBOMs, keyless cosign signatures for the Linux
+packages, and Sigstore provenance/SBOM attestations (raw bundles included). See
+[DEPLOYMENT.md](DEPLOYMENT.md#3-artifacts-and-signing) for what ships and how to
+verify it.
+
 ## Android release build
 
 Prereqs: JDK 21 (Gradle 9.x cannot run on much newer JDKs — e.g. Java 27

@@ -46,7 +46,7 @@ git push origin v1.2.3
 | `build-android` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key |
 | `build-linux` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
 | `build-windows` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
-| `release` | `v*` tags | drafts a GitHub Release with the AAB/APK, Linux packages and Windows installer |
+| `release` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
 
 The build jobs run only on tags and depend on the matching validate job plus
 `security`, so a failing test or scan blocks the release. Each host runs only
@@ -55,11 +55,23 @@ from both the Linux and Windows runners.
 
 ## 3. Artifacts and signing
 
-| Platform | Artifact | Signing |
+| Platform | Artifact | Integrity |
 | - | - | - |
 | Android | `.aab` (Play) + `.apk` | upload keystore (`ANDROID_KEYSTORE*` secrets) |
-| Linux | `.deb` + `.rpm` | unsigned; package metadata from `distribute_options.yaml` |
+| Linux | `.deb` + `.rpm` | keyless cosign; detached `.sigstore.json` per package |
 | Windows | Inno Setup `.exe` | Authenticode (`.pfx` via `WINDOWS_CERTIFICATE*` secrets) |
+| All | `SHA256SUMS` | SHA-256 of every binary, itself keyless cosign-signed |
+| All | `*.cdx.json` / `*.spdx.json` | CycloneDX + SPDX SBOMs (Syft) |
+| All | `boltmesh-<tag>-*.sigstore.json` | raw Sigstore attestation bundles |
+
+The `release` job is the single signing/attestation point. It generates the
+checksum manifest and SBOMs, keyless-signs the Linux packages and `SHA256SUMS`
+with cosign (the signature is bound to the workflow's OIDC identity at the tag
+and recorded in the public Rekor transparency log, so no long-lived signing key
+is stored), then attests build provenance and the source SBOM for every
+distributable. The attestations also live in GitHub's attestation API
+(`gh attestation verify`); the raw bundles are published for offline
+verification.
 
 Tagged `build-android` fails when `ANDROID_KEYSTORE` is unset, and tagged
 `build-windows` fails when `WINDOWS_CERTIFICATE` is unset — neither will publish
@@ -68,6 +80,29 @@ a debug-signed or unsigned release. Local builds keep the debug fallback unless
 generate the keystore and where the signing hooks live, are in
 [README.md](README.md#android-release-build) and
 [README.md](README.md#windows-release-build).
+
+### Verifying a release
+
+Download the assets you need, then:
+
+```bash
+# 1. Checksums (the manifest also ships a cosign signature).
+sha256sum -c SHA256SUMS
+
+# 2. Build provenance / SBOM attestations (GitHub CLI).
+gh attestation verify <package>.deb --repo boltmesh-labs/client
+
+# 3. Keyless package signature: the identity is this workflow at the tag.
+cosign verify-blob \
+  --bundle <package>.deb.sigstore.json \
+  --certificate-identity-regexp \
+    'https://github.com/boltmesh-labs/client/.github/workflows/default.yml@refs/tags/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  <package>.deb
+```
+
+`SHA256SUMS.sigstore.json` and the `boltmesh-<tag>-*.sigstore.json` bundles
+verify the same way (the latter hold the provenance and SBOM predicates).
 
 ## 4. Troubleshooting
 
@@ -81,5 +116,9 @@ generate the keystore and where the signing hooks live, are in
   Secrets and variables → Actions (see README).
 - **`build-windows` fails with "WINDOWS_CERTIFICATE is not set"**: same, for the
   base64 `.pfx` and its password.
+- **`release` fails in the cosign/attestation steps**: these need the job's
+  `id-token: write` and `attestations: write` permissions and a public
+  repository (the public-good Sigstore instance). Fix and re-run — the job fails
+  rather than publish assets nothing can verify.
 - **A tagged build is skipped**: the jobs are gated on `refs/tags/v*`; confirm
   the pushed tag starts with `v`.
