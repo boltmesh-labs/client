@@ -50,6 +50,7 @@ extension ConnectionStage on ConnectionController {
             message: 'VPN stopped. Tap Connect to reconnect.',
             lastStage: stage,
             healthNote: null,
+            backendIssue: null,
           ),
         );
         return;

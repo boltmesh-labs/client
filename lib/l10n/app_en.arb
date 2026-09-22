@@ -87,6 +87,22 @@
   "@homeBackendUnreachable": {
     "description": "Banner on the disconnected Home when the control-plane probe fails; the Connect button is disabled alongside it."
   },
+  "homeBackendUnreachableConnected": "Backend unreachable. The tunnel stays up while recovery is attempted.",
+  "@homeBackendUnreachableConnected": {
+    "description": "Connected-Home banner when the control plane cannot be reached but the tunnel may still carry traffic."
+  },
+  "homeAuthExpired": "Session expired. Log in again to reconnect.",
+  "@homeAuthExpired": {
+    "description": "Connected-Home banner when the backend answered 401 and the token refresh did not recover it."
+  },
+  "homeSubscriptionInactive": "No active subscription. Renew to reconnect.",
+  "@homeSubscriptionInactive": {
+    "description": "Connected-Home banner when the backend answered 403 (no active subscription or device limit)."
+  },
+  "homeBackendError": "Backend error. Watching for recovery…",
+  "@homeBackendError": {
+    "description": "Connected-Home banner when the backend answered but is unhealthy (5xx/429) and no more specific note is set."
+  },
   "homeTrafficTitle": "Session traffic",
   "@homeTrafficTitle": {
     "description": "Title above the download/upload counters."
@@ -374,6 +390,15 @@
       },
       "failures": {
         "type": "int"
+      }
+    }
+  },
+  "settingsDiagnosticsBackend": "Backend issue: {issue}",
+  "@settingsDiagnosticsBackend": {
+    "description": "Debug footer line naming the structured backend issue (enum name).",
+    "placeholders": {
+      "issue": {
+        "type": "String"
       }
     }
   }

@@ -185,6 +185,7 @@ extension ConnectionColdStart on ConnectionController {
             message: 'Connected',
             lastStage: stage,
             healthNote: null,
+            backendIssue: null,
           );
           _resetLocalHealth();
           // Anchor the never-handshook branch of the handshake policy: a
@@ -205,6 +206,7 @@ extension ConnectionColdStart on ConnectionController {
             message: 'Verifying VPN status…',
             lastStage: stage,
             healthNote: _externalStopVerifyingNote,
+            backendIssue: null,
           );
           _resetLocalHealth();
           _connectedAt = _clock.now();
@@ -302,6 +304,7 @@ extension ConnectionColdStart on ConnectionController {
               message: 'VPN stopped outside the app',
               lastStage: VpnStage.disconnected,
               healthNote: null,
+              backendIssue: null,
             ),
           );
           return;
@@ -351,6 +354,7 @@ extension ConnectionColdStart on ConnectionController {
         message: 'Connected',
         lastStage: VpnStage.connected,
         healthNote: null,
+        backendIssue: null,
       ),
     );
     _coldRestore.armed = false;

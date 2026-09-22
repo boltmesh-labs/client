@@ -51,6 +51,7 @@ extension ConnectionRecovery on ConnectionController {
           message: 'Connected',
           autoHealAttempts: attempt - 1,
           healthNote: null,
+          backendIssue: null,
         );
         return;
       }
@@ -106,6 +107,7 @@ extension ConnectionRecovery on ConnectionController {
               'Tap Connect to retry.',
           lastStage: null,
           healthNote: null,
+          backendIssue: null,
         ),
       );
     } finally {
@@ -230,6 +232,7 @@ extension ConnectionRecovery on ConnectionController {
               'No servers available in the selected region ($why). '
               'Pick another region or tap Connect to retry.',
           healthNote: null,
+          backendIssue: null,
           lastStage: null,
         );
         return;

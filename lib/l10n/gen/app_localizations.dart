@@ -200,6 +200,30 @@ abstract class AppLocalizations {
   /// **'Backend unreachable. Connect is disabled until the server is reachable.'**
   String get homeBackendUnreachable;
 
+  /// Connected-Home banner when the control plane cannot be reached but the tunnel may still carry traffic.
+  ///
+  /// In en, this message translates to:
+  /// **'Backend unreachable. The tunnel stays up while recovery is attempted.'**
+  String get homeBackendUnreachableConnected;
+
+  /// Connected-Home banner when the backend answered 401 and the token refresh did not recover it.
+  ///
+  /// In en, this message translates to:
+  /// **'Session expired. Log in again to reconnect.'**
+  String get homeAuthExpired;
+
+  /// Connected-Home banner when the backend answered 403 (no active subscription or device limit).
+  ///
+  /// In en, this message translates to:
+  /// **'No active subscription. Renew to reconnect.'**
+  String get homeSubscriptionInactive;
+
+  /// Connected-Home banner when the backend answered but is unhealthy (5xx/429) and no more specific note is set.
+  ///
+  /// In en, this message translates to:
+  /// **'Backend error. Watching for recovery…'**
+  String get homeBackendError;
+
   /// Title above the download/upload counters.
   ///
   /// In en, this message translates to:
@@ -511,6 +535,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Tunnel: stage {stage} · status {status} · failures {failures}'**
   String settingsDiagnosticsTunnel(String stage, String status, int failures);
+
+  /// Debug footer line naming the structured backend issue (enum name).
+  ///
+  /// In en, this message translates to:
+  /// **'Backend issue: {issue}'**
+  String settingsDiagnosticsBackend(String issue);
 }
 
 class _AppLocalizationsDelegate

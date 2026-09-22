@@ -154,6 +154,7 @@ extension ConnectionTunnel on ConnectionController {
       pollFailures: pollFailures,
       lastStage: VpnStage.connected,
       healthNote: null,
+      backendIssue: null,
       autoHealAttempts: 0,
       autoFailoverAttempts: 0,
       rxBytes: null,

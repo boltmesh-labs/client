@@ -4,64 +4,17 @@ import 'package:boltmesh/features/vpn/data/helper_tunnel_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
-class _QueueSocket implements HelperSocket {
-  _QueueSocket(this._steps);
+import '../../../support/fakes.dart' as support;
 
-  final List<Object> _steps;
-  final List<Map<String, dynamic>> requests = [];
-
-  @override
-  bool get isSupported => true;
-
-  @override
-  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) async {
-    requests.add(request);
-    if (_steps.isEmpty) {
-      throw StateError('no scripted response for ${request['op']}');
-    }
-    final step = _steps.removeAt(0);
-    if (step is Exception) throw step;
-    // The daemon echoes the request id; the client now enforces correlation,
-    // so a scripted response must do the same.
-    final response = Map<String, dynamic>.from(step as Map<String, dynamic>);
-    response['id'] = request['id'];
-    return response;
-  }
-}
-
-Map<String, dynamic> _ok(Map<String, dynamic> status) => {
-  'v': helperProtocolVersion,
-  'id': '1',
-  'ok': true,
-  'status': status,
-};
-
-Map<String, dynamic> _status({
-  bool up = true,
-  String stage = 'connected',
-  int rx = 0,
-  int tx = 0,
-  int handshake = 0,
-  String endpoint = '',
-  String publicKey = '',
-}) => {
-  'interface': 'boltmesh0',
-  'up': up,
-  'stage': stage,
-  'rxBytes': rx,
-  'txBytes': tx,
-  'lastHandshake': handshake,
-  'endpoint': endpoint,
-  'publicKey': publicKey,
-};
-
-HelperTunnelAdapter _adapter(_QueueSocket socket) =>
+HelperTunnelAdapter _adapter(HelperSocket socket) =>
     HelperTunnelAdapter(client: HelperClient(socket: socket));
 
 void main() {
   test('ensureInitialized pings and marks ready', () async {
-    final socket = _QueueSocket([
-      _ok(_status(up: false, stage: 'disconnected')),
+    final socket = support.ScriptedHelperSocket([
+      support.helperOk(
+        support.helperStatusJson(up: false, stage: 'disconnected'),
+      ),
     ]);
     final adapter = _adapter(socket);
 
@@ -72,7 +25,10 @@ void main() {
   });
 
   test('start sends the config and readStage reflects the daemon', () async {
-    final socket = _QueueSocket([_ok(_status()), _ok(_status())]);
+    final socket = support.ScriptedHelperSocket([
+      support.helperOk(support.helperStatusJson()),
+      support.helperOk(support.helperStatusJson()),
+    ]);
     final adapter = _adapter(socket);
 
     await adapter.start(
@@ -88,41 +44,64 @@ void main() {
 
   test('readStage maps connecting and unknown-on-error', () async {
     final connecting = _adapter(
-      _QueueSocket([_ok(_status(stage: 'connecting'))]),
+      support.ScriptedHelperSocket([
+        support.helperOk(support.helperStatusJson(stage: 'connecting')),
+      ]),
     );
     expect(await connecting.readStage(), VpnStage.connecting);
 
-    final broken = _adapter(_QueueSocket([HelperTransportException('down')]));
+    final broken = _adapter(
+      support.ScriptedHelperSocket([HelperTransportException('down')]),
+    );
     expect(await broken.readStage(), isNull);
   });
 
   test('readTraffic reports counters while up, null while down', () async {
-    final up = _adapter(_QueueSocket([_ok(_status(rx: 100, tx: 200))]));
+    final up = _adapter(
+      support.ScriptedHelperSocket([
+        support.helperOk(support.helperStatusJson(rxBytes: 100, txBytes: 200)),
+      ]),
+    );
     expect(await up.readTraffic(), {'rxBytes': 100, 'txBytes': 200});
 
     final down = _adapter(
-      _QueueSocket([_ok(_status(up: false, stage: 'disconnected'))]),
+      support.ScriptedHelperSocket([
+        support.helperOk(
+          support.helperStatusJson(up: false, stage: 'disconnected'),
+        ),
+      ]),
     );
     expect(await down.readTraffic(), isNull);
   });
 
   test('readHandshake converts epoch seconds and nulls a zero', () async {
     final handshook = _adapter(
-      _QueueSocket([_ok(_status(handshake: 1718000000))]),
+      support.ScriptedHelperSocket([
+        support.helperOk(support.helperStatusJson(lastHandshake: 1718000000)),
+      ]),
     );
     expect(
       await handshook.readHandshake(),
       DateTime.fromMillisecondsSinceEpoch(1718000000 * 1000, isUtc: true),
     );
 
-    final never = _adapter(_QueueSocket([_ok(_status())]));
+    final never = _adapter(
+      support.ScriptedHelperSocket([
+        support.helperOk(support.helperStatusJson()),
+      ]),
+    );
     expect(await never.readHandshake(), isNull);
   });
 
   test('getActivePeer returns the newest peer, null when empty', () async {
     final peer = _adapter(
-      _QueueSocket([
-        _ok(_status(publicKey: 'PUBKEY=', endpoint: '198.51.100.7:1234')),
+      support.ScriptedHelperSocket([
+        support.helperOk(
+          support.helperStatusJson(
+            publicKey: 'PUBKEY=',
+            endpoint: '198.51.100.7:1234',
+          ),
+        ),
       ]),
     );
     final active = await peer.getActivePeer();
@@ -130,14 +109,20 @@ void main() {
     expect(active!.publicKey, 'PUBKEY=');
     expect(active.endpoint, '198.51.100.7:1234');
 
-    final none = _adapter(_QueueSocket([_ok(_status())]));
+    final none = _adapter(
+      support.ScriptedHelperSocket([
+        support.helperOk(support.helperStatusJson()),
+      ]),
+    );
     expect(await none.getActivePeer(), isNull);
   });
 
   test('stop retries once and never throws', () async {
-    final socket = _QueueSocket([
+    final socket = support.ScriptedHelperSocket([
       HelperTransportException('first attempt failed'),
-      _ok(_status(up: false, stage: 'disconnected')),
+      support.helperOk(
+        support.helperStatusJson(up: false, stage: 'disconnected'),
+      ),
     ]);
     final adapter = _adapter(socket);
 
@@ -148,7 +133,7 @@ void main() {
   });
 
   test('stop gives up quietly when both attempts fail', () async {
-    final socket = _QueueSocket([
+    final socket = support.ScriptedHelperSocket([
       HelperTransportException('first'),
       HelperTransportException('second'),
     ]);
@@ -161,16 +146,22 @@ void main() {
 
   test('killGhost downs the tunnel and reports success', () async {
     final gone = _adapter(
-      _QueueSocket([_ok(_status(up: false, stage: 'disconnected'))]),
+      support.ScriptedHelperSocket([
+        support.helperOk(
+          support.helperStatusJson(up: false, stage: 'disconnected'),
+        ),
+      ]),
     );
     expect(await gone.killGhost(), isTrue);
 
-    final broken = _adapter(_QueueSocket([HelperTransportException('down')]));
+    final broken = _adapter(
+      support.ScriptedHelperSocket([HelperTransportException('down')]),
+    );
     expect(await broken.killGhost(), isFalse);
   });
 
   test('helper adapter advertises handshake support with no push stages', () {
-    final adapter = _adapter(_QueueSocket([]));
+    final adapter = _adapter(support.ScriptedHelperSocket([]));
     expect(adapter.handshakeReaderSupported, isTrue);
     expect(adapter.stages, emitsDone);
   });

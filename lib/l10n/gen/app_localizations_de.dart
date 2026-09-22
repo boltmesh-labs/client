@@ -68,6 +68,22 @@ class AppLocalizationsDe extends AppLocalizations {
       'Backend nicht erreichbar. Verbinden ist deaktiviert, bis der Server wieder erreichbar ist.';
 
   @override
+  String get homeBackendUnreachableConnected =>
+      'Backend nicht erreichbar. Der Tunnel bleibt bestehen, während die Wiederherstellung versucht wird.';
+
+  @override
+  String get homeAuthExpired =>
+      'Sitzung abgelaufen. Melde dich erneut an, um die Verbindung wiederherzustellen.';
+
+  @override
+  String get homeSubscriptionInactive =>
+      'Kein aktives Abo. Verlängere es, um dich wieder zu verbinden.';
+
+  @override
+  String get homeBackendError =>
+      'Backend-Fehler. Wiederherstellung wird beobachtet …';
+
+  @override
   String get homeTrafficTitle => 'Sitzungsdaten';
 
   @override
@@ -270,5 +286,10 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String settingsDiagnosticsTunnel(String stage, String status, int failures) {
     return 'Tunnel: Status $stage · Statusabfrage $status · Fehler $failures';
+  }
+
+  @override
+  String settingsDiagnosticsBackend(String issue) {
+    return 'Backend-Problem: $issue';
   }
 }

@@ -194,6 +194,61 @@ func TestUpBouncesExistingLink(t *testing.T) {
 	}
 }
 
+// A config left on disk by an unclean exit must be overwritten, never
+// appended to or reused.
+func TestUpOverwritesStaleConfig(t *testing.T) {
+	m := newTestManager(t, false, deviceWithPeers(t), nil)
+	if err := os.WriteFile(m.configPath(), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, run := recordRuns()
+	m.run = run
+
+	if _, err := m.Up(context.Background(), validConfig); err != nil {
+		t.Fatalf("Up() = %v", err)
+	}
+	data, err := os.ReadFile(m.configPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != validConfig {
+		t.Fatal("Up did not overwrite the stale config")
+	}
+}
+
+// A failed wg-quick up must not leave the privileged config behind.
+func TestUpRemovesConfigWhenWgQuickUpFails(t *testing.T) {
+	m := newTestManager(t, false, deviceWithPeers(t), nil)
+	m.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("boom"), errors.New("exit status 1")
+	}
+
+	_, err := m.Up(context.Background(), validConfig)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up(failing wg-quick) = %v, want internal", err)
+	}
+	if _, statErr := os.Stat(m.configPath()); !os.IsNotExist(statErr) {
+		t.Fatal("config left behind after a failed wg-quick up")
+	}
+}
+
+// Down must clean up a config orphaned by an unclean exit even when the
+// interface is already gone (idempotent teardown).
+func TestDownRemovesStaleConfigWhenLinkAbsent(t *testing.T) {
+	m := newTestManager(t, false, nil, errors.New("no device"))
+	if err := os.WriteFile(m.configPath(), []byte(validConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Down(context.Background()); err != nil {
+		t.Fatalf("Down() = %v", err)
+	}
+	if _, err := os.Stat(m.configPath()); !os.IsNotExist(err) {
+		t.Fatal("stale config not removed by Down")
+	}
+}
+
 func TestDownIsIdempotentWhenAbsent(t *testing.T) {
 	m := newTestManager(t, false, nil, errors.New("no device"))
 	calls, run := recordRuns()

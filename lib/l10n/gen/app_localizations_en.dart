@@ -68,6 +68,20 @@ class AppLocalizationsEn extends AppLocalizations {
       'Backend unreachable. Connect is disabled until the server is reachable.';
 
   @override
+  String get homeBackendUnreachableConnected =>
+      'Backend unreachable. The tunnel stays up while recovery is attempted.';
+
+  @override
+  String get homeAuthExpired => 'Session expired. Log in again to reconnect.';
+
+  @override
+  String get homeSubscriptionInactive =>
+      'No active subscription. Renew to reconnect.';
+
+  @override
+  String get homeBackendError => 'Backend error. Watching for recovery…';
+
+  @override
   String get homeTrafficTitle => 'Session traffic';
 
   @override
@@ -268,5 +282,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String settingsDiagnosticsTunnel(String stage, String status, int failures) {
     return 'Tunnel: stage $stage · status $status · failures $failures';
+  }
+
+  @override
+  String settingsDiagnosticsBackend(String issue) {
+    return 'Backend issue: $issue';
   }
 }

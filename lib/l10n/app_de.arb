@@ -17,6 +17,10 @@
   "homeDisconnectHint": "Stoppt den VPN-Tunnel",
   "homeWorking": "Wird ausgeführt …",
   "homeBackendUnreachable": "Backend nicht erreichbar. Verbinden ist deaktiviert, bis der Server wieder erreichbar ist.",
+  "homeBackendUnreachableConnected": "Backend nicht erreichbar. Der Tunnel bleibt bestehen, während die Wiederherstellung versucht wird.",
+  "homeAuthExpired": "Sitzung abgelaufen. Melde dich erneut an, um die Verbindung wiederherzustellen.",
+  "homeSubscriptionInactive": "Kein aktives Abo. Verlängere es, um dich wieder zu verbinden.",
+  "homeBackendError": "Backend-Fehler. Wiederherstellung wird beobachtet …",
   "homeTrafficTitle": "Sitzungsdaten",
   "homeTrafficLabel": "Download {down} · Upload {up}",
   "homeTrafficSemantics": "{down} heruntergeladen, {up} hochgeladen",
@@ -68,5 +72,6 @@
   "settingsDiagnosticsNever": "nie",
   "settingsDiagnosticsAgo": "vor {seconds}s",
   "settingsDiagnosticsApi": "API: {api} · Plattform: {platform}",
-  "settingsDiagnosticsTunnel": "Tunnel: Status {stage} · Statusabfrage {status} · Fehler {failures}"
+  "settingsDiagnosticsTunnel": "Tunnel: Status {stage} · Statusabfrage {status} · Fehler {failures}",
+  "settingsDiagnosticsBackend": "Backend-Problem: {issue}"
 }

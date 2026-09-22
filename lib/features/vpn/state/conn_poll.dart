@@ -28,10 +28,12 @@ extension ConnectionPoll on ConnectionController {
         return;
       }
       // App-level rejections prove the backend is reachable; only
-      // transport failures imply a stale/dead path. Auth/app errors
-      // (401/403/409/…) return silently — the Dio 401 interceptor
-      // already retried once, and revocation is handled via the auth
-      // listener.
+      // transport failures imply a stale/dead path. A reachable backend that
+      // rejects us (401/403) or is unhealthy (5xx/429) is not a network
+      // outage, so record the distinct [BackendIssue] for diagnostics. The
+      // banner copy for auth/subscription comes from that issue (no
+      // healthNote is set for those); 5xx/429 keep their existing degraded
+      // note.
       final kind = asVpnError(e)?.kind;
       final status = asVpnError(e)?.statusCode;
       if (!isTransportFailure(e)) {
@@ -42,15 +44,27 @@ extension ConnectionPoll on ConnectionController {
         // A reachable-but-unhealthy backend (5xx/429/503) proves the path,
         // so it must not count toward escalation, but the user must not see
         // a perpetual "Connected" while every poll fails: surface a
-        // degraded banner the next successful poll clears.
-        if ((kind == ApiErrorKind.unknown || kind == ApiErrorKind.noCapacity) &&
-            snap.phase == ConnPhase.connected) {
-          snap = snap.copyWith(
-            healthNote:
-                'Backend error${status == null ? '' : ' ($status)'}. '
-                'Watching for recovery…',
-          );
+        // degraded banner the next successful poll clears. An answered
+        // 401/403 means the network is fine, so drop any stale
+        // transport-unreachable note and let the [BackendIssue] copy own the
+        // banner.
+        final issue = classifyBackendIssue(asVpnError(e));
+        final degraded =
+            kind == ApiErrorKind.unknown || kind == ApiErrorKind.noCapacity;
+        final authIssue =
+            issue == BackendIssue.authExpired ||
+            issue == BackendIssue.subscriptionInactive;
+        final String? note;
+        if (degraded && snap.phase == ConnPhase.connected) {
+          note =
+              'Backend error${status == null ? '' : ' ($status)'}. '
+              'Watching for recovery…';
+        } else if (authIssue) {
+          note = null;
+        } else {
+          note = snap.healthNote;
         }
+        snap = snap.copyWith(backendIssue: issue, healthNote: note);
         return;
       }
       final failures = snap.pollFailures + 1;
@@ -71,9 +85,11 @@ extension ConnectionPoll on ConnectionController {
         return;
       }
       AppLog.error('status poll transient ($failures)', e);
+      final degraded = failures >= ConnectionTuning.degradedPollThreshold;
       snap = snap.copyWith(
         pollFailures: failures,
-        healthNote: failures >= ConnectionTuning.degradedPollThreshold
+        backendIssue: degraded ? BackendIssue.unreachable : snap.backendIssue,
+        healthNote: degraded
             ? 'Backend unreachable ($failures×). Tunnel may be stale — '
                   'it stays up while recovery is attempted.'
             : snap.healthNote,
@@ -113,6 +129,7 @@ extension ConnectionPoll on ConnectionController {
               : 'Device suspended (${st.suspendedReason ?? 'disabled'}).',
           lastStage: null,
           healthNote: null,
+          backendIssue: null,
         ),
       );
       return;
@@ -147,6 +164,7 @@ extension ConnectionPoll on ConnectionController {
       lastStatusAt: now,
       pollFailures: 0,
       healthNote: healthyStage ? null : snap.healthNote,
+      backendIssue: null,
       autoHealAttempts: tunnelHealthy ? 0 : snap.autoHealAttempts,
       autoFailoverAttempts: tunnelHealthy ? 0 : snap.autoFailoverAttempts,
     );

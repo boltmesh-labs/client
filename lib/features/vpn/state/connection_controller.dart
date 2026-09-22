@@ -26,6 +26,7 @@ import '../data/tunnel_adapter.dart';
 import '../data/tunnel_tuning.dart';
 import '../data/vpn_api.dart';
 import '../data/wg_conf.dart';
+import '../domain/backend_issue.dart';
 import '../domain/diagnosis_policy.dart';
 import '../domain/failover_policy.dart';
 import '../domain/region_policy.dart';

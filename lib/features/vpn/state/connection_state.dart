@@ -2,6 +2,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
 import '../data/models.dart';
+import '../domain/backend_issue.dart';
 
 part 'connection_state.freezed.dart';
 
@@ -39,6 +40,13 @@ abstract class ConnState with _$ConnState {
     /// Degraded-tunnel banner (backend unreachable or stage anomaly).
     /// Null when healthy.
     String? healthNote,
+
+    /// Structured cause of the last backend interaction failure while
+    /// connected, if any (null when healthy). [healthNote] carries the
+    /// human-facing text; this carries the machine-readable distinction the
+    /// UI uses to separate "authentication expired" from "network
+    /// unreachable" (see `domain/backend_issue.dart`).
+    BackendIssue? backendIssue,
 
     /// True when the last explicit user operation (switch / Quick Connect)
     /// failed. Set by the shared failure surfacing and cleared when a new

@@ -42,6 +42,7 @@ extension ConnectionLifecycle on ConnectionController {
         message: message,
         lastStage: lastStage,
         healthNote: null,
+        backendIssue: null,
       ),
     );
   }
@@ -54,6 +55,7 @@ extension ConnectionLifecycle on ConnectionController {
       phase: ConnPhase.connected,
       message: 'Connected',
       healthNote: null,
+      backendIssue: null,
     );
   }
 
@@ -72,6 +74,7 @@ extension ConnectionLifecycle on ConnectionController {
         message: message,
         lastStage: null,
         healthNote: null,
+        backendIssue: null,
       ),
     );
   }

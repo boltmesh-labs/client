@@ -20,6 +20,8 @@ import 'package:boltmesh/core/clock.dart';
 import 'package:boltmesh/features/vpn/data/control_probe.dart';
 import 'package:boltmesh/features/vpn/data/device_store.dart';
 import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
+import 'package:boltmesh/features/vpn/data/helper_client.dart';
+import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -368,4 +370,114 @@ class FakeControlProbe extends ControlPlaneProbe {
   @override
   Future<bool?> check({Duration timeout = const Duration(seconds: 5)}) async =>
       reachable;
+}
+
+// --- boltmeshd helper transport doubles ------------------------------------
+//
+// The app talks to the privileged helper over a newline-delimited JSON
+// transport (see `data/helper_socket.dart`). These doubles script that
+// transport so the recovery paths (daemon dies, daemon restarts, stale
+// config) are exercised without a real socket.
+
+/// Canonical helper status payload (see `HelperStatus.fromJson`).
+Map<String, dynamic> helperStatusJson({
+  String interfaceName = 'boltmesh0',
+  bool up = true,
+  String stage = 'connected',
+  int rxBytes = 0,
+  int txBytes = 0,
+  int lastHandshake = 0,
+  String endpoint = '',
+  String publicKey = '',
+}) => {
+  'interface': interfaceName,
+  'up': up,
+  'stage': stage,
+  'rxBytes': rxBytes,
+  'txBytes': txBytes,
+  'lastHandshake': lastHandshake,
+  'endpoint': endpoint,
+  'publicKey': publicKey,
+};
+
+/// Successful helper response envelope wrapping [status]. The request `id` is
+/// filled in by the socket double, mirroring the daemon's correlation echo.
+Map<String, dynamic> helperOk(
+  Map<String, dynamic> status, {
+  List<String>? caps,
+}) => {'v': helperProtocolVersion, 'ok': true, 'caps': ?caps, 'status': status};
+
+/// Scripted [HelperSocket] for adapter-level tests.
+///
+/// Each [exchange] pops one step: a [Map] is returned as the response (its
+/// `id` forced to the request id), an [Exception] is thrown. An exhausted
+/// script throws [StateError] so an unexpectedly extra read fails loudly
+/// instead of silently returning a stale response.
+class ScriptedHelperSocket implements HelperSocket {
+  ScriptedHelperSocket(this._steps);
+
+  final List<Object> _steps;
+
+  /// Every request sent, in order.
+  final List<Map<String, dynamic>> requests = [];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) async {
+    requests.add(request);
+    if (_steps.isEmpty) {
+      throw StateError('no scripted response for ${request['op']}');
+    }
+    final step = _steps.removeAt(0);
+    if (step is Exception) throw step;
+    final response = Map<String, dynamic>.from(step as Map<String, dynamic>);
+    response['id'] = request['id'];
+    return response;
+  }
+}
+
+/// Stateful [HelperSocket] for recovery tests: answers every op from [status]
+/// until [fail] is set, when every exchange throws as if the daemon/socket is
+/// gone. Clear [fail] to simulate the daemon coming back; swap [status] to
+/// change what it reports.
+class FakeHelperSocket implements HelperSocket {
+  FakeHelperSocket({Map<String, dynamic>? status})
+    : status = status ?? helperStatusJson();
+
+  /// Status the daemon reports while reachable.
+  Map<String, dynamic> status;
+
+  /// True while the daemon is unreachable: every exchange throws.
+  bool fail = false;
+
+  /// Ops that throw even while [fail] is false. Models a daemon that answers
+  /// the negotiation `ping` (init succeeds) but has gone away for the reads
+  /// (`status`), which is what a mid-session restart looks like.
+  Set<String> failingOps = {};
+
+  /// Every request sent, in order.
+  final List<Map<String, dynamic>> requests = [];
+
+  /// Ops sent, in order (convenience view over [requests]).
+  List<String> get ops => [for (final r in requests) r['op'] as String];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) async {
+    requests.add(request);
+    final op = request['op'];
+    if (fail || (op is String && failingOps.contains(op))) {
+      throw HelperTransportException('helper unreachable ($op)');
+    }
+    return {
+      'v': helperProtocolVersion,
+      'id': request['id'],
+      'ok': true,
+      'status': status,
+    };
+  }
 }
