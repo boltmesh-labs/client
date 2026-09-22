@@ -57,6 +57,13 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# The WireGuard plugin's CMake injects `requireAdministrator` into the app
+# manifest so the GUI can create/start its tunnel service. The privileged
+# boltmeshd helper owns that now, so the app itself stays unprivileged:
+# reset the link flags (the plugin ran before this point) to drop the UAC
+# requirement while keeping the GUI subsystem.
+set_target_properties(${BINARY_NAME} PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can

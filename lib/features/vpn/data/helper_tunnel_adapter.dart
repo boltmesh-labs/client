@@ -7,20 +7,22 @@ import 'helper_client.dart';
 import 'tunnel_adapter.dart';
 import 'tunnel_tuning.dart';
 
-/// [TunnelAdapter] over the privileged `boltmeshd` daemon.
+/// [TunnelAdapter] over the privileged `boltmeshd` helper.
 ///
-/// Used on Linux in place of `WireGuardTunnelAdapter`: the plugin's Linux
-/// backend shells out to `sudo wg`/`sudo wg-quick` from the UI process, which
-/// is exactly the privileged surface this adapter removes. Every read and
-/// write goes through the helper socket.
+/// Used on Linux and Windows in place of `WireGuardTunnelAdapter`: on Linux
+/// the plugin's backend shells out to `sudo wg`/`sudo wg-quick`, and on
+/// Windows it creates and starts a LocalSystem service, both of which put a
+/// privileged surface inside the UI process. Every read and write goes
+/// through the helper transport (a Unix socket on Linux, a named pipe on
+/// Windows).
 ///
 /// Read semantics match the rest of the app: null means "unknown" and must
 /// never be treated as a stall on its own. The daemon is authoritative for
 /// the stage, so [stages] stays empty and `readStage()` (polled by the health
 /// tick) is the truth — outside-stop corroboration still works via
 /// `_noteStage`.
-class LinuxTunnelAdapter implements TunnelAdapter {
-  LinuxTunnelAdapter({HelperClient? client})
+class HelperTunnelAdapter implements TunnelAdapter {
+  HelperTunnelAdapter({HelperClient? client})
     : _client = client ?? HelperClient();
 
   final HelperClient _client;

@@ -95,15 +95,13 @@ in `test/support/fakes.dart`.
   (`ios/Runner/Runner.entitlements` already declares it, but the
   extension target + a provisioning profile with the entitlement are
   still created in Xcode, not in this repo).
-- **Windows**: the plugin ships Wintun plus the WireGuard for Windows
-  service (`wireguard_svc.exe`, runs as LocalSystem). The plugin's own CMake
-  injects `requireAdministrator` into the executable manifest, so Windows
-  elevates BoltMesh (UAC) at launch and the whole GUI runs with administrator
-  rights — unlike Linux, there is no unprivileged helper yet. Creating and
-  starting the tunnel service needs that elevation. The app reads handshakes
-  and kills ghost tunnels through its own `runner/tunnel_host.cpp` (see the
-  handshake-reader note below). OAuth opens the system browser and
-  returns to an ephemeral loopback listener
+- **Windows**: hands all privileged work to the `boltmeshd` helper
+  (`boltmeshd/`, installed as a LocalSystem service by the Inno Setup `.exe`).
+  The plugin still bundles Wintun, `wireguard_svc.exe` and `wireguard.dll`,
+  but the GUI no longer calls it and no longer requests elevation: the daemon
+  creates/starts the `boltmesh0` tunnel service and answers stage, handshake,
+  peer and counters over the named pipe `\\.\pipe\boltmesh\boltmeshd`. OAuth
+  opens the system browser and returns to an ephemeral loopback listener
   (`http://127.0.0.1:{port}/callback`). Never test a full-tunnel against a
   `localhost`-forwarded API (`API_BASE_URL=http://localhost:8000/v1` over a
   VSCode SSH forward dies with the tunnel — use a LAN/direct URL or run the
@@ -114,8 +112,8 @@ in `test/support/fakes.dart`.
   via `boltmesh0`). Reboot only as a last resort. Packaging: see
   [Windows release build](#windows-release-build) (Inno Setup `.exe`).
 - **Linux**: hands all privileged work to the `boltmeshd` helper
-  (`linux/boltmeshd/`, installed by the deb/rpm, socket-activated,
-  `boltmesh` group). The app itself holds no privilege and never runs
+  (`boltmeshd/`, installed by the deb/rpm, socket-activated, `boltmesh`
+  group). The app itself holds no privilege and never runs
   `sudo`/`wg`/`wg-quick`; the daemon needs `wireguard-tools` for `wg-quick`.
   OAuth uses the same ephemeral loopback listener as Windows
   (`http://127.0.0.1:{port}/callback`) opened in the system browser, so the
@@ -191,9 +189,10 @@ the build.
 
 ## Windows release build
 
-Prereqs: Visual Studio 2022 with the "Desktop development with C++" workload
-and [Inno Setup 6](https://jrsoftware.org/isinfo.php) (the `iscc` compiler;
-fastforge resolves `%ProgramFiles(x86)%\Inno Setup 6` or `INNO_SETUP_PATH`).
+Prereqs: Visual Studio 2022 with the "Desktop development with C++" workload,
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) (the `iscc` compiler;
+fastforge resolves `%ProgramFiles(x86)%\Inno Setup 6` or `INNO_SETUP_PATH`),
+and Go 1.26 (to build `boltmeshd.exe`; the `windows-exe` pre hook does this).
 
 ```powershell
 flutter config --enable-windows-desktop
@@ -203,26 +202,27 @@ fastforge release --name=production
 # dist/<version>/boltmesh-<version>-windows-setup.exe
 ```
 
-The Windows package is an Inno Setup `.exe`, not MSIX. The plugin's CMake
-injects `requireAdministrator` into `boltmesh.exe` (it must create/start the
-`boltmesh0` service) and MSIX packaged apps cannot auto-elevate: a packaged
-build either fails to launch ("The request is not supported") or runs
-unelevated and the first connect lands in `VpnStage.denied`. The installer is
-per-machine into `%ProgramFiles%\BoltMesh` and the exe manifest raises the
-UAC prompt on launch. Config: `windows/packaging/exe/make_config.yaml`.
-Revisit MSIX only once a privileged Windows helper (the `boltmeshd`
-analogue) exists. `fastforge release --name=production` also lists the Linux
-jobs but skips those unsupported on the host, so the same command works from
-either OS.
+The Windows package is an Inno Setup `.exe`, not MSIX. The pre-packing hook
+`windows/packaging/stage_boltmeshd.ps1` builds `boltmeshd.exe` into the
+bundle, so the installer ships the helper next to `boltmesh.exe` (and the
+plugin-bundled `wireguard_svc.exe`/`wireguard.dll`), then
+`windows/packaging/exe/boltmesh.iss` installs and starts the helper service
+and removes it on uninstall. The GUI no longer requests elevation: the app
+CMake drops the plugin's `requireAdministrator` link flag, and the privileged
+work lives in the helper. The installer itself is per-machine into
+`%ProgramFiles%\BoltMesh` and still runs elevated. Config:
+`windows/packaging/exe/make_config.yaml`.
+`fastforge release --name=production` also lists the Linux jobs but skips
+those unsupported on the host, so the same command works from either OS.
 
 ### Code signing (Authenticode)
 
 `windows/packaging/sign.ps1` runs as the `windows-exe` job's pre/post hooks:
-it signs `boltmesh.exe` between the Flutter build and Inno packing, then the
-installer after packing, timestamped via RFC 3161 (default
-`http://timestamp.digicert.com`, override `WINDOWS_TIMESTAMP_URL`). Signing
-the app exe as well as the setup exe means the signature covers both the
-installer and the binary it later launches.
+it signs `boltmesh.exe` and `boltmeshd.exe` between the Flutter build and
+Inno packing, then the installer after packing, timestamped via RFC 3161
+(default `http://timestamp.digicert.com`, override
+`WINDOWS_TIMESTAMP_URL`). Signing the app exe and the helper as well as the
+setup exe means the signature covers everything the installer later launches.
 
 CI reads a base64 `.pfx` from two repo secrets (Settings → Secrets and
 variables → Actions):
@@ -368,10 +368,14 @@ degraded-stage path acts). Dart side: `lib/features/vpn/data/` —
 never-handshook branch (Apple is still a placeholder, so its null reads
 never count).
 
-- **Linux**: works today via the privileged `boltmeshd` helper
-  (`linux/boltmeshd/`), which reads the peer handshake with `wgctrl`
-  and answers over its Unix socket. The app itself never runs `wg`; see
-  `linux_tunnel_adapter.dart`.
+- **Linux and Windows**: work today via the privileged `boltmeshd` helper
+  (`boltmeshd/`). On Linux it reads the peer handshake with `wgctrl` and
+  answers over its Unix socket; on Windows it reads `WireGuardGetConfiguration`
+  from the plugin-bundled `wireguard.dll` on adapter `boltmesh0` and answers
+  over its named pipe. Both convert the newest peer to unix seconds
+  (`(ft - 116444736000000000) / 10000000` on Windows) and resolve
+  `getActivePeer`/`killGhost` from the same status/`down` path. The app itself
+  never runs `wg` or the SCM; see `helper_tunnel_adapter.dart`.
 - **Android**: works today. `MainActivity.kt` reaches the plugin's
   `GoBackend` reflectively (`futureBackend` + `tunnel`, no fork) and
   returns the newest peer `latestHandshakeEpochMillis / 1000`; any failure
@@ -380,15 +384,9 @@ never count).
   clears it on every `disconnect`), so after any reconnect it is null even
   though the tunnel is live. The config needed for ghost-kill/active-peer is
   resolved from the plugin's own `vpn_prefs/last_used_config` instead.
-- **Windows**: works today. `windows/runner/tunnel_host.cpp` loads the
-  plugin's bundled `wireguard.dll`, calls `WireGuardGetConfiguration` on
-  adapter `boltmesh0`, and returns the newest peer `LastHandshake` converted
-  from 100ns-since-1601 to unix seconds
-  (`(ft - 116444736000000000) / 10000000`). The same host answers
-  `com.boltmesh/tunnel`: `getActivePeer` from the adapter's peer public
-  key/endpoint, and `killGhost` by stopping the `boltmesh0` service through
-  the SCM (the plugin's own `stopVpn` needs a live handle, so a ghost after a
-  process restart slips past it). Every failure resolves as null/false.
+- **Windows**: works today through the helper (see above); the GUI-side
+  `runner/helper_pipe.cpp` only shuttles the JSON exchange over the named pipe
+  (Dart has no Windows named-pipe client) and the daemon owns the reads.
 - **iOS/macOS**: app side sends `sendProviderMessage("getHandshake")`
   over the `NETunnelProviderSession` (same pattern the plugin uses for
   `getStats`); the Packet Tunnel extension (Xcode target, created per the

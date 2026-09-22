@@ -6,12 +6,12 @@ part of 'connection_controller.dart';
 const _externalStopVerifyingNote = 'Verifying VPN status…';
 
 /// Remediation for a `denied` stage is platform-specific: Windows emits it
-/// when the app can't create/start the WireGuard service without elevation
-/// (the manifest is `asInvoker`), while Android/iOS emit it when the VPN
+/// when the privileged `boltmeshd` helper service is missing or stopped (the
+/// app itself is unprivileged), while Android/iOS emit it when the VPN
 /// consent grant is missing.
 String _deniedMessage() => defaultTargetPlatform == TargetPlatform.windows
-    ? 'VPN tunnel could not start. Make sure BoltMesh is running as '
-          'administrator so Windows can set up the tunnel service.'
+    ? 'VPN tunnel could not start. Make sure the BoltMesh helper service is '
+          'installed and running, then reconnect.'
     : 'VPN permission denied. Re-allow it in system settings.';
 
 extension ConnectionStage on ConnectionController {

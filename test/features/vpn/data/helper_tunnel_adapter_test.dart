@@ -1,6 +1,6 @@
 import 'package:boltmesh/features/vpn/data/helper_client.dart';
 import 'package:boltmesh/features/vpn/data/helper_socket.dart';
-import 'package:boltmesh/features/vpn/data/linux_tunnel_adapter.dart';
+import 'package:boltmesh/features/vpn/data/helper_tunnel_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
@@ -51,8 +51,8 @@ Map<String, dynamic> _status({
   'publicKey': publicKey,
 };
 
-LinuxTunnelAdapter _adapter(_QueueSocket socket) =>
-    LinuxTunnelAdapter(client: HelperClient(socket: socket));
+HelperTunnelAdapter _adapter(_QueueSocket socket) =>
+    HelperTunnelAdapter(client: HelperClient(socket: socket));
 
 void main() {
   test('ensureInitialized pings and marks ready', () async {

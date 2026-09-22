@@ -106,7 +106,7 @@ flutter run -d linux
 
 Tunnel actions go through the privileged `boltmeshd` helper; without it the
 GUI launches but VPN operations fail with "helper socket unavailable".
-[linux/boltmeshd/README.md](linux/boltmeshd/README.md).
+[boltmeshd/README.md](boltmeshd/README.md).
 
 ## Next
 

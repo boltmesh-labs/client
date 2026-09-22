@@ -40,8 +40,8 @@ git push origin v1.2.3
 | - | - | - |
 | `validate` | every push/PR | `tool/check_generated.sh`, `flutter analyze --fatal-infos`, `dart format --set-exit-if-changed lib test`, `flutter test --coverage`, `tool/coverage_gate.sh 80` |
 | `validate-android` | every push/PR | `flutter build apk --debug` |
-| `validate-windows` | every push/PR | `flutter build windows --debug` |
-| `validate-boltmeshd` | every push/PR | `gofmt`, golangci-lint, `deadcode`, `go test ./...` under `linux/boltmeshd/` |
+| `validate-windows` | every push/PR | `flutter build windows --debug`, Windows-tagged `boltmeshd` tests |
+| `validate-boltmeshd` | every push/PR | `gofmt`, golangci-lint (Linux + `GOOS=windows`), `deadcode`, `GOOS=windows` build/vet, `go test ./...` under `boltmeshd/` |
 | `security` | every push/PR | Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
 | `build-android` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key |
 | `build-linux` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |

@@ -22,7 +22,7 @@ categories:
   - Utility
 startup_notify: true
 # boltmeshd is staged inside the bundle at /opt/boltmesh/boltmeshd/ by
-# `linux/boltmeshd/packaging/stage.sh` (a pre-package hook). These scripts
+# `boltmeshd/packaging/stage.sh` (a pre-package hook). These scripts
 # move it into place, create the socket group, and enable the socket. The
 # staged files live under /opt and are owned by dpkg; the installed copies
 # below are not, so postrm removes them explicitly.

@@ -1,4 +1,4 @@
-// Non-io stub: no Unix socket without dart:io. The Linux adapter is never
+// Non-io stub: no sockets without dart:io. The helper adapters are never
 // selected here (isHelperPlatformSupported is false), so exchange() is only a
 // guard against accidental use.
 import 'helper_socket.dart';
@@ -13,6 +13,8 @@ class _UnsupportedHelperSocket implements HelperSocket {
 
   @override
   Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) {
-    throw HelperTransportException('boltmeshd is only available on Linux');
+    throw HelperTransportException(
+      'boltmeshd is only available on Linux and Windows',
+    );
   }
 }

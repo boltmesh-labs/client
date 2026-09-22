@@ -3,7 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
-#include "tunnel_host.h"
+#include "helper_pipe.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -26,9 +26,9 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
-  // App-owned handshake/ghost channels (see tunnel_host.h). Registered after
-  // the plugins so the WireGuard adapter/service they talk to already exist.
-  boltmesh::RegisterTunnelHost(flutter_controller_->engine());
+  // App-owned transport to the privileged boltmeshd helper (see
+  // helper_pipe.h). The app itself runs unprivileged.
+  boltmesh::RegisterHelperPipe(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

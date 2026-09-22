@@ -190,7 +190,7 @@ void main() {
   });
 
   test('helperProtocolVersion matches the Go daemon constant', () {
-    final source = File('linux/boltmeshd/internal/protocol/protocol.go')
+    final source = File('boltmeshd/internal/protocol/protocol.go')
         .readAsStringSync();
     final match = RegExp(
       r'^const Version\s*=\s*(\d+)\s*$',

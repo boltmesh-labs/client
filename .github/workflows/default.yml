@@ -78,11 +78,23 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Compiles the native runner (tunnel_host.cpp + wireguard_api.h) so a
-      # Windows-only C++ break is caught even though the platform ships no
-      # installer yet.
+      # Compiles the native runner (helper_pipe.cpp) so a Windows-only C++
+      # break is caught even though the platform ships no installer yet.
       - name: Build Windows runner (debug)
         run: flutter build windows --debug
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
+
+      # Runs the Windows-tagged boltmeshd tests (SCM/DLL-layout seams), which
+      # cannot run on the Linux validate job.
+      - name: Test boltmeshd (Windows)
+        working-directory: boltmeshd
+        run: go test ./... -count=1
 
   validate-android:
     name: "Validate Android build"
@@ -118,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: linux/boltmeshd
+        working-directory: boltmeshd
     steps:
       - uses: actions/checkout@v7
 
@@ -127,7 +139,7 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
-          cache-dependency-path: linux/boltmeshd/go.sum
+          cache-dependency-path: boltmeshd/go.sum
 
       - name: Check Formatting (gofmt)
         run: |
@@ -141,7 +153,22 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
-          working-directory: linux/boltmeshd
+          working-directory: boltmeshd
+
+      # The Windows backend is build-tagged, so lint it separately or it is
+      # never analysed on this runner.
+      - name: Run golangci-lint (Windows)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: windows
+        with:
+          version: v2.13.2
+          working-directory: boltmeshd
+
+      - name: Cross-compile for Windows
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
 
       - name: Check for unreachable functions (deadcode)
         run: |
@@ -267,7 +294,7 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
-          cache-dependency-path: linux/boltmeshd/go.sum
+          cache-dependency-path: boltmeshd/go.sum
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -332,6 +359,16 @@ jobs:
       # from pubspec.
       - name: Sync version from tag
         run: dart run tool/set_release_version.dart
+
+      # The helper is built by windows/packaging/stage_boltmeshd.ps1 just
+      # before packing, into the app bundle so Inno ships it next to
+      # boltmesh.exe.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: boltmeshd/go.sum
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y

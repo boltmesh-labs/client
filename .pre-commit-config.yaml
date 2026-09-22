@@ -21,19 +21,19 @@ repos:
       # --- Go Fmt (boltmeshd) ---
       - id: go-fmt-boltmeshd
         name: go fmt (boltmeshd)
-        entry: make -C linux/boltmeshd format
+        entry: make -C boltmeshd format
         language: system
         types: [go]
-        files: ^linux/boltmeshd/
+        files: ^boltmeshd/
         pass_filenames: false
 
       # --- Golangci Lint (boltmeshd) ---
       - id: golangci-lint-boltmeshd
         name: golangci-lint (boltmeshd)
-        entry: make -C linux/boltmeshd lint
+        entry: make -C boltmeshd lint
         language: system
         types: [go]
-        files: ^linux/boltmeshd/
+        files: ^boltmeshd/
         pass_filenames: false
 
       # --- Generated code (l10n + build_runner) ---

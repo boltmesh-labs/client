@@ -1,7 +1,7 @@
 /// Typed client for the privileged `boltmeshd` helper.
 ///
 /// Speaks the newline-delimited JSON protocol defined in
-/// `client/linux/boltmeshd/internal/protocol/protocol.go`. The transport is
+/// `boltmeshd/internal/protocol/protocol.go`. The transport is
 /// injectable so tests can script responses without a real socket.
 library;
 

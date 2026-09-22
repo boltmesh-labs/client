@@ -10,16 +10,14 @@ import '../../../core/log.dart';
 import 'helper_socket_stub.dart'
     if (dart.library.io) 'helper_socket_io.dart'
     as helper_platform;
-import 'linux_tunnel_adapter.dart';
+import 'helper_tunnel_adapter.dart';
 import 'tunnel_tuning.dart';
 
 /// True where the plugin has no handshake source of its own and the native
-/// `com.boltmesh/handshake` host channel answers it (Android, Windows). Linux
-/// no longer needs this: it reads handshakes from the `boltmeshd` helper.
+/// `com.boltmesh/handshake` host channel answers it (Android). Linux and
+/// Windows read handshakes from the `boltmeshd` helper instead.
 bool get _hostHandshakeSupported =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.windows);
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 /// Reads the last completed WireGuard handshake. Null means "unknown"
 /// and must never be treated as a stall on its own.
@@ -92,12 +90,12 @@ abstract class TunnelAdapter {
   /// starts a tunnel.
   Future<bool> killGhost();
 
-  /// True when [readHandshake] can actually observe the peer: Linux (the
-  /// `boltmeshd` helper), Android (the `com.boltmesh/handshake` host
-  /// channel), Windows (`runner/tunnel_host.cpp`), or an injected reader.
-  /// There a null read means "no handshake yet". On unsupported platforms the
-  /// read is always null — absence of evidence — and `isHandshakeStale`'s
-  /// never-handshook branch must not fire.
+  /// True when [readHandshake] can actually observe the peer: Linux and
+  /// Windows (the `boltmeshd` helper), Android (the `com.boltmesh/handshake`
+  /// host channel), or an injected reader. There a null read means "no
+  /// handshake yet". On unsupported platforms the read is always null —
+  /// absence of evidence — and `isHandshakeStale`'s never-handshook branch
+  /// must not fire.
   bool get handshakeReaderSupported;
 }
 
@@ -109,13 +107,12 @@ abstract class TunnelAdapter {
 /// `wireguard_flutter_plus` exposes only byte counters, so handshakes come
 /// from our own channel (the plugin is never forked): Android's `MainActivity`
 /// answers the `com.boltmesh/handshake` host channel with the GoBackend peer
-/// `latestHandshakeEpochMillis`, and Windows' `runner/tunnel_host.cpp` reads
-/// the adapter's peer `LastHandshake` through the bundled `wireguard.dll`.
-/// Linux no longer uses this adapter at all (it runs through the privileged
-/// `boltmeshd` helper, see [LinuxTunnelAdapter]). Apple still asks the host
-/// channel as a placeholder for its future handler (see `client/README.md`) —
-/// there a missing handler resolves as unknown, and [handshakeReaderSupported]
-/// reports false so the null never counts as a never-handshook stall.
+/// `latestHandshakeEpochMillis`. Linux and Windows do not use this adapter at
+/// all (they run through the privileged `boltmeshd` helper, see
+/// [HelperTunnelAdapter]). Apple still asks the host channel as a placeholder
+/// for its future handler (see `client/README.md`) — there a missing handler
+/// resolves as unknown, and [handshakeReaderSupported] reports false so the
+/// null never counts as a never-handshook stall.
 class WireGuardTunnelAdapter implements TunnelAdapter {
   WireGuardTunnelAdapter() : _handshakeReader = null;
 
@@ -132,8 +129,7 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   @visibleForTesting
   static const handshakeChannel = MethodChannel('com.boltmesh/handshake');
 
-  /// Ghost-aware tunnel helpers (Android `MainActivity`/`TunnelHost`,
-  /// Windows `runner/tunnel_host.cpp`).
+  /// Ghost-aware tunnel helpers (Android `MainActivity`/`TunnelHost`).
   @visibleForTesting
   static const ghostChannel = MethodChannel('com.boltmesh/tunnel');
 
@@ -322,11 +318,11 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }
 }
 
-/// Selects the tunnel backend for the current platform. Linux uses the
-/// privileged `boltmeshd` helper so the app process never holds privilege;
-/// every other platform keeps the `wireguard_flutter_plus` plugin.
+/// Selects the tunnel backend for the current platform. Linux and Windows use
+/// the privileged `boltmeshd` helper so the app process never holds
+/// privilege; every other platform keeps the `wireguard_flutter_plus` plugin.
 final tunnelAdapterProvider = Provider<TunnelAdapter>(
   (_) => helper_platform.isHelperPlatformSupported
-      ? LinuxTunnelAdapter()
+      ? HelperTunnelAdapter()
       : WireGuardTunnelAdapter(),
 );

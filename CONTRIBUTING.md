@@ -59,12 +59,12 @@ checker. Both run in CI and via pre-commit.
 
 ### Go Style Guide
 
-The privileged Linux helper (`linux/boltmeshd/`) follows standard Go
-conventions; use `gofmt` and run the project checks:
+The privileged helper (`boltmeshd/`) follows standard Go conventions; use
+`gofmt` and run the project checks:
 
 ```bash
-make -C linux/boltmeshd vet
-make -C linux/boltmeshd test
+make -C boltmeshd vet
+make -C boltmeshd test
 ```
 
 ### Git Commit Messages

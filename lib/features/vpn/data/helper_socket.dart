@@ -1,12 +1,16 @@
 /// Transport to the privileged `boltmeshd` helper.
 ///
-/// The Flutter process is unprivileged: it never runs `sudo`, `wg`, or
-/// `wg-quick`, and never reads the WireGuard device. All of that lives behind
-/// this socket (see `client/linux/boltmeshd/`).
+/// The Flutter process is unprivileged: it never runs `sudo`, `wg`,
+/// `wg-quick`, or an elevated Windows service, and never reads the WireGuard
+/// device. All of that lives behind this transport (see `boltmeshd/`).
 library;
 
-/// Default socket path, matching the systemd unit's `ListenStream`.
+/// Default Unix socket path (Linux), matching the systemd unit's
+/// `ListenStream`.
 const helperSocketPath = '/run/boltmesh/boltmeshd.sock';
+
+/// Default named pipe path (Windows), matching the daemon's default.
+const helperPipePath = r'\\.\pipe\boltmesh\boltmeshd';
 
 /// Raised when the helper cannot be reached or answers malformed data.
 class HelperTransportException implements Exception {
@@ -20,7 +24,7 @@ class HelperTransportException implements Exception {
 
 /// One request/response exchange with the helper.
 abstract class HelperSocket {
-  /// True on platforms where the helper exists (Linux).
+  /// True on platforms where the helper exists (Linux, Windows).
   bool get isSupported;
 
   /// Sends one request and returns the decoded response. Throws

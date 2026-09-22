@@ -1,9 +1,9 @@
 # Security Policy
 
 BoltMesh Client is the cross-platform WireGuard client: a Flutter app
-(Android, iOS/macOS, Windows, Linux) plus `boltmeshd`, the privileged Linux
-helper. This document describes the security controls in those components and
-how to report vulnerabilities.
+(Android, iOS/macOS, Windows, Linux) plus `boltmeshd`, the privileged
+Linux/Windows helper. This document describes the security controls in those
+components and how to report vulnerabilities.
 
 The control plane and infrastructure live in their own repositories
 ([`backend`](https://github.com/boltmesh-labs/backend),
@@ -60,8 +60,8 @@ Note: automated dependency-update automation (e.g., Dependabot) is **not yet con
 
 The app is designed to hold no privilege:
 
-- **Linux**: the Flutter app never runs `sudo`, `wg`, or `wg-quick` and never reads the WireGuard device directly. All privileged work goes through `boltmeshd` over `/run/boltmesh/boltmeshd.sock`, a newline-delimited JSON protocol. The socket is `0660 root:boltmesh`; only members of the `boltmesh` group can connect. The daemon validates the single `up` argument (a wg-quick config) before spending privilege — one `[Interface]`, at least one `[Peer]`, parsed key material, a size cap, and a hard reject of the `PreUp`/`PostUp`/`PreDown`/`PostDown`/`SaveConfig` hooks — fixes the interface name and config path, uses `exec.Command` with explicit args (no shell with client data), and runs with `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`, restricted address families, and no new namespaces. See [`linux/boltmeshd/README.md`](linux/boltmeshd/README.md).
-- **Windows**: there is no unprivileged helper yet. The plugin's CMake injects `requireAdministrator` into the executable manifest, so the whole GUI elevates (UAC) at launch; creating and starting the WireGuard service needs that elevation. The installer is per-machine and the exe manifest raises the prompt.
+- **Linux**: the Flutter app never runs `sudo`, `wg`, or `wg-quick` and never reads the WireGuard device directly. All privileged work goes through `boltmeshd` over `/run/boltmesh/boltmeshd.sock`, a newline-delimited JSON protocol. The socket is `0660 root:boltmesh`; only members of the `boltmesh` group can connect. The daemon validates the single `up` argument (a wg-quick config) before spending privilege — one `[Interface]`, at least one `[Peer]`, parsed key material, a size cap, and a hard reject of the `PreUp`/`PostUp`/`PreDown`/`PostDown`/`SaveConfig` hooks — fixes the interface name and config path, uses `exec.Command` with explicit args (no shell with client data), and runs with `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`, restricted address families, and no new namespaces. See [`boltmeshd/README.md`](boltmeshd/README.md).
+- **Windows**: the app runs unprivileged; `boltmeshd` runs as a LocalSystem service and owns the WireGuard tunnel service. The app CMake drops the plugin's `requireAdministrator` link flag and the runner only proxies the named pipe. The daemon validates the same `up` config before spending privilege, fixes the tunnel service name, config path and the `wireguard_svc.exe` binary path (never taken from the client — a client-chosen service binary would be LocalSystem code execution), and ACLs the pipe to SYSTEM, Administrators and Interactive Users. The Installer itself elevates to write Program Files and register the service.
 - **Android**: the app requests the `VpnService` permission and the system shows the standard VPN consent dialog on first connect.
 - **iOS/macOS**: the Packet Tunnel Provider runs as a Network Extension; the app only sends it `getHandshake` over the `NETunnelProviderSession`.
 
@@ -92,8 +92,8 @@ If you deploy the BoltMesh client, please:
 1. **Run supported versions** — update promptly when patch releases ship.
 2. **Verify downloads** — obtain installers and packages only from official GitHub Releases for this repository.
 3. **Keep TLS verification on** — do not weaken `API_BASE_URL` to `http://` outside throwaway development, and prefer an SPKI pin for pinned deployments.
-4. **Keep the `boltmesh` group minimal** — on Linux, only add desktop users who should control the tunnel; `boltmeshd` runs as root on their behalf.
-5. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/`, the signing hooks under `windows/packaging/` and `linux/boltmeshd/packaging/`, and `tool/` with the same scrutiny as source changes.
+4. **Keep privilege minimal** — on Linux, only add desktop users who should control the tunnel to the `boltmesh` group; `boltmeshd` runs as root on their behalf. On Windows, the pipe is limited to SYSTEM, Administrators and Interactive Users, and only the installer needs elevation.
+5. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/`, the signing hooks under `windows/packaging/` and `boltmeshd/packaging/`, and `tool/` with the same scrutiny as source changes.
 
 ## Contact
 

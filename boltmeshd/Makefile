@@ -5,6 +5,8 @@ BUILD_TIME ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 BUILD_DIR := bin
 BINARY_AMD64 := boltmeshd-linux-amd64
 BINARY_ARM64 := boltmeshd-linux-arm64
+BINARY_WINDOWS_AMD64 := boltmeshd-windows-amd64.exe
+BINARY_WINDOWS_ARM64 := boltmeshd-windows-arm64.exe
 ENTRY_POINT := ./cmd/boltmeshd
 
 LDFLAGS := -s -w \
@@ -12,11 +14,11 @@ LDFLAGS := -s -w \
     -X main.GitCommit=$(GIT_COMMIT) \
     -X main.BuildTime=$(BUILD_TIME)
 
-.PHONY: all build build-amd64 build-arm64 checksums clean test vet format lint
+.PHONY: all build build-amd64 build-arm64 build-windows build-windows-amd64 build-windows-arm64 checksums clean test vet format lint
 
 all: clean format lint vet test build checksums
 
-build: build-amd64 build-arm64
+build: build-amd64 build-arm64 build-windows
 
 build-amd64:
 	@mkdir -p $(BUILD_DIR)
@@ -32,8 +34,24 @@ build-arm64:
 		-o $(BUILD_DIR)/$(BINARY_ARM64) $(ENTRY_POINT)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_ARM64)"
 
+build-windows: build-windows-amd64 build-windows-arm64
+
+build-windows-amd64:
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+		-a -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/$(BINARY_WINDOWS_AMD64) $(ENTRY_POINT)
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_WINDOWS_AMD64)"
+
+build-windows-arm64:
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build \
+		-a -ldflags="$(LDFLAGS)" \
+		-o $(BUILD_DIR)/$(BINARY_WINDOWS_ARM64) $(ENTRY_POINT)
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_WINDOWS_ARM64)"
+
 checksums: build
-	@cd $(BUILD_DIR) && sha256sum $(BINARY_AMD64) $(BINARY_ARM64) > checksums.txt
+	@cd $(BUILD_DIR) && sha256sum $(BINARY_AMD64) $(BINARY_ARM64) $(BINARY_WINDOWS_AMD64) $(BINARY_WINDOWS_ARM64) > checksums.txt
 	@echo "Checksums generated in $(BUILD_DIR)/checksums.txt"
 
 test:

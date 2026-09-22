@@ -135,9 +135,9 @@ void main() {
     expect(adapter.ghostKills, 1);
   });
 
-  // The contract the native hosts must satisfy: Android `TunnelHost` and
-  // Windows `runner/tunnel_host.cpp` answer these channels with the shapes
-  // exercised here.
+  // The contract the native hosts must satisfy: Android's `TunnelHost` answers
+  // these channels with the shapes exercised here. Windows no longer uses
+  // them (its helper owns the reads).
   group('host channel contract', () {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -222,11 +222,11 @@ void main() {
   group('handshakeReaderSupported', () {
     tearDown(() => debugDefaultTargetPlatformOverride = null);
 
-    test('true on Android and Windows, false on Apple/Linux', () {
+    test('true on Android only, false elsewhere (helper/Apple)', () {
       final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
       const expectations = {
         TargetPlatform.android: true,
-        TargetPlatform.windows: true,
+        TargetPlatform.windows: false,
         TargetPlatform.iOS: false,
         TargetPlatform.macOS: false,
         TargetPlatform.linux: false,

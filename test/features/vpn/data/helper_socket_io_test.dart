@@ -4,11 +4,13 @@ import 'dart:io';
 
 import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/helper_socket_io.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _unix = InternetAddressType.unix;
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final supportsUnixSockets = Platform.isLinux || Platform.isMacOS;
 
   group(
@@ -125,5 +127,50 @@ void main() {
     if (!Platform.isLinux) return;
     expect(createHelperSocket(), isA<HelperSocket>());
     expect(isHelperPlatformSupported, isTrue);
+  });
+
+  group('NativePipeHelperSocket', () {
+    const channel = MethodChannel('test/helper');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+    tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    test('exchanges a JSON request/response over the channel', () async {
+      String? sent;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'exchange');
+        sent = call.arguments as String;
+        return jsonEncode({'ok': true, 'op': 'ping'});
+      });
+
+      final socket = NativePipeHelperSocket(channel: channel);
+      final response = await socket.exchange({'op': 'ping'});
+
+      expect(jsonDecode(sent!), {'op': 'ping'});
+      expect(response, {'ok': true, 'op': 'ping'});
+    });
+
+    test('a missing handler is a transport failure', () {
+      final socket = NativePipeHelperSocket(
+        channel: const MethodChannel('test/missing'),
+      );
+      expect(
+        () => socket.exchange({'op': 'ping'}),
+        throwsA(isA<HelperTransportException>()),
+      );
+    });
+
+    test('a non-object response is a transport failure', () {
+      messenger.setMockMethodCallHandler(
+        channel,
+        (call) async => '"not-an-object"',
+      );
+      final socket = NativePipeHelperSocket(channel: channel);
+      expect(
+        () => socket.exchange({'op': 'ping'}),
+        throwsA(isA<HelperTransportException>()),
+      );
+    });
   });
 }

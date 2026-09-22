@@ -1,6 +1,5 @@
-// Package tunnel owns the privileged WireGuard interface lifecycle. The
-// client never runs wg-quick or reads the device itself: it sends the config
-// text here and receives status (stage, handshake, counters, peer) back.
+//go:build linux
+
 package tunnel
 
 import (
@@ -24,11 +23,6 @@ import (
 )
 
 const (
-	// DefaultInterface is the single interface the daemon manages. It is
-	// fixed here rather than taken from the client so no request can name an
-	// arbitrary interface.
-	DefaultInterface = "boltmesh0"
-
 	// DefaultConfigDir holds the root-only wg-quick config. /run is a fresh
 	// tmpfs each boot, which matches the daemon's stateless ownership of the
 	// config.
@@ -142,22 +136,22 @@ func (m *Manager) Status() *protocol.Status {
 
 	st.Up = true
 	st.Stage = protocol.StageConnected
-	var newest time.Time
+	peers := make([]peer, 0, len(dev.Peers))
 	for i := range dev.Peers {
-		peer := &dev.Peers[i]
-		st.RxBytes += peer.ReceiveBytes
-		st.TxBytes += peer.TransmitBytes
-		if peer.LastHandshakeTime.After(newest) {
-			newest = peer.LastHandshakeTime
-			st.PublicKey = peer.PublicKey.String()
-			if peer.Endpoint != nil {
-				st.Endpoint = peer.Endpoint.String()
-			}
+		p := &dev.Peers[i]
+		endpoint := ""
+		if p.Endpoint != nil {
+			endpoint = p.Endpoint.String()
 		}
+		peers = append(peers, peer{
+			publicKey:     p.PublicKey.String(),
+			endpoint:      endpoint,
+			lastHandshake: p.LastHandshakeTime,
+			rxBytes:       p.ReceiveBytes,
+			txBytes:       p.TransmitBytes,
+		})
 	}
-	if !newest.IsZero() {
-		st.LastHandshake = newest.Unix()
-	}
+	applyPeers(st, peers)
 	return st
 }
 
