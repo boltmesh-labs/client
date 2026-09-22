@@ -36,6 +36,14 @@ repos:
         files: ^linux/boltmeshd/
         pass_filenames: false
 
+      # --- Generated code (l10n + build_runner) ---
+      - id: check-generated
+        name: check generated code
+        entry: bash tool/check_generated.sh
+        language: system
+        pass_filenames: false
+        files: ^(lib/.*\.dart$|l10n\.yaml$|.*\.arb$|pubspec\.(yaml|lock)$|tool/check_generated\.sh$)
+
       # --- Dart Format ---
       - id: dart-format
         name: dart format

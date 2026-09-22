@@ -9,6 +9,6 @@ BoltMesh VPN: Flutter WireGuard client app, Linux privileged helper (`linux/bolt
 
 ## Conventions & gotchas
 
-- **Pre-commit** (`.pre-commit-config.yaml`): gofmt+golangci-lint (boltmeshd), eslint, dart format + flutter analyze, prettier, markdownlint.
+- **Pre-commit** (`.pre-commit-config.yaml`): gofmt+golangci-lint (boltmeshd), generated-code check (`tool/check_generated.sh`), dart format + flutter analyze, prettier, markdownlint.
 - Do not implement backward compatibility, there is no production servers yet.
 - Try to not overengineer, keep it lean, guard only real edge cases, no redundant checks.
