@@ -1,0 +1,380 @@
+{
+  "@@locale": "en",
+  "@@last_modified": "2026-09-17T00:00:00.000",
+  "appTitle": "BoltMesh VPN",
+  "@appTitle": {
+    "description": "App bar title across Home, login and shell."
+  },
+  "navConnect": "Connect",
+  "@navConnect": {
+    "description": "Bottom navigation tab: connect screen."
+  },
+  "navRegions": "Regions",
+  "@navRegions": {
+    "description": "Bottom navigation tab: region list."
+  },
+  "navSettings": "Settings",
+  "@navSettings": {
+    "description": "Bottom navigation tab: settings."
+  },
+  "homeStatusConnected": "Connected",
+  "@homeStatusConnected": {
+    "description": "Heading when the tunnel is up without a server name."
+  },
+  "homeStatusConnectedTo": "Connected · {server}",
+  "@homeStatusConnectedTo": {
+    "description": "Heading when the tunnel is up with a server name.",
+    "placeholders": {
+      "server": {
+        "type": "String"
+      }
+    }
+  },
+  "homeStatusDisconnected": "Disconnected",
+  "@homeStatusDisconnected": {
+    "description": "Heading when the tunnel is down."
+  },
+  "homeStatusError": "Error",
+  "@homeStatusError": {
+    "description": "Heading when the last operation failed."
+  },
+  "homePlanFallback": "Plan",
+  "@homePlanFallback": {
+    "description": "Fallback plan name when the backend returns none."
+  },
+  "homePlanOnly": "{plan}",
+  "@homePlanOnly": {
+    "description": "Plan line without an expiry date.",
+    "placeholders": {
+      "plan": {
+        "type": "String"
+      }
+    }
+  },
+  "homePlanRenews": "{plan} · renews {date}",
+  "@homePlanRenews": {
+    "description": "Plan line with a locale-formatted renewal date.",
+    "placeholders": {
+      "plan": {
+        "type": "String"
+      },
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "homeConnect": "Connect",
+  "@homeConnect": {
+    "description": "Hero power button label when disconnected."
+  },
+  "homeDisconnect": "Disconnect",
+  "@homeDisconnect": {
+    "description": "Hero power button label when connected."
+  },
+  "homeConnectHint": "Starts the VPN tunnel",
+  "@homeConnectHint": {
+    "description": "Semantics hint for the connect hero button."
+  },
+  "homeDisconnectHint": "Stops the VPN tunnel",
+  "@homeDisconnectHint": {
+    "description": "Semantics hint for the disconnect hero button."
+  },
+  "homeWorking": "Working…",
+  "@homeWorking": {
+    "description": "Semantics label for the in-progress spinner."
+  },
+  "homeBackendUnreachable": "Backend unreachable. Connect is disabled until the server is reachable.",
+  "@homeBackendUnreachable": {
+    "description": "Banner on the disconnected Home when the control-plane probe fails; the Connect button is disabled alongside it."
+  },
+  "homeTrafficTitle": "Session traffic",
+  "@homeTrafficTitle": {
+    "description": "Title above the download/upload counters."
+  },
+  "homeTrafficLabel": "Download {down} · Upload {up}",
+  "@homeTrafficLabel": {
+    "description": "Visible traffic counters; values are pre-formatted byte strings.",
+    "placeholders": {
+      "down": {
+        "type": "String"
+      },
+      "up": {
+        "type": "String"
+      }
+    }
+  },
+  "homeTrafficSemantics": "Downloaded {down}, uploaded {up}",
+  "@homeTrafficSemantics": {
+    "description": "Screen-reader label for the traffic counters.",
+    "placeholders": {
+      "down": {
+        "type": "String"
+      },
+      "up": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsTrafficLabel": "Traffic RX {rx} · TX {tx}",
+  "@settingsTrafficLabel": {
+    "description": "Debug traffic line in Settings; values are pre-formatted byte strings.",
+    "placeholders": {
+      "rx": {
+        "type": "String"
+      },
+      "tx": {
+        "type": "String"
+      }
+    }
+  },
+  "loginTitle": "Log in",
+  "@loginTitle": {
+    "description": "Login screen heading and submit button label."
+  },
+  "loginValidationEmpty": "Enter your username and password.",
+  "@loginValidationEmpty": {
+    "description": "Snack shown when the login form is submitted empty."
+  },
+  "loginIdentifierLabel": "Username or email",
+  "@loginIdentifierLabel": {
+    "description": "Label for the login identifier field."
+  },
+  "loginIdentifierHint": "johndoe or john@example.com",
+  "@loginIdentifierHint": {
+    "description": "Hint for the login identifier field."
+  },
+  "loginPasswordLabel": "Password",
+  "@loginPasswordLabel": {
+    "description": "Label for the login password field."
+  },
+  "loginShowPassword": "Show password",
+  "@loginShowPassword": {
+    "description": "Tooltip/semantics label for the password visibility toggle when hidden."
+  },
+  "loginHidePassword": "Hide password",
+  "@loginHidePassword": {
+    "description": "Tooltip/semantics label for the password visibility toggle when shown."
+  },
+  "loginOr": "or",
+  "@loginOr": {
+    "description": "Divider between password login and OAuth buttons."
+  },
+  "loginGoogle": "Continue with Google",
+  "@loginGoogle": {
+    "description": "OAuth sign-in button for Google."
+  },
+  "loginGithub": "Continue with GitHub",
+  "@loginGithub": {
+    "description": "OAuth sign-in button for GitHub."
+  },
+  "regionsSearchHint": "Search regions or servers",
+  "@regionsSearchHint": {
+    "description": "Hint for the region list search field."
+  },
+  "regionsLoadError": "Couldn't load regions. Check your connection and try again.",
+  "@regionsLoadError": {
+    "description": "Region list loading failure. Never interpolates a raw exception."
+  },
+  "commonRetry": "Retry",
+  "@commonRetry": {
+    "description": "Generic retry action for a failed load."
+  },
+  "regionsQuickConnect": "Quick Connect (Auto)",
+  "@regionsQuickConnect": {
+    "description": "Title for the automatic lowest-load connection row."
+  },
+  "regionsNoCapacity": "No capacity right now",
+  "@regionsNoCapacity": {
+    "description": "Subtitle when no region has dialable capacity."
+  },
+  "regionsLowestLoad": "Lowest-load region: {name}",
+  "@regionsLowestLoad": {
+    "description": "Subtitle naming the automatic region pick.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "regionsNoMatch": "No regions match your search.",
+  "@regionsNoMatch": {
+    "description": "Empty search result in the region list."
+  },
+  "regionsServerCount": "{count, plural, =1{1 server} other{{count} servers}} · {peers, plural, =1{1 peer} other{{peers} peers}}",
+  "@regionsServerCount": {
+    "description": "Region subtitle with server and peer counts.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "peers": {
+        "type": "int"
+      }
+    }
+  },
+  "regionsServerSubtitle": "{endpoint}:{port} · {peers, plural, =1{1 peer} other{{peers} peers}}",
+  "@regionsServerSubtitle": {
+    "description": "Server row subtitle with endpoint and peer count.",
+    "placeholders": {
+      "endpoint": {
+        "type": "String"
+      },
+      "port": {
+        "type": "int"
+      },
+      "peers": {
+        "type": "int"
+      }
+    }
+  },
+  "regionsSwitching": "Switching…",
+  "@regionsSwitching": {
+    "description": "Footer shown while a server switch is in progress."
+  },
+  "regionsRefresh": "Refresh regions",
+  "@regionsRefresh": {
+    "description": "Tooltip for the region list refresh button."
+  },
+  "regionsRefreshed": "Regions updated ({count} regions)",
+  "@regionsRefreshed": {
+    "description": "Snack after a manual region list refresh succeeds.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsSignedInAs": "Signed in as {username}",
+  "@settingsSignedInAs": {
+    "description": "Account header in Settings.",
+    "placeholders": {
+      "username": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsUnknownUser": "unknown",
+  "@settingsUnknownUser": {
+    "description": "Fallback when no display name is known."
+  },
+  "settingsLogOut": "Log out",
+  "@settingsLogOut": {
+    "description": "Sign-out button in Settings."
+  },
+  "settingsDeviceNameLabel": "Device name",
+  "@settingsDeviceNameLabel": {
+    "description": "Label above the device name field."
+  },
+  "settingsDeviceNameHint": "BoltMesh Device",
+  "@settingsDeviceNameHint": {
+    "description": "Hint for the device name field."
+  },
+  "settingsEnterNameFirst": "Enter a device name first.",
+  "@settingsEnterNameFirst": {
+    "description": "Snack when saving an empty device name."
+  },
+  "settingsDeviceNameSaved": "Device name saved",
+  "@settingsDeviceNameSaved": {
+    "description": "Snack after the device name is stored."
+  },
+  "settingsSaveName": "Save name",
+  "@settingsSaveName": {
+    "description": "Button storing the device name."
+  },
+  "settingsForgetTitle": "Forget device?",
+  "@settingsForgetTitle": {
+    "description": "Title of the forget-device confirmation dialog."
+  },
+  "settingsForgetBody": "The next connect will provision a new device. Use this if the server no longer knows this device.",
+  "@settingsForgetBody": {
+    "description": "Body of the forget-device confirmation dialog."
+  },
+  "settingsCancel": "Cancel",
+  "@settingsCancel": {
+    "description": "Dialog cancel action."
+  },
+  "settingsForget": "Forget",
+  "@settingsForget": {
+    "description": "Dialog confirm action for forgetting the device."
+  },
+  "settingsDeviceCleared": "Device cleared. Next connect reprovisions.",
+  "@settingsDeviceCleared": {
+    "description": "Snack after the device identity is cleared."
+  },
+  "settingsForgetButton": "Forget device",
+  "@settingsForgetButton": {
+    "description": "Button opening the forget-device dialog."
+  },
+  "settingsLoopbackNotice": "This API points at localhost (often a forwarded port). It becomes unreachable once the VPN tunnel is up — for VPN testing use a LAN/direct URL instead. Disconnect still tears the tunnel down locally when the server is unreachable.",
+  "@settingsLoopbackNotice": {
+    "description": "Notice shown when the API targets localhost."
+  },
+  "settingsAllowLanTitle": "Allow Local Network Access",
+  "@settingsAllowLanTitle": {
+    "description": "Title of the split-tunnel switch in Settings."
+  },
+  "settingsAllowLanSubtitle": "Keep printers, smart-home devices and LAN servers reachable. Turn off to force everything through the VPN (strict kill switch).",
+  "@settingsAllowLanSubtitle": {
+    "description": "Subtitle of the split-tunnel switch in Settings."
+  },
+  "settingsAllowLanApplied": "Network setting applied. Tunnel restarted.",
+  "@settingsAllowLanApplied": {
+    "description": "Snack after the LAN toggle is flipped while connected."
+  },
+  "settingsAllowLanSaved": "Network setting saved. Applies on next connect.",
+  "@settingsAllowLanSaved": {
+    "description": "Snack after the LAN toggle is flipped while disconnected."
+  },
+  "settingsAllowLanLoading": "Loading…",
+  "@settingsAllowLanLoading": {
+    "description": "Subtitle of the LAN toggle while its saved value is loading."
+  },
+  "settingsAllowLanError": "Couldn't read the current setting.",
+  "@settingsAllowLanError": {
+    "description": "Subtitle of the LAN toggle when its saved value failed to load."
+  },
+  "settingsDiagnosticsUnknown": "unknown",
+  "@settingsDiagnosticsUnknown": {
+    "description": "Diagnostics placeholder for an unobserved tunnel stage."
+  },
+  "settingsDiagnosticsNever": "never",
+  "@settingsDiagnosticsNever": {
+    "description": "Diagnostics placeholder for a status poll that never ran."
+  },
+  "settingsDiagnosticsAgo": "{seconds}s ago",
+  "@settingsDiagnosticsAgo": {
+    "description": "Diagnostics age of the last successful status poll.",
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsDiagnosticsApi": "API: {api} · Platform: {platform}",
+  "@settingsDiagnosticsApi": {
+    "description": "Debug footer API base URL and platform line.",
+    "placeholders": {
+      "api": {
+        "type": "String"
+      },
+      "platform": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsDiagnosticsTunnel": "Tunnel: stage {stage} · status {status} · failures {failures}",
+  "@settingsDiagnosticsTunnel": {
+    "description": "Debug footer live tunnel snapshot.",
+    "placeholders": {
+      "stage": {
+        "type": "String"
+      },
+      "status": {
+        "type": "String"
+      },
+      "failures": {
+        "type": "int"
+      }
+    }
+  }
+}

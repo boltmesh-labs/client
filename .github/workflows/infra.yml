@@ -1,0 +1,113 @@
+name: 'Terraform CI/CD Pipeline'
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  security-events: write
+
+defaults:
+  run:
+    working-directory: infra
+
+jobs:
+  validate:
+    name: 'Lint & Validate Code'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.15.8'
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          # Pinned to the version developers run locally (infra/.tflint.hcl
+          # enables the bundled terraform ruleset) so lint results are
+          # reproducible across CI runs.
+          tflint_version: v0.64.0
+
+      - name: Run TFLint
+        run: make tflint
+
+      - name: Format, Init and Validate
+        run: make init-validate-all
+
+      - name: Initialize Packer
+        run: make packer-init
+
+      - name: Validate Packer Template
+        run: |
+          mkdir -p ../node-agent/bin
+          touch ../node-agent/bin/node-agent-linux-arm64
+          touch ../node-agent/bin/checksums.txt
+          make packer-validate
+
+  security:
+    name: 'Security Scan'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python & uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          python-version: '3.13'
+          enable-cache: true
+
+      - name: Run Checkov
+        run: make checkov
+
+  # plan:
+  #   name: "Terraform Plan"
+  #   needs: [validate, security]
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@v7
+
+  #     - name: Setup Terraform
+  #       uses: hashicorp/setup-terraform@v4
+  #       with:
+  #         terraform_version: "1.15.8"
+
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v6
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: us-east-1
+
+  #     - name: Initialize Backend
+  #       run: make init ENV=dev
+
+  #     - name: Configure TFVars for Dev
+  #       run: |
+  #         cp aws/terraform/terraform.tfvars.ci aws/terraform/environments/dev/terraform.tfvars
+
+  #     - name: Run Terraform Plan
+  #       run: make plan ENV=dev

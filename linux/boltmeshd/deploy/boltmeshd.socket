@@ -1,0 +1,18 @@
+[Unit]
+Description=BoltMesh VPN privileged helper socket
+Documentation=https://github.com/boltmesh-labs/vpn-core
+PartOf=boltmeshd.service
+Before=boltmeshd.service
+
+[Socket]
+ListenStream=/run/boltmesh/boltmeshd.sock
+SocketUser=root
+SocketGroup=boltmesh
+SocketMode=0660
+# A fresh runtime dir each boot; the socket lives inside it.
+RuntimeDirectory=boltmesh
+RuntimeDirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

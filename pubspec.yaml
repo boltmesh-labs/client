@@ -1,0 +1,73 @@
+name: boltmesh
+description: BoltMesh VPN WireGuard client (Flutter).
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
+  # Cross-platform WireGuard native bridge (Android VpnService / Apple NE / Wintun / TUN).
+  # NOTE: API is WireGuardFlutter.instance.
+  wireguard_flutter_plus: ^1.0.7
+  # Device ID, private key, API token in Keychain/Keystore.
+  flutter_secure_storage: ^11.2.0
+  # X25519 keypair generation (Curve25519).
+  cryptography: ^2.7.1
+  # HTTP client for FastAPI backend.
+  dio: ^5.7.0
+  # Synchronous SHA-256 for the optional TLS leaf-certificate pin.
+  crypto: ^3.0.0
+  # State management.
+  flutter_riverpod: ^3.4.3
+  # Idempotency-Key generation for POST /vpn-devices.
+  uuid: ^4.4.0
+  flutter_web_auth_2: ^5.1.0
+  freezed_annotation: ^3.1.0
+  json_annotation: ^4.12.0
+  connectivity_plus: ^7.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.16.1
+  freezed: ^4.0.1
+  json_serializable: ^6.14.1
+  flutter_launcher_icons: ^0.14.4
+  # Deterministic timer tests (no real sleeps).
+  fake_async: ^1.3.3
+  # Injected fake `ConnectivityPlatform` for the network-monitor tests.
+  connectivity_plus_platform_interface: ^2.1.0
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+flutter_launcher_icons:
+  image_path: 'assets/icon/app_icon.png'
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  # Flattened iOS corners blend with the icon's edge blue (sampled).
+  background_color_ios: '#166CA9'
+  adaptive_icon_background: '#166CA9'
+  adaptive_icon_foreground: 'assets/icon/app_icon.png'
+  web:
+    generate: true
+    image_path: 'assets/icon/app_icon.png'
+    background_color: '#0175C2'
+    theme_color: '#0175C2'
+  macos:
+    generate: true
+    image_path: 'assets/icon/app_icon.png'
+  windows:
+    generate: true
+    image_path: 'assets/icon/app_icon.png'
+    icon_size: 256

@@ -1,0 +1,40 @@
+display_name: BoltMesh
+icon: linux/assets/boltmesh.png
+summary: BoltMesh WireGuard VPN client
+group: Applications/Internet
+vendor: BoltMesh Team
+packager: BoltMesh Team
+packagerEmail: support@boltmesh.example
+license: ASL 2.0
+url: https://github.com/boltmesh-labs/vpn-core
+requires:
+  - gtk3
+  - wireguard-tools
+generic_name: VPN Client
+keywords:
+  - VPN
+  - WireGuard
+categories:
+  - Network
+  - Utility
+startup_notify: true
+# See the deb make_config for the staging contract. On rpm the bundle is
+# installed under /usr/share/boltmesh, so boltmeshd is staged there.
+postinstall_scripts:
+  - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd /usr/libexec/boltmesh/boltmeshd
+  - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
+  - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket
+  - install -Dm644 /usr/share/boltmesh/boltmeshd/99-boltmesh-unmanaged.conf /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+  - getent group boltmesh >/dev/null 2>&1 || groupadd --system boltmesh
+  - 'if [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then usermod -aG boltmesh "$SUDO_USER" || true; fi'
+  - systemctl daemon-reload >/dev/null 2>&1 || true
+  - systemctl enable --now boltmeshd.socket >/dev/null 2>&1 || true
+  - nmcli general reload conf >/dev/null 2>&1 || true
+postuninstall_scripts:
+  - systemctl disable --now boltmeshd.socket boltmeshd.service >/dev/null 2>&1 || true
+  - rm -f /usr/lib/systemd/system/boltmeshd.service /usr/lib/systemd/system/boltmeshd.socket
+  - rm -f /usr/libexec/boltmesh/boltmeshd
+  - rm -f /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+  - rmdir /usr/libexec/boltmesh >/dev/null 2>&1 || true
+  - systemctl daemon-reload >/dev/null 2>&1 || true
+  - nmcli general reload conf >/dev/null 2>&1 || true

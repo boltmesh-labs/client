@@ -1,0 +1,27 @@
+# Inno Setup installer for `fastforge package --platform windows --target exe`
+# (run through `client/distribute_options.yaml`).
+#
+# Why an Inno `.exe` and not MSIX: the WireGuard plugin's CMake injects
+# `requireAdministrator` into `boltmesh.exe` (it must create/start the
+# `boltmesh0` service), and MSIX packaged apps cannot auto-elevate — the
+# packaged app either fails to launch ("The request is not supported") or
+# runs unelevated and the first connect lands in `VpnStage.denied`. Revisit
+# MSIX only once a privileged Windows helper (the `boltmeshd` analogue)
+# exists. The installer therefore installs per-machine into Program Files and
+# lets the exe manifest trigger the UAC prompt on launch.
+
+# Stable product GUID; never change it or upgrades install side by side.
+app_id: A79C3DB7-DE52-4F6C-B2BF-8EF6767852F9
+# `flutter_app_packager` 0.6.x reads `publisher_name`; the docs use
+# `publisher`. Set both so the installer's publisher is never blank.
+publisher_name: BoltMesh
+publisher: BoltMesh
+publisher_url: https://boltmesh.mooo.com
+display_name: BoltMesh
+create_desktop_icon: true
+install_dir_name: "{autopf64}\\BoltMesh"
+setup_icon_file: windows\runner\resources\app_icon.ico
+# Program Files needs elevation to write; the app itself also needs it.
+privileges_required: admin
+locales:
+  - en

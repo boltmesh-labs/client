@@ -1,0 +1,428 @@
+name: 'Client CI/CD'
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+    paths:
+      - 'client/**'
+      - '.github/workflows/client.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'client/**'
+      - '.github/workflows/client.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  security-events: write
+
+defaults:
+  run:
+    working-directory: client
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Regenerates l10n/build_runner output and fails if it differs from the
+      # committed tree: those files are excluded from analyze, so a stale one
+      # could otherwise ship green.
+      - name: Verify generated code is up to date
+        run: bash tool/check_generated.sh
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Format Check
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Run Tests
+        run: flutter test --coverage
+
+      - name: Enforce coverage floor
+        run: bash tool/coverage_gate.sh 80
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-coverage
+          path: ${{ github.workspace }}/client/coverage/lcov.info
+          if-no-files-found: error
+
+  validate-windows:
+    name: 'Validate Windows runner'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Compiles the native runner (tunnel_host.cpp + wireguard_api.h) so a
+      # Windows-only C++ break is caught even though the platform ships no
+      # installer yet.
+      - name: Build Windows runner (debug)
+        run: flutter build windows --debug
+
+  validate-android:
+    name: 'Validate Android build'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Configures and compiles the Android app so a broken Gradle edit (e.g.
+      # the release signing config) fails on the PR instead of a release tag.
+      # Uses the debug fallback, so no keystore secret is needed here.
+      - name: Build Android APK (debug)
+        run: flutter build apk --debug
+
+  validate-boltmeshd:
+    name: 'Validate boltmeshd'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client/linux/boltmeshd
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: client/linux/boltmeshd/go.sum
+
+      - name: Check Formatting (gofmt)
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted properly according to gofmt:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: client/linux/boltmeshd
+
+      - name: Check for unreachable functions (deadcode)
+        run: |
+          out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)"
+          if [ -n "$out" ]; then
+            echo "Unreachable functions detected:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Run Go Unit Tests
+        run: go test -v ./...
+
+  security:
+    name: 'Security Scan'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Run Trivy Filesystem Vulnerability Scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'client'
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+  build-android:
+    name: 'Build Android'
+    needs: [validate, validate-android, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # The git tag is the release source of truth; pubspec's checked-in
+      # version is dev-only. Android versionName and the fastforge artifact
+      # names both derive from pubspec.
+      - name: Sync version from tag
+        run: dart run tool/set_release_version.dart
+
+      # Decodes the base64 keystore and writes android/key.properties so the
+      # release build is signed with the upload key, never the debug key.
+      # Required on tags: a debug-signed artifact is not distributable.
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ]; then
+            echo "::error::ANDROID_KEYSTORE is not set; refusing to publish a debug-signed release. See client/README.md (Android release build)."
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE" | tr -d '[:space:]' | base64 -d > android/app/upload-keystore.jks
+          {
+            echo "storeFile=upload-keystore.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=${ANDROID_KEY_ALIAS:-upload}"
+            echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          } > android/key.properties
+          echo "REQUIRE_RELEASE_SIGNING=true" >> "$GITHUB_ENV"
+
+      - name: Build Android App Bundle
+        run: flutter build appbundle --release
+
+      - name: Build Android APK
+        run: flutter build apk --release
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/key.properties android/app/upload-keystore.jks
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-release-android
+          path: |
+            ${{ github.workspace }}/client/build/app/outputs/bundle/release/app-release.aab
+            ${{ github.workspace }}/client/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  build-linux:
+    name: 'Build Linux'
+    needs: [validate, validate-boltmeshd, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libsecret-1-dev file rpm patchelf
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: client/linux/boltmeshd/go.sum
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # The git tag is the release source of truth; pubspec's checked-in
+      # version is dev-only. fastforge derives the package version/names from
+      # pubspec.
+      - name: Sync version from tag
+        run: dart run tool/set_release_version.dart
+
+      - name: Install fastforge
+        run: |
+          dart pub global activate fastforge
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+      - name: Package Linux installers (deb, rpm)
+        run: fastforge release --name=production
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages
+          path: |
+            ${{ github.workspace }}/client/dist/**/*.deb
+            ${{ github.workspace }}/client/dist/**/*.rpm
+          if-no-files-found: error
+
+  build-windows:
+    name: 'Build Windows'
+    needs: [validate, validate-windows, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # The git tag is the release source of truth; pubspec's checked-in
+      # version is dev-only. fastforge derives the installer version/names
+      # from pubspec.
+      - name: Sync version from tag
+        run: dart run tool/set_release_version.dart
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Install fastforge
+        run: |
+          dart pub global activate fastforge
+          echo "$env:LOCALAPPDATA\Pub\Cache\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # Decodes the base64 .pfx (repo secrets) to a temp file and exports its
+      # path/password so the fastforge signing hooks inherit them. Required on
+      # tags (this job only runs on tags): an unsigned installer is not
+      # distributable, matching build-android's keystore gate.
+      - name: Prepare signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx'
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
+            Write-Host '::error::WINDOWS_CERTIFICATE is not set; refusing to publish an unsigned release. See client/README.md (Windows code signing).'
+            exit 1
+          }
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          "WINDOWS_CERTIFICATE_PATH=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_CERTIFICATE_PASSWORD=$env:WINDOWS_CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Runs only the windows-exe job; the Linux jobs are skipped on Windows
+      # (and vice versa on the Linux runner) by fastforge. The job's hooks sign
+      # the app exe and the installer.
+      - name: Package Windows installer
+        run: fastforge release --name=production
+
+      - name: Remove signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx') -ErrorAction SilentlyContinue
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: ${{ github.workspace }}/client/dist/**/*.exe
+          if-no-files-found: error
+
+  release:
+    name: 'Create Release'
+    needs: [build-android, build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: app-release-android
+          path: artifacts/android
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-packages
+          path: artifacts/linux
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-installer
+          path: artifacts/windows
+
+      - name: Draft GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            artifacts/android/**/*.aab
+            artifacts/linux/**/*
+            artifacts/windows/**/*.exe
+          draft: true
+          prerelease: false
+          generate_release_notes: true

@@ -1,0 +1,35 @@
+[Unit]
+Description=BoltMesh VPN privileged helper
+Documentation=https://github.com/boltmesh-labs/vpn-core
+Requires=boltmeshd.socket
+After=boltmeshd.socket
+Before=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/boltmesh/boltmeshd --socket=/run/boltmesh/boltmeshd.sock
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Restart=on-failure
+RestartSec=2
+
+# Hardening. The unit runs as root because wg-quick needs to create links and
+# routes and to talk to systemd-resolved; every other surface is restricted.
+# ProtectSystem=full keeps /etc read-only except the resolv.conf path that the
+# openresolv fallback may rewrite (systemd-resolved uses D-Bus instead).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/run -/etc/resolv.conf
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

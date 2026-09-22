@@ -1,0 +1,4 @@
+# Explicit per-test budget. The suite is deterministic (timer behaviour is
+# driven by `package:fake_async`, no real sleeps), so this only bounds slow CI
+# hosts. Deliberately no `retry`: flakiness must be fixed, not masked.
+timeout: 60s

@@ -1,0 +1,143 @@
+name: 'Node Agent CI/CD'
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+    paths:
+      - 'node-agent/**'
+      - '.github/workflows/node-agent.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'node-agent/**'
+      - '.github/workflows/node-agent.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  security-events: write
+
+defaults:
+  run:
+    working-directory: node-agent
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: node-agent/go.sum
+
+      - name: Check Formatting (gofmt)
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted properly according to gofmt:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: node-agent
+
+      - name: Check for unreachable functions (deadcode)
+        run: |
+          if [ -n "$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)" ]; then
+            echo "Unreachable functions detected:"
+            go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...
+            exit 1
+          fi
+
+      - name: Run Go Unit Tests
+        run: go test -v ./...
+
+  security:
+    name: 'Security Scan'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Run Trivy Filesystem Vulnerability Scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: 'node-agent'
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+  build:
+    name: Node Agent Build
+    needs: [validate, security]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: node-agent/go.sum
+
+      - name: Build Binaries & Generate Checksums
+        run: |
+          VERSION_TAG="${{ github.ref_name }}"
+          make build VERSION="${VERSION_TAG}"
+          make checksums
+
+      - name: Verify Checksums
+        run: |
+          cd bin && sha256sum -c checksums.txt
+
+      - name: Upload Agent Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-agent-binaries
+          path: node-agent/bin/
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [validate, build, security]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download Agent Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: node-agent-binaries
+          path: release-assets
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/*
+          generate_release_notes: true

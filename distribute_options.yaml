@@ -1,0 +1,39 @@
+output: dist/
+releases:
+  - name: production
+    jobs:
+      - name: linux-deb
+        package:
+          platform: linux
+          target: deb
+          build_args:
+            dart-define:
+              API_BASE_URL: https://api.boltmesh.mooo.com/v1
+          hooks:
+            pre: bash linux/boltmeshd/packaging/stage.sh
+      - name: linux-rpm
+        package:
+          platform: linux
+          target: rpm
+          build_args:
+            dart-define:
+              API_BASE_URL: https://api.boltmesh.mooo.com/v1
+          hooks:
+            pre: bash linux/boltmeshd/packaging/stage.sh
+      # `fastforge release --name=production` runs the jobs supported by the
+      # host OS and skips the rest, so the same release name works on both the
+      # Linux and Windows CI runners. Config: windows/packaging/exe/.
+      #
+      # The hooks sign the app exe (between the build and Inno packing) and the
+      # installer (after packing); they no-op with a warning when no
+      # WINDOWS_CERTIFICATE_PATH is set, so unsigned local builds still work.
+      - name: windows-exe
+        package:
+          platform: windows
+          target: exe
+          build_args:
+            dart-define:
+              API_BASE_URL: https://api.boltmesh.mooo.com/v1
+          hooks:
+            pre: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$BUILD_OUTPUT_DIRECTORY/boltmesh.exe"'
+            post: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$OUTPUT_DIRECTORY"'

@@ -1,0 +1,30 @@
+# ---> Flutter
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+dist/
+.dart_tool/
+.flutter_build/
+.idea/
+.vscode/*
+
+# ---> Dart
+*.dart.js
+*.js.deps
+*.js.map
+
+# ---> OS
+.DS_Store
+Thumbs.db
+# Widget Preview related
+.widget_preview/
+
+# ---> Code signing
+# Never commit certificates/keys (Windows Authenticode; Android keystores).
+*.pfx
+*.p12
+*.jks
+*.keystore
