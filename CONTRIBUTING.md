@@ -20,7 +20,7 @@ Before creating bug reports, please check the issue list as you might find out t
 * **Describe the behavior you observed after following the steps**
 * **Explain which behavior you expected to see instead and why**
 * **Include screenshots/logs if possible**
-* **Include your environment details** (OS, Python version, Go version, Node version, etc.)
+* **Include your environment details** (OS, Flutter version, Go version, etc.)
 
 ### Suggesting Enhancements
 
@@ -35,29 +35,36 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 ### Pull Requests
 
 * Fill in the required template
-* Follow the project's style guides (ESLint/Prettier for JavaScript, `gofmt`/`go vet` for Go)
+* Follow the project's style guides (Dart/Flutter for `lib/`, `gofmt`/`go vet` for the Go `boltmeshd` helper)
 * Include appropriate test cases
 * Update documentation as needed (README.md, DEPLOYMENT.md)
 * End all files with a newline
 
 ## Style Guides
 
-### JavaScript/React Style Guide
+### Dart/Flutter Style Guide
 
-The frontend uses ESLint and Prettier:
+The client follows the lints in `analysis_options.yaml` (a strict
+`flutter_lints` set: `strict-casts`, `strict-raw-types`, `strict-inference`,
+plus `unawaited_futures`, `prefer_relative_imports`, `directives_ordering`,
+`avoid_print`, `prefer_single_quotes`, …):
 
 ```bash
-npm run lint
-npm run format
+dart format lib test
+flutter analyze --fatal-infos
 ```
+
+`dart format` is the formatter; `flutter analyze` is the linter and type
+checker. Both run in CI and via pre-commit.
 
 ### Go Style Guide
 
-The node agent follows standard Go conventions; use `gofmt` and run the project checks:
+The privileged Linux helper (`linux/boltmeshd/`) follows standard Go
+conventions; use `gofmt` and run the project checks:
 
 ```bash
-make vet
-make test
+make -C linux/boltmeshd vet
+make -C linux/boltmeshd test
 ```
 
 ### Git Commit Messages
@@ -83,28 +90,36 @@ Fixes #123
 ### Running Tests
 
 ```bash
-TODO
+flutter test
+# Coverage (report-only unless the 80% floor is passed):
+flutter test --coverage && bash tool/coverage_gate.sh 80
+
+# Everything CI enforces:
+flutter analyze --fatal-infos
+dart format --set-exit-if-changed lib test
+bash tool/check_generated.sh
 ```
 
 ### Writing Tests
 
 * Write tests for all new features
-* Aim for >80% code coverage
+* Aim for >80% code coverage (enforced on hand-written lines by `tool/coverage_gate.sh`)
 * Use descriptive test names
+* Keep tests deterministic: drive timers with `package:fake_async` (`async.elapse`), never real sleeps
 
 ### Test Locations
 
-Backend tests live next to the code they test:
-
-```text
-TODO
-```
+`test/` mirrors `lib/` (`core/`, `features/auth/{data,state}/`,
+`features/vpn/{data,domain,state}/`). App-level suites (`widget_test.dart`,
+`regions_refresh_test.dart`) stay at the `test/` root, and shared doubles live
+in `test/support/fakes.dart` (state suites layer fixtures on
+`test/support/vpn_harness.dart`).
 
 ## Documentation
 
 * Update README.md if you change functionality
 * Update DEPLOYMENT.md if you change deployment procedures
-* Add docstrings to all functions and classes
+* Add doc comments to public APIs
 
 ## Issue and Pull Request Labels
 

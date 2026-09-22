@@ -1,6 +1,16 @@
 # Security Policy
 
-BoltMesh is a multi-region VPN platform composed of a FastAPI backend, a React/Vite web dashboard, a Go node agent that runs on WireGuard server nodes, and Terraform-provisioned AWS infrastructure. This document describes the security controls implemented across these components and how to report vulnerabilities.
+BoltMesh Client is the cross-platform WireGuard client: a Flutter app
+(Android, iOS/macOS, Windows, Linux) plus `boltmeshd`, the privileged Linux
+helper. This document describes the security controls in those components and
+how to report vulnerabilities.
+
+The control plane and infrastructure live in their own repositories
+([`backend`](https://github.com/boltmesh-labs/backend),
+[`frontend`](https://github.com/boltmesh-labs/frontend),
+[`agent`](https://github.com/boltmesh-labs/agent),
+[`infra`](https://github.com/boltmesh-labs/infra)); report issues in the
+component that owns them.
 
 ## Supported Versions
 
@@ -17,14 +27,14 @@ We release patches for security vulnerabilities for the following versions:
 
 Use **GitHub Private Vulnerability Reporting** instead:
 
-1. Open the [Security tab](https://github.com/boltmesh-labs/vpn-core/security) of this repository.
+1. Open the [Security tab](https://github.com/boltmesh-labs/client/security) of this repository.
 2. Select **Report a vulnerability**.
 3. Fill in the advisory draft. Only repository maintainers can see it until disclosure is coordinated with you.
 
 Please include:
 
-- Description of the vulnerability and the affected component (`backend`, `frontend`, `node-agent`, `infra`)
-- Version tag or commit SHA where the issue was observed
+- Description of the vulnerability and the affected component (`client` app or `boltmeshd`)
+- Platform/OS and version tag or commit SHA where the issue was observed
 - Steps to reproduce, or a proof of concept (if applicable)
 - Potential impact
 - A suggested fix, if you have one
@@ -35,66 +45,37 @@ Non-vulnerability security questions may be raised as public GitHub issues with 
 
 ## Automated Security Controls
 
-CI runs on every push and pull request targeting `main`/`develop` through the workflows under `.github/workflows/`:
+CI runs on every push and pull request targeting `main`/`develop` through `.github/workflows/default.yml`:
 
-- **Trivy filesystem scanning** (`security.yml`): fails the build on CRITICAL findings and ignores advisories without available fixes. Results are uploaded to the GitHub Security tab as SARIF (even when the scan fails). Trivy also evaluates third-party dependencies from lockfiles (`uv.lock`, `go.sum`, `package-lock.json`). Suppressions are reviewed individually in `.trivyignore`, and each entry documents its rationale (e.g., an upstream version constraint in `fastapi-mail`).
-- **Checkov static analysis of Terraform** (`infra.yml`): fails the pipeline on findings, with documented skips.
-- **Pre-commit hooks** (`.pre-commit-config.yaml`): Ruff lint/format, ESLint/Prettier for JavaScript and whitespace/YAML/large-file/merge-conflict guards.
-- **Test coverage gates**: pytest enforces a minimum of 80% backend coverage (`fail_under = 80`); frontend Vitest runs with coverage in CI.
-- **Release integrity**: the Go node agent is built by `make all` (vet + test + cross-compile) into `bin/` with SHA-256 checksums; CI verifies `sha256sum -c checksums.txt` before publishing artifacts to GitHub Releases.
-- **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and cloud credentials are supplied only through GitHub Actions secrets — never committed to the repository.
+- **Trivy filesystem scanning** (`security` job): fails the build on CRITICAL findings and ignores advisories without an available fix.
+- **Test coverage gate**: `flutter test --coverage` plus `tool/coverage_gate.sh 80` enforces a floor on hand-written Dart lines; `validate-boltmeshd` runs `gofmt`, golangci-lint, `deadcode` and `go test ./...` on the Go helper.
+- **Generated-code drift check**: `tool/check_generated.sh` regenerates l10n/build_runner output and fails when the committed tree is stale (those files are excluded from analysis).
+- **Release signing gates**: tagged `build-android`/`build-windows` jobs fail when their signing secrets are missing rather than publish a debug-signed or unsigned artifact.
+- **Pre-commit hooks** (`.pre-commit-config.yaml`): gofmt/golangci-lint for `boltmeshd`, `dart format` + `flutter analyze`, shellcheck, and whitespace/YAML/large-file/merge-conflict guards.
+- **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and signing material is supplied only through GitHub Actions secrets — never committed to the repository.
 
 Note: automated dependency-update automation (e.g., Dependabot) is **not yet configured** in this repository. Updates land through normal review, gated by the Trivy scan above.
 
-## Rate Limiting & Abuse Prevention
+## Privilege Model
 
-Two independent layers protect the platform:
+The app is designed to hold no privilege:
 
-1. **Application tier** — Redis-shared rate-limit buckets (pyrate-limiter, Lua-scripted for cross-replica correctness):
+- **Linux**: the Flutter app never runs `sudo`, `wg`, or `wg-quick` and never reads the WireGuard device directly. All privileged work goes through `boltmeshd` over `/run/boltmesh/boltmeshd.sock`, a newline-delimited JSON protocol. The socket is `0660 root:boltmesh`; only members of the `boltmesh` group can connect. The daemon validates the single `up` argument (a wg-quick config) before spending privilege — one `[Interface]`, at least one `[Peer]`, parsed key material, a size cap, and a hard reject of the `PreUp`/`PostUp`/`PreDown`/`PostDown`/`SaveConfig` hooks — fixes the interface name and config path, uses `exec.Command` with explicit args (no shell with client data), and runs with `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`, restricted address families, and no new namespaces. See [`linux/boltmeshd/README.md`](linux/boltmeshd/README.md).
+- **Windows**: there is no unprivileged helper yet. The plugin's CMake injects `requireAdministrator` into the executable manifest, so the whole GUI elevates (UAC) at launch; creating and starting the WireGuard service needs that elevation. The installer is per-machine and the exe manifest raises the prompt.
+- **Android**: the app requests the `VpnService` permission and the system shows the standard VPN consent dialog on first connect.
+- **iOS/macOS**: the Packet Tunnel Provider runs as a Network Extension; the app only sends it `getHandshake` over the `NETunnelProviderSession`.
 
-   | Scope                 | Limit       |
-   | --------------------- | ----------- |
-   | Login / auth attempts | 10 req/min  |
-   | Token refresh         | 30 req/min  |
-   | Node-agent sync       | 30 req/min  |
-   | Admin APIs            | 60 req/min  |
-   | Everything else       | 100 req/min |
+## Secrets and Data at Rest
 
-   Exceeding a bucket returns HTTP 429 (`TooManyRequestsError`).
+- The WireGuard private key, device id and API tokens are stored in platform secure storage (Keychain/Keystore) via `flutter_secure_storage`; the app never writes them to plain files.
+- The access JWT is short-lived (15 minutes) and renews proactively before expiry plus once per 401 (single-flight shared retry); the `refresh_token` is an HttpOnly cookie. Logging out revokes the session server-side.
+- Byte counters are display-only and never drive heals; handshake reads are read-only and a null/unknown read never heals the tunnel.
 
-2. **Edge tier** — AWS WAF v2 Web ACLs (a CloudFront-scoped ACL and a regional ACL attached directly to the ALB) evaluate AWS managed rule groups — `CommonRuleSet`, `KnownBadInputsRuleSet`, and `AmazonIpReputationList` — preceded by an IP rate-based rule that absorbs volumetric floods before the managed rules run. The threshold (requests per IP per 5-minute window) is configurable per environment.
+## Transport Security
 
-## Cryptography & Data Protection
-
-- **Password hashing**: bcrypt, cost factor 12 (see above).
-- **TLS everywhere**: ALB HTTPS listeners enforce `ELBSecurityPolicy-TLS13-1-2-2021-06`; CloudFront requires TLS ≥ 1.2 with redirect-to-HTTPS viewer policies; CloudFront→ALB origin connections are HTTPS-only; plain HTTP is redirected at every layer.
-- **Gateway TLS**: the Lightning (CLN REST) gateway verifies its peer certificate against `LIGHTNING_CA_CERT`; insecure mode exists (`LIGHTNING_TLS_INSECURE`) but defaults to false.
-- **Secrets management**: development secrets live only in local environment variables (never committed); production secrets reside in AWS Secrets Manager under customer-managed KMS keys and are injected directly into ECS task definitions. VPN nodes hold no shared secret: EC2 nodes authenticate with their hypervisor-signed instance identity, and manual nodes hold only their own per-server bootstrap secret (hashed server-side). Terraform receives sensitive values via `TF_VAR_*` rather than plaintext tfvars (values still reach the remote state — the caveat is documented in [infra/README.md](infra/README.md)); the RDS master password uses the RDS-managed Secrets Manager secret and never touches state.
-- **Backups and logs at rest**: RDS automated backups retain between 1 and 35 days (validated by configuration constraints); VPC flow logs, ALB access logs, and Terraform state are encrypted with dedicated customer-managed KMS keys.
-
-## Infrastructure Security
-
-- **Network segmentation**: VPC public/private subnets with least-privilege security groups isolating the public ALB, WireGuard EC2 nodes, application containers, ARQ workers, ElastiCache, and database subnets.
-- **No SSH**: there are no port 22 ingress rules and no interactive shell path on EC2 nodes — immutable golden AMIs are replaced, not logged into — and IMDSv2 is required.
-- **Stateless serving tiers**: frontend and backend run on ECS Fargate; private egress to AWS services (ECR, S3, Secrets Manager, CloudWatch) travels over VPC endpoints instead of NAT gateways.
-- **Audit trails**: CloudTrail records governance events to a compliance S3 bucket; VPC flow logs and ALB access logs land in KMS-encrypted S3; CloudWatch log groups use customer-managed CMKs.
-- **Edge origin isolation** (when CloudFront fronts the stack): the ALB security group accepts traffic only from the CloudFront origin-facing managed prefix list, and every origin request must carry the shared `X-Origin-Verify` secret header — ALB listener rules return 403 otherwise, preventing direct-to-origin bypass.
-- **Hardened node images**: WireGuard node AMIs are built from Packer golden images, with post-deployment checklists covering IMDSv2, no SSH ingress, and security-group review.
-
-## HTTP Security Headers
-
-The production frontend container sets the following headers on all document and asset responses:
-
-   X-Frame-Options: SAMEORIGIN
-   X-Content-Type-Options: nosniff
-   Referrer-Policy: strict-origin-when-cross-origin
-   Permissions-Policy: camera=(), microphone=(), geolocation=()
-
-Known gap: the API tier does not currently emit `Strict-Transport-Security` or `Content-Security-Policy` headers. Operators fronting the API with their own CDN or reverse proxy should set them at the edge; adding them in-tree is planned work.
-
-## Response Time
-
-We aim to acknowledge every vulnerability report within **48 hours** and will keep reporters updated throughout triage and remediation. Thank you for your patience.
+- **TLS by default**: the API base defaults to production HTTPS and release builds refuse `http://` URLs (debug/profile builds allow `localhost` for local development).
+- **Optional pinning**: `--dart-define=TLS_PIN_SPKI_SHA256=pin[,pin...]` pins one or more base64 SHA-256 hashes of the server certificate's SubjectPublicKeyInfo (SPKI), which survives certificate renewal while the key is reused.
+- **OAuth**: the system browser handles consent. Desktop platforms open an ephemeral loopback listener (`http://127.0.0.1:{port}/callback`); mobile uses the registered `boltmesh://` custom scheme. The provider redirects back with a single-use code that the app exchanges at `POST /auth/native/exchange`.
 
 ## Disclosure Policy
 
@@ -106,21 +87,16 @@ We aim to acknowledge every vulnerability report within **48 hours** and will ke
 
 ## Best Practices for Operators
 
-If you deploy BoltMesh components, please:
+If you deploy the BoltMesh client, please:
 
 1. **Run supported versions** — update promptly when patch releases ship.
-2. **Verify node-agent downloads** — obtain binaries only from official GitHub Releases and confirm `sha256sum -c checksums.txt`.
-3. **Protect signing secrets** — `SECRET_KEY`, `REFRESH_SECRET_KEY`, and `NODE_SECRET_KEY` must be distinct, strong random values (minimum 32 characters each). Pin your AWS IID trust (`AWS_IID_ACCOUNT_ID` plus `AWS_IID_SIGNER_FINGERPRINTS`) before enrolling EC2 nodes, and re-issue a server's per-server bootstrap secret (`POST /servers/{id}/bootstrap-secret`) if its one-liner may have leaked.
-4. **Keep gateway TLS verification on** — do not set `LIGHTNING_TLS_INSECURE=true` outside throwaway development environments.
-5. **Configure proxies honestly** — enable `TRUST_PROXY_HEADERS=true` only behind a reverse proxy you control that sets `X-Forwarded-For`; otherwise rate limiting keys off direct connections.
-6. **Pin your origins** — point `CORS_ALLOW_ORIGINS` at exactly your deployed origins; firewall administrative endpoints away from the public internet where possible.
-7. **Isolate development crypto services** — the regtest bitcoind, lightningd, monerod, and monero-wallet-rpc containers in docker-compose exist for local development only and must never be reachable from untrusted networks.
-8. **Monitor** — scrape the `/health` endpoint (which reports Redis, database, and payment-gateway status) and alert on structured JSON logs.
-9. **Back up and rehearse** — configure an appropriate `db_backup_retention` value and periodically test restores.
-10. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/` and `.trivyignore` with the same scrutiny as source changes.
+2. **Verify downloads** — obtain installers and packages only from official GitHub Releases for this repository.
+3. **Keep TLS verification on** — do not weaken `API_BASE_URL` to `http://` outside throwaway development, and prefer an SPKI pin for pinned deployments.
+4. **Keep the `boltmesh` group minimal** — on Linux, only add desktop users who should control the tunnel; `boltmeshd` runs as root on their behalf.
+5. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/`, the signing hooks under `windows/packaging/` and `linux/boltmeshd/packaging/`, and `tool/` with the same scrutiny as source changes.
 
 ## Contact
 
-Security-related questions that are **not** vulnerability reports may be raised as public GitHub issues with the `security` label, or discussed privately via a drafted advisory on the [Security tab](https://github.com/boltmesh-labs/vpn-core/security).
+Security-related questions that are **not** vulnerability reports may be raised as public GitHub issues with the `security` label, or discussed privately via a drafted advisory on the [Security tab](https://github.com/boltmesh-labs/client/security).
 
 Thank you for helping keep BoltMesh and our users safe! 🔒

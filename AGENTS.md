@@ -1,6 +1,6 @@
 # AGENTS.md
 
-BoltMesh VPN: Flutter WireGuard client (`lib/`) plus the privileged Linux helper (`linux/boltmeshd/`, Go, entry `cmd/boltmeshd/main.go`). Backend contract lives in `../backend/app/vpn/` (`/vpn-devices`, `/vpn-regions` under `/v1`).
+BoltMesh VPN: Flutter WireGuard client (`lib/`) plus the privileged Linux helper (`linux/boltmeshd/`, Go, entry `cmd/boltmeshd/main.go`). Backend contract lives in the [`backend`](https://github.com/boltmesh-labs/backend) repo (`app/vpn/`; `/vpn-devices`, `/vpn-regions` under `/v1`).
 
 ## Commands
 

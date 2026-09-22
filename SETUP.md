@@ -9,8 +9,9 @@ secrets and the test suite, see [README.md](README.md).
 - Flutter SDK 3.47.x stable (`flutter --version`).
 - JDK 21 (Gradle 9.x rejects much newer JDKs).
 - Git.
-- A running backend (`podman-compose up -d` from the infra repo) plus a user
-  account (`POST /v1/auth/register`).
+- A running backend (`podman-compose up -d` from the
+  [`infra`](https://github.com/boltmesh-labs/infra) repo) plus a user account
+  (`POST /v1/auth/register`).
 
 ## Windows
 
@@ -22,7 +23,7 @@ secrets and the test suite, see [README.md](README.md).
     flutter config --enable-windows-desktop
     flutter doctor
 
-    git clone <repo-url>
+    git clone https://github.com/boltmesh-labs/client
     cd client
     flutter pub get
     flutter run -d windows
@@ -97,7 +98,7 @@ flutter doctor
 ### 3. Run
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/boltmesh-labs/client
 cd client
 flutter pub get
 flutter run -d linux

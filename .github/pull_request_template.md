@@ -30,5 +30,5 @@ Please describe the tests you ran:
 - [ ] I have added tests
 - [ ] All tests pass
 - [ ] My changes generate no new warnings
-- [ ] I have removed any console.log statements
+- [ ] I have removed any stray debug print statements
 - [ ] The commit message is clear and descriptive

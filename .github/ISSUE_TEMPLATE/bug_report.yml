@@ -59,7 +59,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      placeholder: "e.g., Ubuntu 22.04, Python 3.11, Node 18"
+      placeholder: "e.g., Ubuntu 22.04, Flutter 3.47.5, Go 1.26"
     validations:
       required: false
 

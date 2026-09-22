@@ -6,7 +6,7 @@ vendor: BoltMesh Team
 packager: BoltMesh Team
 packagerEmail: support@boltmesh.example
 license: ASL 2.0
-url: https://github.com/boltmesh-labs/vpn-core
+url: https://github.com/boltmesh-labs/client
 requires:
   - gtk3
   - wireguard-tools

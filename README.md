@@ -1,7 +1,8 @@
 # BoltMesh Client
 
-WireGuard VPN client. Backend contract: `../backend/app/vpn/` (user routes
-`/vpn-devices`, `/vpn-regions` under `/v1`).
+WireGuard VPN client. Backend contract lives in the
+[`backend`](https://github.com/boltmesh-labs/backend) repo (`app/vpn/`; user
+routes `/vpn-devices`, `/vpn-regions` under `/v1`).
 
 ## Prereqs
 
@@ -9,7 +10,8 @@ Setting up a fresh machine (per-OS toolchains, emulator, `boltmeshd` dev
 loop): see [SETUP.md](SETUP.md).
 
 - Flutter SDK ≥ 3.47 (`flutter --version`).
-- Running backend (`podman-compose up -d` from repo root) + a user account
+- Running backend (`podman-compose up -d` from the
+  [`infra`](https://github.com/boltmesh-labs/infra) repo) + a user account
   (`POST /v1/auth/register`, then log in from the app's login screen).
 
 ## First-time platform scaffolding
@@ -112,7 +114,7 @@ in `test/support/fakes.dart`.
   via `boltmesh0`). Reboot only as a last resort. Packaging: see
   [Windows release build](#windows-release-build) (Inno Setup `.exe`).
 - **Linux**: hands all privileged work to the `boltmeshd` helper
-  (`client/linux/boltmeshd/`, installed by the deb/rpm, socket-activated,
+  (`linux/boltmeshd/`, installed by the deb/rpm, socket-activated,
   `boltmesh` group). The app itself holds no privilege and never runs
   `sudo`/`wg`/`wg-quick`; the daemon needs `wireguard-tools` for `wg-quick`.
   OAuth uses the same ephemeral loopback listener as Windows
@@ -181,7 +183,7 @@ transitive AndroidX deps require >= 34, so `android/build.gradle.kts` bumps
 stale plugin modules to 36 (the `flutter.compileSdkVersion` default on
 Flutter 3.47) via a `gradle.beforeProject` hook — it must run before AGP's
 own afterEvaluate hook or AGP rejects the write as "too late". Delete the
-hook if the plugin ships a fixed release. CI (`client.yml` `build-android`
+hook if the plugin ships a fixed release. CI (`default.yml` `build-android`
 job, on tags) runs this same `flutter build appbundle --release`; the
 remaining KGP warning (`flutter_web_auth_2`, `wireguard_flutter_plus`
 apply their own Kotlin plugin) is upstream's to fix and doesn't fail
@@ -367,7 +369,7 @@ never-handshook branch (Apple is still a placeholder, so its null reads
 never count).
 
 - **Linux**: works today via the privileged `boltmeshd` helper
-  (`client/linux/boltmeshd/`), which reads the peer handshake with `wgctrl`
+  (`linux/boltmeshd/`), which reads the peer handshake with `wgctrl`
   and answers over its Unix socket. The app itself never runs `wg`; see
   `linux_tunnel_adapter.dart`.
 - **Android**: works today. `MainActivity.kt` reaches the plugin's
