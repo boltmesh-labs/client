@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app/desktop_tray.dart';
 import 'app/root_shell.dart';
+import 'core/desktop/tray_manager_platform.dart';
 import 'core/locale.dart';
 import 'core/theme.dart';
 import 'l10n/gen/app_localizations.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // The desktop window backend must be initialized before the first frame;
+  // the tray icon itself is created once the shell has localized labels.
+  await initDesktopWindow();
   runApp(const ProviderScope(child: BoltMeshApp()));
 }
 
@@ -25,7 +31,7 @@ class BoltMeshApp extends StatelessWidget {
       localeResolutionCallback: resolveAppLocale,
       theme: boltMeshTheme,
       darkTheme: boltMeshDarkTheme,
-      home: const RootShell(),
+      home: const DesktopTrayHost(child: RootShell()),
     );
   }
 }

@@ -148,6 +148,18 @@ in `test/support/fakes.dart`.
   corners — `flutter_launcher_icons` has no Linux target); keep it a
   512×512 RGBA copy of the app icon or the deb/rpm launcher shows black
   corners.
+- **Desktop close-to-tray (Windows/macOS/Linux)**: the window's close button
+  hides the window instead of quitting, and the tray/menu-bar icon restores
+  it (see `lib/app/desktop_tray.dart` and `lib/core/desktop/`). The menu has a
+  Show/Hide toggle, Connect/Disconnect while signed in, and an explicit
+  **Quit**; the helper and any live tunnel keep running while hidden, exactly
+  as they do on Android. On Linux the icon is a StatusNotifierItem, so it
+  needs a panel that hosts them (KDE Plasma and most desktops do; GNOME only
+  with the AppIndicator extension, which Ubuntu ships). The Linux build links
+  X11/Xi through that plugin, so `flutter build linux` needs the X11/Xi dev
+  headers (see [SETUP.md](SETUP.md)). If the tray cannot be
+  shown — or on mobile, web and under `flutter test` — close-to-quit is left
+  untouched, so a window is never hidden with no way back.
 
 ## Release versioning
 

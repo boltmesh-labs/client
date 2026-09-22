@@ -326,7 +326,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libsecret-1-dev file rpm patchelf
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev liblzma-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libsecret-1-dev file rpm patchelf
 
       - name: Set up Go
         uses: actions/setup-go@v7

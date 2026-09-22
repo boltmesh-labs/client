@@ -541,6 +541,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Backend issue: {issue}'**
   String settingsDiagnosticsBackend(String issue);
+
+  /// Tray menu row that restores the hidden window.
+  ///
+  /// In en, this message translates to:
+  /// **'Show BoltMesh'**
+  String get trayShow;
+
+  /// Tray menu row that hides the window while the app keeps running.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide BoltMesh'**
+  String get trayHide;
+
+  /// Tray menu row starting the VPN tunnel.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect'**
+  String get trayConnect;
+
+  /// Tray menu row stopping the VPN tunnel.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnect'**
+  String get trayDisconnect;
+
+  /// Tray menu row exiting the app entirely.
+  ///
+  /// In en, this message translates to:
+  /// **'Quit'**
+  String get trayQuit;
 }
 
 class _AppLocalizationsDelegate

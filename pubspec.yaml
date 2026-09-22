@@ -1,11 +1,11 @@
 name: boltmesh
 description: BoltMesh VPN WireGuard client (Flutter).
-publish_to: 'none'
+publish_to: "none"
 version: 0.1.0+1
 
 environment:
   sdk: ^3.13.0
-  flutter: '>=3.47.0'
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
@@ -32,6 +32,12 @@ dependencies:
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0
   connectivity_plus: ^7.3.1
+  # Desktop-only: intercepts the window close button and hides/shows/focuses
+  # the native window (see `lib/core/desktop/`).
+  window_manager: ^0.5.2
+  # Desktop-only tray/menu-bar icon: StatusNotifier on Linux, notification-area
+  # on Windows, status item on macOS.
+  tray_manager: ^0.7.0
 
 dev_dependencies:
   flutter_test:
@@ -49,25 +55,28 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   generate: true
+  assets:
+    # Reused as the tray/menu-bar glyph (the OS and panel scale it down).
+    - assets/icon/app_icon.png
 
 flutter_launcher_icons:
-  image_path: 'assets/icon/app_icon.png'
+  image_path: "assets/icon/app_icon.png"
   android: true
   ios: true
   remove_alpha_ios: true
   # Flattened iOS corners blend with the icon's edge blue (sampled).
-  background_color_ios: '#166CA9'
-  adaptive_icon_background: '#166CA9'
-  adaptive_icon_foreground: 'assets/icon/app_icon.png'
+  background_color_ios: "#166CA9"
+  adaptive_icon_background: "#166CA9"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"
   web:
     generate: true
-    image_path: 'assets/icon/app_icon.png'
-    background_color: '#0175C2'
-    theme_color: '#0175C2'
+    image_path: "assets/icon/app_icon.png"
+    background_color: "#0175C2"
+    theme_color: "#0175C2"
   macos:
     generate: true
-    image_path: 'assets/icon/app_icon.png'
+    image_path: "assets/icon/app_icon.png"
   windows:
     generate: true
-    image_path: 'assets/icon/app_icon.png'
+    image_path: "assets/icon/app_icon.png"
     icon_size: 256

@@ -292,4 +292,19 @@ class AppLocalizationsDe extends AppLocalizations {
   String settingsDiagnosticsBackend(String issue) {
     return 'Backend-Problem: $issue';
   }
+
+  @override
+  String get trayShow => 'BoltMesh anzeigen';
+
+  @override
+  String get trayHide => 'BoltMesh ausblenden';
+
+  @override
+  String get trayConnect => 'Verbinden';
+
+  @override
+  String get trayDisconnect => 'Trennen';
+
+  @override
+  String get trayQuit => 'Beenden';
 }

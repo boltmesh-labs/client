@@ -76,9 +76,14 @@ flutter run -d 127.0.0.1:5555
 ### 1. Dependencies
 
 ```bash
-sudo dnf install clang cmake ninja-build pkg-config gtk3-devel libsecret-devel \
-  egl-utils glx-utils webkit2gtk4.1-devel go socat wireguard-tools gh
+sudo dnf install clang cmake ninja-build pkg-config gtk3-devel libX11-devel \
+  libXi-devel libsecret-devel egl-utils glx-utils webkit2gtk4.1-devel go socat \
+  wireguard-tools gh
 ```
+
+`libX11-devel`/`libXi-devel` (Debian/Ubuntu `libx11-dev`/`libxi-dev`) are
+required by the tray plugin the desktop build links; without them
+`flutter build linux` fails in `pkg_check_modules`.
 
 ### 2. Flutter SDK
 

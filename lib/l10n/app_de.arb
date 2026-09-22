@@ -73,5 +73,10 @@
   "settingsDiagnosticsAgo": "vor {seconds}s",
   "settingsDiagnosticsApi": "API: {api} · Plattform: {platform}",
   "settingsDiagnosticsTunnel": "Tunnel: Status {stage} · Statusabfrage {status} · Fehler {failures}",
-  "settingsDiagnosticsBackend": "Backend-Problem: {issue}"
+  "settingsDiagnosticsBackend": "Backend-Problem: {issue}",
+  "trayShow": "BoltMesh anzeigen",
+  "trayHide": "BoltMesh ausblenden",
+  "trayConnect": "Verbinden",
+  "trayDisconnect": "Trennen",
+  "trayQuit": "Beenden"
 }

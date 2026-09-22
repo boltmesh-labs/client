@@ -401,5 +401,25 @@
         "type": "String"
       }
     }
+  },
+  "trayShow": "Show BoltMesh",
+  "@trayShow": {
+    "description": "Tray menu row that restores the hidden window."
+  },
+  "trayHide": "Hide BoltMesh",
+  "@trayHide": {
+    "description": "Tray menu row that hides the window while the app keeps running."
+  },
+  "trayConnect": "Connect",
+  "@trayConnect": {
+    "description": "Tray menu row starting the VPN tunnel."
+  },
+  "trayDisconnect": "Disconnect",
+  "@trayDisconnect": {
+    "description": "Tray menu row stopping the VPN tunnel."
+  },
+  "trayQuit": "Quit",
+  "@trayQuit": {
+    "description": "Tray menu row exiting the app entirely."
   }
 }
