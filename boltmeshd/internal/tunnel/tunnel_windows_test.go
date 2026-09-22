@@ -225,16 +225,42 @@ func TestProtectConfigDirAppliesACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNamedSecurityInfo() = %v", err)
 	}
+	// The DACL must be protected. This is the load-bearing check: an
+	// inherited (unprotected) DACL is what ProgramData would leave behind, so
+	// it is what fails when protectConfigDir is a no-op.
+	control, _, err := sd.Control()
+	if err != nil {
+		t.Fatalf("Control() = %v", err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("applied DACL is not protected (SE_DACL_PROTECTED unset)")
+	}
+
 	dacl, _, err := sd.DACL()
 	if err != nil {
 		t.Fatalf("DACL() = %v", err)
 	}
-	if dacl.AceCount != 2 {
-		t.Fatalf("applied DACL has %d ACEs, want 2", dacl.AceCount)
+	// Windows splits each inheritable GENERIC_ALL entry on a directory into an
+	// effective ACE plus an INHERIT_ONLY ACE that keeps the generic bits for
+	// children to map, so the two entries applied above read back as four
+	// ACEs. Assert the policy, not the count: every ACE is a non-inherited
+	// allow for SYSTEM or Administrators, and nobody else.
+	sids := make(map[string]bool)
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatalf("GetAce(%d) = %v", i, err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			t.Fatalf("ACE %d type = %d, want ACCESS_ALLOWED", i, ace.Header.AceType)
+		}
+		if ace.Header.AceFlags&windows.INHERITED_ACE != 0 {
+			t.Fatalf("ACE %d is inherited; the DACL is not fully protected", i)
+		}
+		sids[(*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()] = true
 	}
-	sids := aceSIDs(t, dacl)
-	if !sids[localSystemSID] || !sids[administratorsSID] {
-		t.Fatalf("applied DACL SIDs = %v, want %s and %s", sids, localSystemSID, administratorsSID)
+	if len(sids) != 2 || !sids[localSystemSID] || !sids[administratorsSID] {
+		t.Fatalf("applied DACL SIDs = %v, want exactly %s and %s", sids, localSystemSID, administratorsSID)
 	}
 }
 
