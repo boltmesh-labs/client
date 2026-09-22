@@ -239,4 +239,70 @@ void main() {
       greaterThan(PollingService.healthCheckInterval),
     );
   });
+
+  test('kickHealth runs a health tick without waiting the cadence', () {
+    fakeAsync((async) {
+      final svc = PollingService(
+        statusInterval: const Duration(hours: 1),
+        healthInterval: const Duration(hours: 1),
+        statusInitialDelay: const Duration(hours: 1),
+      );
+      var healthTicks = 0;
+      svc.start(onStatus: () async {}, onHealth: () async => healthTicks++);
+
+      svc.kickHealth();
+      async.flushMicrotasks();
+      expect(healthTicks, 1);
+
+      svc.stop();
+    });
+  });
+
+  test('kickHealth coalesces with an in-flight tick', () {
+    fakeAsync((async) {
+      final svc = PollingService(
+        statusInterval: const Duration(hours: 1),
+        healthInterval: const Duration(hours: 1),
+        statusInitialDelay: const Duration(hours: 1),
+      );
+      var calls = 0;
+      final gate = Completer<void>();
+      svc.start(
+        onStatus: () async {},
+        onHealth: () async {
+          calls++;
+          await gate.future;
+        },
+      );
+
+      // First kick holds the single-flight flag; a second is dropped.
+      svc.kickHealth();
+      svc.kickHealth();
+      async.flushMicrotasks();
+      expect(calls, 1);
+
+      // Once it settles a later kick runs again.
+      gate.complete();
+      async.flushMicrotasks();
+      svc.kickHealth();
+      async.flushMicrotasks();
+      expect(calls, 2);
+
+      svc.stop();
+    });
+  });
+
+  test('kickHealth no-ops once the timers are stopped', () {
+    final svc = PollingService(
+      statusInterval: const Duration(hours: 1),
+      healthInterval: const Duration(hours: 1),
+      statusInitialDelay: const Duration(hours: 1),
+    );
+    var healthTicks = 0;
+    svc.start(onStatus: () async {}, onHealth: () async => healthTicks++);
+    svc.stop();
+
+    svc.kickHealth();
+    expect(healthTicks, 0);
+  });
 }

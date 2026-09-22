@@ -764,6 +764,63 @@ void main() {
     expect(ctl.debugDeadEchoStrikes, 0);
   });
 
+  test('a degraded stage event kicks a health tick immediately', () async {
+    // The OS reports a stalled stage: without the kick the corroborated
+    // stall would wait out the 10s health cadence; here it heals at once.
+    final events = <String>[];
+    final (container, tunnel) = await seedConnected(events, (o) {
+      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/status')) throw networkTimeout(o);
+      throw StateError('unexpected ${o.path}');
+    });
+    final ctl = container.read(connectionProvider.notifier);
+    // Stale handshake plus a failed poll corroborate the stall.
+    staleHandshake(ctl);
+    await ctl.pollStatusOnce();
+    events.clear();
+
+    tunnel.emit(VpnStage.noConnection);
+    await pumpEventQueue();
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.autoHealAttempts, 1);
+    expect(events.where((e) => e.startsWith('tunnel:')), [
+      'tunnel:stop',
+      'tunnel:start',
+    ]);
+  });
+
+  test('a repeated identical degraded stage does not re-kick', () async {
+    final events = <String>[];
+    final (container, tunnel) = await seedConnected(events, (o) {
+      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/status')) throw networkTimeout(o);
+      throw StateError('unexpected ${o.path}');
+    });
+    final ctl = container.read(connectionProvider.notifier);
+    final probe =
+        container.read(gatewayProbeProvider) as support.FakeGatewayProbe;
+    // An alive echo keeps the tick from healing but still consumes the read.
+    probe.alive = true;
+    staleHandshake(ctl);
+    await ctl.pollStatusOnce();
+
+    tunnel.emit(VpnStage.noConnection);
+    await pumpEventQueue();
+    expect(probe.calls, 1);
+
+    // Same stage again: no transition, so no second kick.
+    tunnel.emit(VpnStage.noConnection);
+    await pumpEventQueue();
+    expect(probe.calls, 1);
+
+    // A different degraded stage is a transition, so it kicks again.
+    tunnel.emit(VpnStage.reconnect);
+    await pumpEventQueue();
+    expect(probe.calls, 2);
+  });
+
   test('health tick publishes traffic counters to state', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {

@@ -61,17 +61,18 @@ abstract final class ConnectionTuning {
   /// echo is read to suppress a stale-handshake heal when the data path is
   /// actually alive and to corroborate a dead path. Well inside the ~120s
   /// keepalive rekey, so a data-path death shortly after a handshake is
-  /// still caught ~45-75s after the last handshake (worst case) rather than
+  /// still caught ~40s after the last handshake (worst case) rather than
   /// the full 150s window; deaths after the gate are unaffected. Degraded
   /// stages and unknown handshakes (never handshook, or no reader) always
   /// probe regardless of age.
-  static const echoProbeAfter = Duration(seconds: 45);
+  static const echoProbeAfter = Duration(seconds: 30);
 
   /// Consecutive performed-dead gateway echoes (one per health tick) before
   /// [echoStallHandshakeAge] applies: a single dropped DNS datagram must
   /// never shorten the window. At the 10s tick cadence this confirms the
-  /// data-path death in ~30s once probing is active (see [echoProbeAfter]).
-  static const echoStallStrikes = 3;
+  /// data-path death in ~40s once probing is active (see [echoProbeAfter]);
+  /// the 15s background cadence confirms it in ~45s.
+  static const echoStallStrikes = 2;
 
   /// Status-poll transport failures that corroborate a stale handshake.
   /// Counters are gone from heal decisions, but backend reachability still

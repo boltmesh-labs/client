@@ -106,7 +106,7 @@ in `test/support/fakes.dart`.
   `shouldDestroyEngineWithHost = false`), so swiping the task away destroys
   the Activity but not the Dart isolate. Together with the plugin's
   `VpnForegroundService` (`android:stopWithTask="false"`), the background
-  health tick (30s while the app is hidden) and the heal → failover ladder
+  health tick (15s while the app is hidden) and the heal → failover ladder
   keep running while the app is "killed". The app's native channels live in `TunnelHost` (process scope) so
   a detached Activity's `cleanUpFlutterEngine` cannot cancel them. A true
   process death (force-stop / OOM) still cold-starts via
@@ -333,7 +333,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   (`/32` IPv4, `/128` IPv6), bracketed IPv6 endpoint `host:port`,
   `AllowedIPs 0.0.0.0/0, ::/0`, keepalive 25.
 - Self-recovery (auto-heal): a local, backend-free health tick (10s
-  foreground, 30s hidden) reads the OS stage, the WireGuard handshake and a
+  foreground, 15s hidden) reads the OS stage, the WireGuard handshake and a
   `/32`-pinned in-tunnel DNS echo (`wg_dns`). A **stall** is a supported
   reader's stale handshake (`isHandshakeStale`: observed >150s ≈ one 120s
   keepalive-triggered rekey + 30s margin; "no handshake yet" >30s after the
@@ -351,16 +351,18 @@ rest of the pipeline (which files, when, verify) is unchanged.
   with no handshake reader (Apple) detection stays degraded-stage dependent:
   a null read is absence of evidence and never heals on its own.
 - Echo shortcut: the in-tunnel DNS echo is read only when it can change a
-  decision — once the handshake is older than 45s, on a degraded stage, or
+  decision — once the handshake is older than 30s, on a degraded stage, or
   when the handshake is unknown — so a healthy peer sends no probe datagram
-  at all (it was one UDP echo per tick, ~6/min foreground). Three
-  consecutive *performed-dead* echoes (never null) then shorten the
-  observed-handshake window to 30s: the data path is confirmed dead ~30s
-  after probing starts, so a death early in a rekey cycle is caught in
-  ~45-75s foreground (~1.5-2min hidden) instead of waiting out the full 150s;
+  at all (it was one UDP echo per tick, ~6/min foreground). Two consecutive
+  *performed-dead* echoes (never null) then shorten the observed-handshake
+  window to 30s: the data path is confirmed dead ~40s after the last
+  handshake foreground (~45s hidden) instead of waiting out the full 150s;
   deaths after the gate are unaffected. A handshake inside the 25s keepalive
   still wins, and the run resets on any skipped/alive/unknown echo, a
-  successful status poll, or a tunnel restart.
+  successful status poll, or a tunnel restart. A *transition* into a degraded
+  OS stage also kicks an immediate health tick (coalesced through the tick's
+  single-flight guard) instead of waiting out the cadence, so a stall the OS
+  already reported is corroborated on the first tick.
 - Diagnostic probes run only once a stall is suspected and are read-only —
   they never consume heal/move budgets: physical link → in-tunnel echo →
   control-plane probe. A *performed* dead echo, or a hard-stale handshake,

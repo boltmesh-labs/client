@@ -54,17 +54,20 @@ class PollingService {
   /// of minutes.
   static const healthCheckInterval = Duration(seconds: 10);
 
-  /// Background health tick (app hidden while a tunnel is up). Still well
-  /// above the status-poll floor's two orders of magnitude, but 3× fewer
-  /// wakeups than [healthCheckInterval]; the 3-strike echo path then
-  /// confirms a dead data path in ~90s instead of ~30s, and a resume runs
-  /// an immediate catch-up tick so returning to the foreground has no blind
-  /// spot.
-  static const backgroundHealthCheckInterval = Duration(seconds: 30);
+  /// Background health tick (app hidden while a tunnel is up). Slower than
+  /// [healthCheckInterval] so a swiped-away tunnel still heals at half the
+  /// foreground wake rate; the 2-strike echo path then confirms a dead data
+  /// path in ~45s instead of ~30s, and a resume runs an immediate catch-up
+  /// tick so returning to the foreground has no blind spot.
+  static const backgroundHealthCheckInterval = Duration(seconds: 15);
 
   Timer? _statusTimer;
   Timer? _statusEarlyTimer;
   Timer? _healthTimer;
+
+  /// Health callback captured by [start] so [kickHealth] can run it on
+  /// demand; null whenever the timers are stopped.
+  Future<void> Function()? _onHealth;
   final _statusBusy = _Flag();
   final _healthBusy = _Flag();
 
@@ -87,6 +90,7 @@ class PollingService {
     bool earlyStatus = true,
   }) {
     stop();
+    _onHealth = onHealth;
     if (earlyStatus) {
       _statusEarlyTimer = Timer(
         statusInitialDelay,
@@ -101,6 +105,20 @@ class PollingService {
       background ? backgroundHealthInterval : healthInterval,
       (_) => _singleFlight(_healthBusy, onHealth, 'health check'),
     );
+  }
+
+  /// Runs the health tick now instead of waiting out [healthInterval].
+  ///
+  /// Used by stage-driven kicks: a degraded OS stage should not sit unprobed
+  /// for a whole tick while the data path is already suspect. Coalesced
+  /// through the same single-flight guard as the periodic timer, so a burst
+  /// of stage events can never overlap a tick. No-op unless a tick is
+  /// actually running, so a stray stage event can't fire behind a
+  /// stopped/other-phase session.
+  void kickHealth() {
+    final tick = _onHealth;
+    if (tick == null || _healthTimer == null) return;
+    unawaited(_singleFlight(_healthBusy, tick, 'health check (stage kick)'));
   }
 
   /// Single-flight tick body: while one call is in flight, later ticks return
@@ -129,6 +147,8 @@ class PollingService {
   /// concurrently with the in-flight one, defeating the single-flight
   /// guarantee. The `finally` in [_singleFlight] is the only writer that
   /// clears a flag, so a tick skipped across a restart is simply dropped.
+  /// [_onHealth] is cleared so a later [kickHealth] can't run a tick for a
+  /// stopped session.
   void stop() {
     _statusTimer?.cancel();
     _statusTimer = null;
@@ -136,6 +156,7 @@ class PollingService {
     _statusEarlyTimer = null;
     _healthTimer?.cancel();
     _healthTimer = null;
+    _onHealth = null;
   }
 
   bool get isRunning =>

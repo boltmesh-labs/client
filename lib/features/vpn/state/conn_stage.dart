@@ -117,10 +117,19 @@ extension ConnectionStage on ConnectionController {
     }
     if (_isDegradedStage(stage)) {
       AppLog.info('tunnel stage=${stage.name} -> degraded');
+      // Only a *transition* into the degraded stage kicks: a broadcast that
+      // repeats the same stage must not fire a probe run every emit (the
+      // periodic tick still covers a stall that persists).
+      final entering = snap.lastStage != stage;
       snap = snap.copyWith(
         lastStage: stage,
         healthNote: 'VPN network issue (${stage.name}). Watching for recovery…',
       );
+      // The OS just confirmed the data path is unhealthy: kick a health tick
+      // now instead of waiting out the 10s cadence, so the stall is
+      // corroborated (or cleared by a live echo) on the first tick. Coalesced
+      // through the polling service, and a no-op when no tick is running.
+      if (entering) _polling.kickHealth();
       return;
     }
     // Healthy stage: record it; clear a stage-driven note once the tunnel

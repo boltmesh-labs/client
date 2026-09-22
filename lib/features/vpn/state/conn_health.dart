@@ -80,9 +80,10 @@ extension ConnectionHealth on ConnectionController {
     }
     // A performed-dead run of echoes (never a null/unknown read) shortens
     // the dead-peer handshake window below: the in-tunnel probe is a direct
-    // liveness check on the WireGuard data path, so three consecutive dead
-    // ticks are stronger evidence than a rekey-timer stopwatch. Any
-    // alive/unknown echo clears the run.
+    // liveness check on the WireGuard data path, so
+    // [ConnectionTuning.echoStallStrikes] consecutive dead ticks are stronger
+    // evidence than a rekey-timer stopwatch. Any alive/unknown echo clears
+    // the run.
     //
     // The probe is read only when it can matter. A fresh handshake already
     // proves the peer alive, so probing every tick while it is fresh is pure
