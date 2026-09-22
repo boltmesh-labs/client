@@ -1,2 +1,0 @@
-139fa1ae2e7d7f98eb24cad5e0ac0b8dbed00574d785c0513e3cfea3647c9718  boltmeshd-linux-amd64
-6bb35b8397031fb7cab0fa183b4989b9857e3b3f6222cd2405ab7795e1bf69a4  boltmeshd-linux-arm64
