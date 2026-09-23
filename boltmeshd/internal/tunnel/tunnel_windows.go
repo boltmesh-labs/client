@@ -23,6 +23,7 @@ const (
 	// which is what keeps a LocalSystem service from becoming an arbitrary
 	// code-execution primitive.
 	wireguardSvcExe = "wireguard_svc.exe"
+	wireguardDLL    = "wireguard.dll"
 )
 
 // DefaultConfigDir is the directory holding the privileged wg-quick config.
@@ -71,6 +72,7 @@ type Manager struct {
 	service tunnelService
 	device  deviceReader
 	exeDir  func() (string, error)
+	stat    func(string) (os.FileInfo, error)
 
 	// protectDir/protectFile tighten the ACL on the privileged config path.
 	// os.Chmod is a no-op protection on Windows, so these are the real
@@ -88,6 +90,7 @@ func NewManager(dir, iface string) *Manager {
 		service:     newWindowsService(iface),
 		device:      newWireGuardReader(),
 		exeDir:      executableDir,
+		stat:        os.Stat,
 		protectDir:  protectConfigDir,
 		protectFile: protectConfigFile,
 	}
@@ -214,7 +217,15 @@ func (m *Manager) serviceExePath() (string, error) {
 	if err != nil {
 		return "", &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("locate helper directory: %w", err)}
 	}
-	return filepath.Join(dir, wireguardSvcExe), nil
+	exe := filepath.Join(dir, wireguardSvcExe)
+	if _, err := m.stat(exe); err != nil {
+		return "", &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("locate WireGuard tunnel service %q: %w (copy wireguard_svc.exe and wireguard.dll beside boltmeshd.exe)", exe, err)}
+	}
+	dll := filepath.Join(dir, wireguardDLL)
+	if _, err := m.stat(dll); err != nil {
+		return "", &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("locate WireGuard runtime %q: %w (copy wireguard_svc.exe and wireguard.dll beside boltmeshd.exe)", dll, err)}
+	}
+	return exe, nil
 }
 
 func executableDir() (string, error) {

@@ -159,7 +159,10 @@ in `test/support/fakes.dart`.
   X11/Xi through that plugin, so `flutter build linux` needs the X11/Xi dev
   headers (see [SETUP.md](SETUP.md)). If the tray cannot be
   shown — or on mobile, web and under `flutter test` — close-to-quit is left
-  untouched, so a window is never hidden with no way back.
+  untouched, so a window is never hidden with no way back. On Linux, startup
+  and close handling verify that a StatusNotifier host is registered on the
+  session bus; Fedora GNOME users need to enable the AppIndicator and
+  KStatusNotifierItem Support extension themselves.
 
 ## Release versioning
 

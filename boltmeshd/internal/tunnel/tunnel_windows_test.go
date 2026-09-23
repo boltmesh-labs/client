@@ -152,6 +152,7 @@ func newTestManager(t *testing.T) (*Manager, *fakeService, *fakeDevice) {
 	m.service = svc
 	m.device = dev
 	m.exeDir = func() (string, error) { return `C:\app`, nil }
+	m.stat = func(string) (os.FileInfo, error) { return nil, nil }
 	// The ACL helpers are exercised by their own tests; no-op here so the
 	// temp config dir stays writable for the rest of the suite.
 	m.protectDir = func(string) error { return nil }
@@ -289,6 +290,27 @@ func TestUpWritesConfigAndStartsService(t *testing.T) {
 	}
 	if _, err := os.Stat(m.configPath()); err != nil {
 		t.Fatalf("config not written: %v", err)
+	}
+}
+
+func TestUpReportsMissingWireGuardServiceBeforeTouchingTunnel(t *testing.T) {
+	m, svc, _ := newTestManager(t)
+	want := errors.New("file not found")
+	m.stat = func(string) (os.FileInfo, error) { return nil, want }
+
+	_, err := m.Up(context.Background(), validConfig)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up() = %v, want internal error", err)
+	}
+	if !strings.Contains(err.Error(), "wireguard_svc.exe") || !strings.Contains(err.Error(), "wireguard.dll") {
+		t.Fatalf("Up() = %v, want missing bundle diagnostic", err)
+	}
+	if svc.starts != 0 || svc.stops != 0 {
+		t.Fatalf("service touched: starts=%d stops=%d", svc.starts, svc.stops)
+	}
+	if _, statErr := os.Stat(m.configPath()); !os.IsNotExist(statErr) {
+		t.Fatal("config written when tunnel service executable was missing")
 	}
 }
 

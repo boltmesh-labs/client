@@ -219,11 +219,24 @@ sudo nmcli general reload conf
 
 ## Windows: run from source (development)
 
+Build the Flutter Windows bundle first. This is important because
+`wireguard_svc.exe`, `wireguard.dll`, and Wintun are supplied by the
+`wireguard_flutter_plus` plugin; `boltmeshd` deliberately does not download or
+copy those privileged binaries itself.
+
 ```powershell
-make build-windows-amd64
+flutter build windows --debug
+Push-Location boltmeshd
+go build -o ..\build\windows\x64\runner\Debug\boltmeshd.exe .\cmd\boltmeshd
+Pop-Location
 # Elevated once, to register the service; then it runs as LocalSystem.
-.\bin\boltmeshd-windows-amd64.exe -install
+build\windows\x64\runner\Debug\boltmeshd.exe -install
 ```
+
+Run the app from that same `build\windows\x64\runner\Debug` directory. The
+helper validates that `wireguard_svc.exe` is present before touching the
+tunnel; if it is missing, rebuild the Flutter bundle rather than registering a
+standalone helper from `boltmeshd\bin`.
 
 For a quick foreground test without installing a service, run it elevated with
 `-console`; the GUI can then talk to the pipe while it is running.

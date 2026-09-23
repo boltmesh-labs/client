@@ -9,9 +9,11 @@
 /// `clicked`, and the panel never forwards raw icon clicks to Dart.
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show Size;
 
+import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -69,6 +71,10 @@ class TrayManagerPlatform with WindowListener implements TrayPlatform {
       // Intercept the close button before creating the icon: if the tray
       // turns out to be unavailable, `_stopWindowInterceptor` restores the
       // normal quit so the user is never left with an unreachable window.
+      if (Platform.isLinux && !await _hasStatusNotifierHost()) {
+        AppLog.info('no Linux StatusNotifier host; close button quits');
+        return false;
+      }
       await windowManager.setPreventClose(true);
       windowManager.addListener(this);
 
@@ -170,7 +176,7 @@ class TrayManagerPlatform with WindowListener implements TrayPlatform {
   }
 
   @override
-  void onWindowClose() => _onClose?.call();
+  void onWindowClose() => unawaited(_handleWindowClose());
 
   /// Per-platform clicks: Windows left/double-click restores the window while
   /// the menu owns right-click; macOS needs an explicit open for right-click.
@@ -183,6 +189,43 @@ class TrayManagerPlatform with WindowListener implements TrayPlatform {
         if (Platform.isWindows) _onIconClicked?.call();
       case TrayIconRightClickedEvent():
         if (Platform.isMacOS) _icon?.openContextMenu();
+    }
+  }
+
+  /// GNOME without AppIndicator can still let the SNI item register from the
+  /// app's point of view, while providing no visible panel host. Do not hide
+  /// the window in that case: restore normal close-to-quit behavior instead.
+  Future<void> _handleWindowClose() async {
+    if (Platform.isLinux && !await _hasStatusNotifierHost()) {
+      AppLog.info('Linux StatusNotifier host disappeared; closing normally');
+      await _stopWindowInterceptor();
+      await windowManager.destroy();
+      return;
+    }
+    _onClose?.call();
+  }
+
+  Future<bool> _hasStatusNotifierHost() async {
+    final bus = DBusClient.session();
+    try {
+      const watcherName = 'org.kde.StatusNotifierWatcher';
+      if (!await bus.nameHasOwner(watcherName)) return false;
+
+      final watcher = DBusRemoteObject(
+        bus,
+        name: watcherName,
+        path: DBusObjectPath('/StatusNotifierWatcher'),
+      );
+      return (await watcher.getProperty(
+        watcherName,
+        'IsStatusNotifierHostRegistered',
+        signature: DBusSignature('b'),
+      )).asBoolean();
+    } catch (e) {
+      AppLog.info('Linux StatusNotifier host probe failed: $e');
+      return false;
+    } finally {
+      await bus.close();
     }
   }
 

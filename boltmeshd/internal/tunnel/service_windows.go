@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -55,6 +56,9 @@ func (s *winService) start(ctx context.Context, exe string, args []string) error
 			return fmt.Errorf("create service %s: %w", s.name, err)
 		}
 	}
+	// The service survives daemon upgrades and development rebuilds. Keep its
+	// image path synchronized; otherwise SCM can retain a path to a deleted
+	// build and StartService only reports ERROR_FILE_NOT_FOUND.
 	defer func() { _ = handle.Close() }()
 
 	status, err := handle.Query()
@@ -69,11 +73,38 @@ func (s *winService) start(ctx context.Context, exe string, args []string) error
 			return err
 		}
 	}
+	if err := s.updateCommand(handle, exe, args); err != nil {
+		return err
+	}
 
 	if err := handle.Start(); err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 		return fmt.Errorf("start service %s: %w", s.name, err)
 	}
 	return s.waitFor(ctx, handle, svc.Running)
+}
+
+func (s *winService) updateCommand(handle *mgr.Service, exe string, args []string) error {
+	config, err := handle.Config()
+	if err != nil {
+		return fmt.Errorf("query service %s configuration: %w", s.name, err)
+	}
+	expected := serviceCommand(exe, args)
+	if config.BinaryPathName == expected {
+		return nil
+	}
+	config.BinaryPathName = expected
+	if err := handle.UpdateConfig(config); err != nil {
+		return fmt.Errorf("update service %s executable: %w", s.name, err)
+	}
+	return nil
+}
+
+func serviceCommand(exe string, args []string) string {
+	command := syscall.EscapeArg(exe)
+	for _, arg := range args {
+		command += " " + syscall.EscapeArg(arg)
+	}
+	return command
 }
 
 // stop stops the tunnel service, leaving it registered so the next `up`
