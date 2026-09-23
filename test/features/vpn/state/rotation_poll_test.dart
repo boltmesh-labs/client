@@ -249,6 +249,50 @@ void main() {
     expect(events, ['GET:/vpn-devices/dev-1/status']);
   });
 
+  test('queued auto-rotate cannot resurrect a disconnected tunnel', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/disconnect')) {
+          return {'disconnected_peers': 1};
+        }
+        if (o.path.endsWith('/rotate-keys')) return dialJson();
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await store.setDeviceId('dev-1');
+    await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugTunnel = tunnel;
+    await ctl.connect();
+    events.clear();
+
+    // Queue disconnect first, then auto-rotation. The rotation must observe
+    // the post-disconnect phase after the mutex is released, not restart the
+    // tunnel from the stale dial retained for reconnect.
+    final release = await ctl.debugAcquireMutex('test-hold');
+    final disconnect = ctl.disconnect();
+    final rotate = ctl.rotateKeys(auto: true);
+    release();
+    await disconnect;
+    await rotate;
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.idle);
+    expect(events, ['tunnel:stop', 'POST:/vpn-devices/dev-1/disconnect']);
+    expect(await store.privateKey(), 'OLD-PRIV');
+    expect(await store.publicKey(), 'OLD-PUB');
+
+    // The early-return path must release the operation mutex as well; a
+    // second disconnect would otherwise hang behind the skipped rotation.
+    await ctl.disconnect();
+  });
+
   test('auto-rotate fires once the poll counter hits the threshold', () async {
     final events = <String>[];
     final store = FakeStore();

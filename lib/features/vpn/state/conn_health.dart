@@ -6,6 +6,33 @@ const _noNetworkNote =
     'Waiting for network… Reconnecting when connection returns.';
 
 extension ConnectionHealth on ConnectionController {
+  bool _healthSessionCurrent(int sessionEpoch, int epoch, DialParams dial) =>
+      sessionEpoch == _sessionEpoch &&
+      epoch == _tunnelEpoch &&
+      snap.phase == ConnPhase.connected &&
+      identical(snap.dial, dial);
+
+  /// Runs at most one health tick across timer, resume, and manual callers.
+  /// This is deliberately shared with the public method rather than living
+  /// only inside [PollingService], because lifecycle catch-up invokes
+  /// [checkHealthOnce] directly.
+  Future<void> _healthCheckOnce() {
+    final active = _healthCheckInFlight;
+    if (active != null) return active;
+    final future = _healthCheckOp();
+    _healthCheckInFlight = future;
+    unawaited(
+      future
+          .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+          .whenComplete(() {
+            if (identical(_healthCheckInFlight, future)) {
+              _healthCheckInFlight = null;
+            }
+          }),
+    );
+    return future;
+  }
+
   /// One local health tick: handshake + stage stall detection with offline
   /// auto-heal, escalating straight to an automatic server move (see
   /// [_autoHeal], [_autoFailover]). Public so tests can drive a tick without
@@ -20,6 +47,8 @@ extension ConnectionHealth on ConnectionController {
     if (!_tunnel.isReady) return;
     final dial = snap.dial;
     if (dial == null) return;
+    final epoch = _tunnelEpoch;
+    final sessionEpoch = _sessionEpoch;
     final now = _clock.now();
     // Stage + handshake + traffic are independent reads: run them
     // concurrently so a slow one doesn't push detection past the next tick.
@@ -44,9 +73,10 @@ extension ConnectionHealth on ConnectionController {
           ? Future<Map<String, dynamic>?>.value()
           : _tunnel.readTraffic(),
     ).wait;
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (stage != null && stage != snap.lastStage) {
       _noteStage(stage);
-      if (snap.phase != ConnPhase.connected) return;
+      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
       // An outside-stop verification owns the outcome from here: healing
       // underneath it would restart a tunnel the verification may be about
       // to tear down (or re-heal one it just adopted).
@@ -56,16 +86,17 @@ extension ConnectionHealth on ConnectionController {
     // round may have seen only unknown evidence (null handshake, skipped
     // gateway probe), which defers — a truly dead tunnel becomes
     // stale-confirmed with time and tears down on a later round.
-    if (snap.phase == ConnPhase.connected &&
-        snap.lastStage == VpnStage.disconnected &&
+    if (_healthSessionCurrent(sessionEpoch, epoch, dial) &&
+        snap.lastStage != null &&
+        _isExternalStopStage(snap.lastStage!) &&
         snap.healthNote == _externalStopVerifyingNote) {
-      final dial = snap.dial;
-      if (dial != null && !_mutex.isLocked) {
-        await _corroborateExternalStop(_tunnelEpoch, dial);
-        if (snap.phase != ConnPhase.connected) return;
+      if (!_mutex.isLocked) {
+        await _corroborateExternalStop(epoch, dial, sessionEpoch: sessionEpoch);
+        if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
         if (snap.healthNote == _externalStopVerifyingNote) return;
       }
     }
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     // Publish counters for the Home card (and Settings debug line).
     // Null means the plugin reported no usable counter — the UI hides
     // the section instead of showing a misleading zero.
@@ -93,6 +124,17 @@ extension ConnectionHealth on ConnectionController {
     // path. An unknown handshake (never handshook, or no reader on this
     // platform) keeps probing — the echo is then the only local signal.
     // Skipping clears the run: a fresh handshake is positive liveness.
+    // An answered 401/403/429/5xx proves that the control plane was
+    // reachable. Do not let the quiet-track fallback (or an old transport
+    // failure counter) turn that answered state into a standard heal. The
+    // hard ceiling below remains an independent escape hatch for a genuinely
+    // dead data path.
+    bool backendAnswered() =>
+        _lastStatusAnswered ||
+        snap.backendIssue == BackendIssue.authExpired ||
+        snap.backendIssue == BackendIssue.subscriptionInactive ||
+        snap.backendIssue == BackendIssue.serverError;
+    final answeredBackendIssue = backendAnswered();
     final stageStalled =
         stage != null && _isDegradedStage(stage) && snap.pollFailures >= 1;
     final handshakeAge = handshake == null ? null : now.difference(handshake);
@@ -103,6 +145,7 @@ extension ConnectionHealth on ConnectionController {
     final bool? gateway;
     if (probeEcho) {
       gateway = await _gatewayAlive(dial.wgDns);
+      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
       _deadEchoStrikes = gateway == false ? _deadEchoStrikes + 1 : 0;
     } else {
       gateway = null;
@@ -119,6 +162,7 @@ extension ConnectionHealth on ConnectionController {
     // it is absence of evidence and never heals — the degraded-stage path
     // above still covers those platforms.
     final standardStalled =
+        !answeredBackendIssue &&
         isHandshakeStale(
           lastHandshakeAt: handshake,
           now: now,
@@ -157,7 +201,10 @@ extension ConnectionHealth on ConnectionController {
       staleAfter: ConnectionTuning.hardHandshakeStaleAfter,
     );
     final handshakeStalled = standardStalled || hardStalled;
-    if (!stageStalled && !handshakeStalled) return;
+    if ((!stageStalled && !handshakeStalled) ||
+        (backendAnswered() && !hardStalled)) {
+      return;
+    }
     final String why;
     if (handshakeStalled) {
       final age = handshake == null
@@ -181,10 +228,11 @@ extension ConnectionHealth on ConnectionController {
     // does, under the existing caps.
     if (!await _hasLink()) {
       AppLog.info('health paused ($why) no local network');
-      if (snap.phase != ConnPhase.connected) return;
+      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
       snap = snap.copyWith(healthNote: _noNetworkNote);
       return;
     }
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     // Reuse this tick's echo read (already computed above); a live echo
     // proves the data path, so the stall is a transient flap.
     if (gateway == true) {
@@ -198,16 +246,25 @@ extension ConnectionHealth on ConnectionController {
     // spends another control-plane probe.
     if (snap.autoFailoverAttempts >= ConnectionTuning.maxAutoFailovers &&
         snap.autoHealAttempts >= ConnectionTuning.maxHealsAfterMoveBudget) {
-      await _surfaceRecoveryExhausted(why);
+      await _surfaceRecoveryExhausted(
+        why,
+        hardStalled: hardStalled,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
       return;
     }
     final apiReachable = await _apiReachable();
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+    if (backendAnswered() && !hardStalled) return;
     final cause = classifyFailure(
       hasNetwork: true,
       gatewayAlive: gateway,
       apiReachable: apiReachable,
       hardStalled: hardStalled,
     );
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (cause == ConnectionFailureCause.tunnelPathDead) {
       // The control plane answers directly but the tunnel path is dead —
       // either a performed dead echo or a handshake that stayed dead past
@@ -218,10 +275,18 @@ extension ConnectionHealth on ConnectionController {
       // is wasted on it.
       if (snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
         AppLog.info('health fast-track ($why) path dead, api up -> failover');
-        await _autoFailover(why, tunnelPathDead: true);
+        await _autoFailover(
+          why,
+          tunnelPathDead: true,
+          hardStalled: hardStalled,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
         return;
       }
     }
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (shouldEscalateToFailover(
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
@@ -237,9 +302,22 @@ extension ConnectionHealth on ConnectionController {
       // (unknown) keeps the probe-first behavior — absence of evidence must
       // never flap a path that may still be alive.
       final pathDead = hardStalled || gateway == false || apiReachable == false;
-      await _autoFailover(why, tunnelPathDead: pathDead);
+      await _autoFailover(
+        why,
+        tunnelPathDead: pathDead,
+        hardStalled: hardStalled,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
     } else {
-      await _autoHeal(why, hardStalled: hardStalled);
+      await _autoHeal(
+        why,
+        hardStalled: hardStalled,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
     }
   }
 

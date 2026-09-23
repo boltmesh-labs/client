@@ -5,6 +5,15 @@ part of 'connection_controller.dart';
 /// concurrent backend-driven banner is never wiped.
 const _externalStopVerifyingNote = 'Verifying VPN status…';
 
+/// Stages that mean the native tunnel is leaving or has left the up state.
+/// These need the same corroboration as [VpnStage.disconnected]; treating
+/// them as merely informational can strand a connected session when the
+/// final terminal event is lost.
+bool _isExternalStopStage(VpnStage stage) =>
+    stage == VpnStage.disconnected ||
+    stage == VpnStage.disconnecting ||
+    stage == VpnStage.exiting;
+
 /// Remediation for a `denied` stage is platform-specific: Windows emits it
 /// when the privileged `boltmeshd` helper service is missing or stopped (the
 /// app itself is unprivileged), while Android/iOS emit it when the VPN
@@ -60,7 +69,7 @@ extension ConnectionStage on ConnectionController {
       snap = snap.copyWith(lastStage: stage);
       return;
     }
-    if (stage == VpnStage.disconnected) {
+    if (_isExternalStopStage(stage)) {
       // A fresh engine re-attach reports no running tunnels even when the
       // OS TUN survived, and the stage stream replays that lie right after
       // a server-truth-confirmed cold restore. Honoring it here would flip
@@ -76,7 +85,7 @@ extension ConnectionStage on ConnectionController {
       // recording the stage is enough — acting here would race it and
       // orphan the just-restored session.
       if (_mutex.isLocked) {
-        AppLog.info('tunnel stage=disconnected during op -> defer to holder');
+        AppLog.info('tunnel stage=${stage.name} during op -> defer to holder');
         snap = snap.copyWith(lastStage: stage);
         return;
       }
@@ -89,12 +98,19 @@ extension ConnectionStage on ConnectionController {
       // verifying banner and corroborate async: only a corroborated-dead
       // tunnel flips to idle and ghost-kills. A false adopt self-corrects
       // via health ticks/status polls; a false kill strands the user.
-      AppLog.info('tunnel stage=disconnected -> verifying');
+      final sessionEpoch = _sessionEpoch;
+      AppLog.info('tunnel stage=${stage.name} -> verifying');
       snap = snap.copyWith(
         lastStage: stage,
         healthNote: _externalStopVerifyingNote,
       );
-      unawaited(_corroborateExternalStop(_tunnelEpoch, snap.dial));
+      unawaited(
+        _corroborateExternalStop(
+          _tunnelEpoch,
+          snap.dial,
+          sessionEpoch: sessionEpoch,
+        ),
+      );
       return;
     }
     if (stage == VpnStage.denied) {
@@ -151,10 +167,14 @@ extension ConnectionStage on ConnectionController {
   /// ticks / status polls keep corroborating, instead of adopting a
   /// possibly-dead tunnel as Connected. Never throws; act-time
   /// epoch/dial guards make overlapping runs idempotent.
-  Future<void> _corroborateExternalStop(int epoch, DialParams? dial) async {
+  Future<void> _corroborateExternalStop(
+    int epoch,
+    DialParams? dial, {
+    required int sessionEpoch,
+  }) async {
     try {
       if (dial == null) return;
-      if (_tunnelEpoch != epoch) return;
+      if (sessionEpoch != _sessionEpoch || _tunnelEpoch != epoch) return;
       if (snap.phase != ConnPhase.connected || !identical(snap.dial, dial)) {
         return;
       }
@@ -167,7 +187,12 @@ extension ConnectionStage on ConnectionController {
         if (kind == ApiErrorKind.notFound ||
             kind == ApiErrorKind.noActivePeer) {
           AppLog.info('external-stop corroborated dead ($kind) -> idle');
-          await _tearDownCorroboratedDead(epoch, dial, kind: kind);
+          await _tearDownCorroboratedDead(
+            epoch,
+            dial,
+            kind: kind,
+            sessionEpoch: sessionEpoch,
+          );
           return;
         }
         AppLog.info('external-stop verify deferred (config unreachable)');
@@ -176,7 +201,8 @@ extension ConnectionStage on ConnectionController {
         AppLog.error('external-stop verify failed', e);
         return;
       }
-      if (_tunnelEpoch != epoch ||
+      if (sessionEpoch != _sessionEpoch ||
+          _tunnelEpoch != epoch ||
           snap.phase != ConnPhase.connected ||
           !identical(snap.dial, dial)) {
         AppLog.info('external-stop verify superseded -> skip');
@@ -188,7 +214,13 @@ extension ConnectionStage on ConnectionController {
           (restage == VpnStage.connected ||
               _isDegradedStage(restage) ||
               isColdTransitionalStage(restage))) {
-        _adoptExternalStop(epoch, dial, 'stage=${restage.name}', restage);
+        _adoptExternalStop(
+          epoch,
+          dial,
+          'stage=${restage.name}',
+          restage,
+          sessionEpoch: sessionEpoch,
+        );
         return;
       }
       final now = _clock.now();
@@ -207,7 +239,13 @@ extension ConnectionStage on ConnectionController {
       // null = skipped/errored (unknown, defers), false = echoed-dead.
       final gateway = await _gatewayAlive(dial.wgDns);
       if (gateway == true) {
-        _adoptExternalStop(epoch, dial, 'gateway alive', null);
+        _adoptExternalStop(
+          epoch,
+          dial,
+          'gateway alive',
+          null,
+          sessionEpoch: sessionEpoch,
+        );
         return;
       }
       if (!stale) {
@@ -216,7 +254,13 @@ extension ConnectionStage on ConnectionController {
         // platform) proves nothing — defer so the health ticks keep
         // corroborating instead of locking in a possibly-dead Connected.
         if (handshake != null) {
-          _adoptExternalStop(epoch, dial, 'handshake fresh', null);
+          _adoptExternalStop(
+            epoch,
+            dial,
+            'handshake fresh',
+            null,
+            sessionEpoch: sessionEpoch,
+          );
           return;
         }
         AppLog.info(
@@ -231,7 +275,12 @@ extension ConnectionStage on ConnectionController {
         'external-stop corroborated dead '
         '(stage down, handshake stale, gateway dead) -> idle',
       );
-      await _tearDownCorroboratedDead(epoch, dial, kind: null);
+      await _tearDownCorroboratedDead(
+        epoch,
+        dial,
+        kind: null,
+        sessionEpoch: sessionEpoch,
+      );
     } catch (e) {
       AppLog.error('external-stop corroboration failed', e);
     }
@@ -244,9 +293,11 @@ extension ConnectionStage on ConnectionController {
     int epoch,
     DialParams dial,
     String why,
-    VpnStage? restage,
-  ) {
-    if (_tunnelEpoch != epoch ||
+    VpnStage? restage, {
+    required int sessionEpoch,
+  }) {
+    if (sessionEpoch != _sessionEpoch ||
+        _tunnelEpoch != epoch ||
         snap.phase != ConnPhase.connected ||
         !identical(snap.dial, dial)) {
       return;
@@ -286,8 +337,10 @@ extension ConnectionStage on ConnectionController {
     int epoch,
     DialParams dial, {
     required ApiErrorKind? kind,
+    required int sessionEpoch,
   }) async {
-    if (_tunnelEpoch != epoch ||
+    if (sessionEpoch != _sessionEpoch ||
+        _tunnelEpoch != epoch ||
         snap.phase != ConnPhase.connected ||
         !identical(snap.dial, dial)) {
       AppLog.info('corroborated teardown superseded -> skip');

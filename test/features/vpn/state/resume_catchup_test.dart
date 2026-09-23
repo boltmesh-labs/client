@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:boltmesh/features/auth/data/auth_api.dart';
 import 'package:boltmesh/features/auth/data/session_store.dart';
 import 'package:boltmesh/features/auth/state/auth_providers.dart';
@@ -280,6 +282,78 @@ void main() {
       // Status poll ran once (snapshot refreshed).
       expect(statusCalls(events), 1);
       expect(state.lastStatusAt, isNotNull);
+    });
+
+    test('resume shares an in-flight status tick', () async {
+      final events = <String>[];
+      final statusStarted = Completer<void>();
+      final releaseStatus = Completer<void>();
+      final store = ResumeDeviceStore();
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) async {
+            events.add('${options.method}:${options.path}');
+            if (options.path.endsWith('/config')) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: dialJson(),
+                ),
+              );
+              return;
+            }
+            if (options.path.endsWith('/status')) {
+              if (!statusStarted.isCompleted) statusStarted.complete();
+              await releaseStatus.future;
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: activeStatusJson(),
+                ),
+              );
+              return;
+            }
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.badResponse,
+                error: StateError('unexpected ${options.path}'),
+              ),
+            );
+          },
+        ),
+      );
+      final container = ProviderContainer(
+        overrides: [
+          deviceStoreProvider.overrideWithValue(store),
+          keyManagerProvider.overrideWithValue(ResumeKeys()),
+          vpnApiProvider.overrideWithValue(VpnApi(dio)),
+          networkMonitorProvider.overrideWithValue(OnlineNetworkMonitor()),
+          gatewayProbeProvider.overrideWithValue(DeadGatewayProbe()),
+          controlPlaneProbeProvider.overrideWithValue(DownControlProbe()),
+        ],
+      );
+      addTearDown(container.dispose);
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = ResumeTunnel();
+      await ctl.connect();
+      events.clear();
+
+      final poll = ctl.pollStatusOnce();
+      await statusStarted.future;
+      final resume = ctl.catchUpOnResume(now: DateTime.now());
+      await Future<void>.delayed(Duration.zero);
+      expect(statusCalls(events), 1);
+
+      releaseStatus.complete();
+      await poll;
+      await resume;
+      expect(statusCalls(events), 1);
     });
 
     test('fresh status runs health only', () async {

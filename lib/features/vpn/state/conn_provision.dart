@@ -1,10 +1,18 @@
 part of 'connection_controller.dart';
 
 extension ConnectionProvision on ConnectionController {
-  Future<void> _provision({String? regionId, String? serverId}) async {
+  Future<void> _provision({
+    String? regionId,
+    String? serverId,
+    int? sessionEpoch,
+  }) async {
+    final expectedSession = sessionEpoch ?? _sessionEpoch;
+    bool sessionCurrent() => expectedSession == _sessionEpoch;
+    if (!sessionCurrent()) return;
     snap = snap.copyWith(phase: ConnPhase.working, message: 'Provisioning…');
     try {
       final existing = await _device.deviceId();
+      if (!sessionCurrent()) return;
       AppLog.info(
         'provision start device=${AppLog.redact(existing)} '
         'region=${regionId ?? snap.regionId ?? '<auto>'} '
@@ -26,6 +34,7 @@ extension ConnectionProvision on ConnectionController {
       String? storedTarget;
       try {
         storedTarget = await _device.provisionTarget();
+        if (!sessionCurrent()) return;
       } catch (_) {
         // Stores without target support (older fakes): fall back to
         // unbound retries so the same-target retry still reuses the key.
@@ -33,14 +42,17 @@ extension ConnectionProvision on ConnectionController {
       }
       var idem = await _device.provisionKey();
       var pub = await _device.publicKey();
+      if (!sessionCurrent()) return;
       if (idem == null ||
           pub == null ||
           await _device.privateKey() == null ||
           storedTarget != target) {
         final kp = await _keys.generate();
+        if (!sessionCurrent()) return;
         pub = kp.publicKey;
         idem = const Uuid().v4();
         await _device.setKeypair(privateKey: kp.privateKey, publicKey: pub);
+        if (!sessionCurrent()) return;
         await _device.setProvisionKey(idem);
         try {
           await _device.setProvisionTarget(target);
@@ -51,6 +63,7 @@ extension ConnectionProvision on ConnectionController {
         }
       }
       final name = await _device.deviceName() ?? 'BoltMesh Device';
+      if (!sessionCurrent()) return;
       final targetRegionId = regionId ?? snap.regionId;
       final targetServerId = serverId ?? snap.serverId;
       // Pin to finals: the closure below can't see the null-promotion of
@@ -68,6 +81,7 @@ extension ConnectionProvision on ConnectionController {
       DialParams dial;
       try {
         dial = await postProvision();
+        if (!sessionCurrent()) return;
       } on DioException catch (e) {
         // The first attempt may have created the device while its response
         // was lost: replay once with the same key/body (idempotent) instead
@@ -78,15 +92,19 @@ extension ConnectionProvision on ConnectionController {
         }
         AppLog.info('provision idempotency conflict -> one same-key retry');
         dial = await postProvision();
+        if (!sessionCurrent()) return;
       }
+      if (!sessionCurrent()) return;
       await _device.setDeviceId(dial.deviceId);
       await _device.clearProvisionKey();
+      if (!sessionCurrent()) return;
       AppLog.info(
         'provision ok device=${AppLog.redact(dial.deviceId)} '
         'server=${dial.serverName}',
       );
       snap = snap.copyWith(phase: ConnPhase.idle, dial: dial, message: 'Ready');
     } catch (e) {
+      if (!sessionCurrent()) return;
       final vpnErr = asVpnError(e);
       AppLog.error(
         'provision failed kind=${vpnErr?.kind ?? e.runtimeType}',

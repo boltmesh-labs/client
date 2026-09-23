@@ -201,10 +201,15 @@ extension ConnectionTransport on ConnectionController {
     required String? oldPriv,
     required String? oldPub,
     required String label,
+    int? sessionEpoch,
   }) async {
-    if (oldPriv == null || oldPub == null) return;
+    final expectedSession = sessionEpoch ?? _sessionEpoch;
+    if (expectedSession != _sessionEpoch || oldPriv == null || oldPub == null) {
+      return;
+    }
     try {
       final current = await _device.privateKey();
+      if (expectedSession != _sessionEpoch) return;
       if (current != oldPriv) {
         AppLog.info('$label restoring previous keypair');
         await _device.setKeypair(privateKey: oldPriv, publicKey: oldPub);
@@ -228,7 +233,9 @@ extension ConnectionTransport on ConnectionController {
     required DialParams? oldDial,
     required String ambiguousPrefix,
     required String cleanPrefix,
+    int? sessionEpoch,
   }) {
+    if (sessionEpoch != null && sessionEpoch != _sessionEpoch) return;
     final wait = _noteRateLimit(vpnErr);
     final reason = wait != null
         ? _rateLimitMessage(wait)

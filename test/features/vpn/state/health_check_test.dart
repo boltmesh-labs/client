@@ -8,6 +8,7 @@ import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
+import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
 import 'package:boltmesh/features/vpn/state/connection_tuning.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
@@ -871,6 +872,23 @@ void main() {
     },
   );
 
+  test('an exiting stage enters outside-stop verification', () async {
+    final events = <String>[];
+    final (container, tunnel) = await seedConnected(events, (o) {
+      if (o.path.endsWith('/config')) return dialJson();
+      throw StateError('unexpected ${o.path}');
+    });
+    final ctl = container.read(connectionProvider.notifier);
+    staleHandshake(ctl);
+    tunnel.emit(VpnStage.exiting);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.idle);
+    expect(state.message, contains('outside the app'));
+    expect(events, contains('tunnel:stop'));
+  });
+
   test('unverifiable outside stop adopts and keeps the tunnel up', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
@@ -1151,6 +1169,72 @@ void main() {
     expect(events, contains('POST:/vpn-devices/dev-1/switch'));
   });
 
+  test('auto-failover surfaces a keypair persistence failure', () async {
+    final events = <String>[];
+    final (container, _) = await seedConnected(events, (o) {
+      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/status')) throw networkTimeout(o);
+      if (o.path.endsWith('/vpn-regions')) {
+        return regionsList(twoServers());
+      }
+      if (o.path.endsWith('/switch')) return dialJsonSrv2();
+      throw StateError('unexpected ${o.path}');
+    }, keyQueue: const [Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
+    final ctl = container.read(connectionProvider.notifier);
+    final store = container.read(deviceStoreProvider) as FakeStore;
+    store.setKeypairHook = (_, _) async {
+      throw StateError('secure storage unavailable');
+    };
+
+    for (var i = 0; i < 2; i++) {
+      await stallOnce(ctl);
+    }
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.error);
+    expect(state.message, contains('Could not save the recovered key'));
+    expect(await store.privateKey(), 'OLD-PRIV');
+  });
+
+  test(
+    'auto-failover rebinds when the switch finds a peerless device',
+    () async {
+      final events = <String>[];
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/status')) throw networkTimeout(o);
+          if (o.path.endsWith('/vpn-regions')) {
+            return regionsList(twoServers());
+          }
+          if (o.path.endsWith('/switch')) throw peerless(o);
+          if (o.path.endsWith('/connect')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        keyQueue: const [
+          Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
+          Keypair('FRESH-PRIV', 'FRESH-PUB'),
+        ],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+
+      for (var i = 0; i < 2; i++) {
+        await stallOnce(ctl);
+      }
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(state.autoFailoverAttempts, 1);
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
+      expect(
+        await container.read(deviceStoreProvider).privateKey(),
+        'FRESH-PRIV',
+      );
+    },
+  );
+
   test('failover transport failure restarts the old tunnel', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
@@ -1255,6 +1339,43 @@ void main() {
     // ...but the user must not see a perpetual "Connected" while every poll
     // fails: a degraded banner appears until a poll succeeds again.
     expect(state.healthNote, contains('Backend error (500)'));
+  });
+
+  test('answered 5xx suppresses a standard stale-handshake heal', () async {
+    final events = <String>[];
+    final (container, _) = await seedConnected(events, (o) {
+      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/status')) {
+        throw DioException(
+          requestOptions: o,
+          type: DioExceptionType.badResponse,
+          response: Response(
+            requestOptions: o,
+            statusCode: 500,
+            data: const {'detail': 'Internal Server Error'},
+          ),
+          error: const ApiException(
+            ApiErrorKind.unknown,
+            'Internal Server Error',
+            500,
+          ),
+        );
+      }
+      throw StateError('unexpected ${o.path}');
+    });
+    final ctl = container.read(connectionProvider.notifier);
+    staleHandshake(ctl);
+    events.clear();
+
+    await ctl.pollStatusOnce();
+    await ctl.checkHealthOnce();
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.backendIssue, BackendIssue.serverError);
+    expect(state.autoHealAttempts, 0);
+    expect(state.autoFailoverAttempts, 0);
+    expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
   });
 
   test('fresh poll successes suppress heals entirely', () async {
@@ -1376,6 +1497,67 @@ void main() {
     expect(events, contains('GET:/vpn-devices/dev-1/status'));
     expect(container.read(connectionProvider).pollFailures, 0);
     ctl.snap = ctl.snap.copyWith(phase: ConnPhase.connected);
+  });
+
+  test('a delayed status 404 cannot forget a restarted session', () async {
+    final events = <String>[];
+    final statusStarted = Completer<void>();
+    final releaseStatus = Completer<void>();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          events.add('${options.method}:${options.path}');
+          if (options.path.endsWith('/config')) {
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: dialJson(),
+              ),
+            );
+            return;
+          }
+          if (options.path.endsWith('/status')) {
+            if (!statusStarted.isCompleted) statusStarted.complete();
+            await releaseStatus.future;
+            handler.reject(missingDevice(options));
+            return;
+          }
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.badResponse,
+              error: StateError('unexpected ${options.path}'),
+            ),
+          );
+        },
+      ),
+    );
+    final store = FakeStore();
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: VpnApi(dio),
+    );
+    await store.setDeviceId('dev-1');
+    await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugTunnel = FakeTunnel(events);
+    await ctl.connect();
+    staleHandshake(ctl);
+    events.clear();
+
+    final poll = ctl.pollStatusOnce();
+    await statusStarted.future;
+    await ctl.checkHealthOnce();
+    releaseStatus.complete();
+    await poll;
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(await store.deviceId(), 'dev-1');
+    expect(state.autoHealAttempts, greaterThanOrEqualTo(1));
   });
 
   test('auto-heal preserves poll failures across the restart', () async {

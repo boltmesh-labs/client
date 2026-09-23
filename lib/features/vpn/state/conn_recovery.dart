@@ -19,11 +19,24 @@ extension ConnectionRecovery on ConnectionController {
   /// [ConnectionTuning.hardHandshakeStaleAfter]) bypasses the
   /// "backend reachable" suppression below: a reachable out-of-band control
   /// plane no longer proves the data path when the handshake is hard-dead.
-  Future<void> _autoHeal(String why, {bool hardStalled = false}) async {
+  Future<void> _autoHeal(
+    String why, {
+    bool hardStalled = false,
+    int? expectedSession,
+    int? expectedEpoch,
+    DialParams? expectedDial,
+  }) async {
     final release = await _mutex.acquire('auto-heal');
     try {
+      if (expectedSession != null && expectedSession != _sessionEpoch) return;
+      if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
+      if (expectedDial != null && !identical(snap.dial, expectedDial)) {
+        return;
+      }
       final dial = snap.dial;
       if (dial == null || snap.phase != ConnPhase.connected) return;
+      if (!hardStalled && _lastStatusAnswered) return;
+      final sessionEpoch = _sessionEpoch;
       final attempt = snap.autoHealAttempts + 1;
       // [_startWith] resets the failover budget; a same-server restart must
       // not consume or clear it. Poll failures are outage evidence, not
@@ -56,9 +69,16 @@ extension ConnectionRecovery on ConnectionController {
         return;
       }
       await _stopTunnel('auto-heal');
+      if (sessionEpoch != _sessionEpoch) return;
       try {
-        await _startWith(dial, preservePollFailures: true);
+        await _startWith(
+          dial,
+          preservePollFailures: true,
+          sessionEpoch: sessionEpoch,
+        );
+        if (sessionEpoch != _sessionEpoch) return;
       } catch (e) {
+        if (sessionEpoch != _sessionEpoch) return;
         final vpnErr = asVpnError(e);
         AppLog.error('auto-heal restart failed', vpnErr?.message ?? e);
         snap = snap.copyWith(
@@ -90,12 +110,26 @@ extension ConnectionRecovery on ConnectionController {
   /// surfaces an actionable error; the next Connect starts from a clean
   /// budget. Acquires [_mutex] and re-checks the phase, so a concurrent
   /// user op that took over during the tick's awaits is never clobbered.
-  Future<void> _surfaceRecoveryExhausted(String why) async {
+  Future<void> _surfaceRecoveryExhausted(
+    String why, {
+    bool hardStalled = false,
+    int? expectedSession,
+    int? expectedEpoch,
+    DialParams? expectedDial,
+  }) async {
+    final sessionEpoch = expectedSession ?? _sessionEpoch;
     final release = await _mutex.acquire('recovery-exhausted');
     try {
-      if (snap.phase != ConnPhase.connected) return;
+      if (sessionEpoch != _sessionEpoch ||
+          (expectedEpoch != null && expectedEpoch != _tunnelEpoch) ||
+          (expectedDial != null && !identical(snap.dial, expectedDial)) ||
+          (!hardStalled && _lastStatusAnswered) ||
+          snap.phase != ConnPhase.connected) {
+        return;
+      }
       AppLog.info('recovery exhausted ($why) ${_healBudgets()}');
       await _stopTunnel('recovery-exhausted');
+      if (sessionEpoch != _sessionEpoch) return;
       _stopPolling();
       _pollsSinceRotate = 0;
       _resetLocalHealth();
@@ -134,10 +168,52 @@ extension ConnectionRecovery on ConnectionController {
   /// same-server restart. The tunnel is stopped before discovery so the
   /// region fetch and the switch POST travel direct instead of probing a
   /// path already known bad.
-  Future<void> _autoFailover(String why, {bool tunnelPathDead = false}) async {
+  Future<void> _autoFailover(
+    String why, {
+    bool tunnelPathDead = false,
+    bool hardStalled = false,
+    int? expectedSession,
+    int? expectedEpoch,
+    DialParams? expectedDial,
+  }) async {
+    final sessionEpoch = expectedSession ?? _sessionEpoch;
     final release = await _mutex.acquire('auto-failover');
     try {
-      await _autoFailoverBody(why, tunnelPathDead: tunnelPathDead);
+      if (expectedSession != null && expectedSession != _sessionEpoch) return;
+      if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
+      if (expectedDial != null && !identical(snap.dial, expectedDial)) {
+        return;
+      }
+      if (!hardStalled && _lastStatusAnswered) return;
+      await _autoFailoverBody(
+        why,
+        tunnelPathDead: tunnelPathDead,
+        hardStalled: hardStalled,
+        expectedSession: sessionEpoch,
+        expectedEpoch: expectedEpoch,
+        expectedDial: expectedDial,
+      );
+    } catch (e) {
+      AppLog.error('auto-failover unexpected failure', e);
+      if (sessionEpoch != _sessionEpoch) return;
+      if (snap.phase == ConnPhase.working) {
+        _stopPolling();
+        snap = snap.copyWith(
+          phase: ConnPhase.error,
+          message:
+              'Automatic recovery failed ($why). '
+              'The device could not be updated. Tap Connect to retry.',
+          lastStage: null,
+          healthNote: null,
+          backendIssue: null,
+        );
+      } else if (snap.phase == ConnPhase.connected) {
+        snap = snap.copyWith(
+          healthNote:
+              'Automatic recovery paused ($why). '
+              'Device identity is temporarily unavailable.',
+        );
+      }
     } finally {
       release();
     }
@@ -147,12 +223,36 @@ extension ConnectionRecovery on ConnectionController {
   Future<void> _autoFailoverBody(
     String why, {
     bool tunnelPathDead = false,
+    bool hardStalled = false,
+    int? expectedSession,
+    int? expectedEpoch,
+    DialParams? expectedDial,
   }) async {
+    if (expectedSession != null && expectedSession != _sessionEpoch) return;
+    if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
+    if (expectedDial != null && !identical(snap.dial, expectedDial)) {
+      return;
+    }
+    if (!hardStalled && _lastStatusAnswered) return;
     final oldDial = snap.dial;
     if (oldDial == null) return;
     if (snap.phase != ConnPhase.connected) return;
+    final sessionEpoch = _sessionEpoch;
     final id = await _device.deviceId();
-    if (id == null) return;
+    if (sessionEpoch != _sessionEpoch ||
+        snap.phase != ConnPhase.connected ||
+        !identical(snap.dial, oldDial)) {
+      return;
+    }
+    if (id == null) {
+      AppLog.info('failover skipped (device identity unavailable)');
+      snap = snap.copyWith(
+        healthNote:
+            'Automatic recovery paused ($why). '
+            'Device identity is temporarily unavailable.',
+      );
+      return;
+    }
     // Respect an active 429 cooldown: retrying discovery/switch now only
     // spends more of the shared limiter budget. Stay connected — the next
     // health tick retries once the window reopens.
@@ -171,6 +271,7 @@ extension ConnectionRecovery on ConnectionController {
       autoFailoverAttempts: attempt,
       healthNote: 'Server unreachable ($why). Trying another server…',
     );
+    bool sessionCurrent() => sessionEpoch == _sessionEpoch;
     // A path-already-dead tunnel is stopped before discovery; otherwise
     // probe discovery through the live tunnel first and stop only when the
     // backend is unreachable through it (transport failure), so the
@@ -180,6 +281,7 @@ extension ConnectionRecovery on ConnectionController {
     List<Region>? regions;
     if (tunnelPathDead) {
       await _stopTunnel('auto-failover');
+      if (!sessionCurrent()) return;
       tunnelDown = true;
     } else if (_tunnel.isReady) {
       try {
@@ -188,11 +290,13 @@ extension ConnectionRecovery on ConnectionController {
           'failover discovery',
           timeout: ConnectionTuning.recoveryProbeTimeout,
         );
+        if (!sessionCurrent()) return;
       } catch (e) {
         // App-level rejection with the tunnel still up: the backend is
         // reachable, so keep the tunnel instead of flapping it. The next
         // health tick retries within the remaining failover budget.
         AppLog.error('failover discovery failed', e);
+        if (!sessionCurrent()) return;
         _noteRateLimit(asVpnError(e));
         _keepConnected();
         return;
@@ -200,18 +304,26 @@ extension ConnectionRecovery on ConnectionController {
     }
     if (regions == null && !tunnelDown) {
       await _stopTunnel('auto-failover');
+      if (!sessionCurrent()) return;
       tunnelDown = true;
     }
     if (regions == null) {
       try {
         regions = await _api.regions();
+        if (!sessionCurrent()) return;
       } catch (e) {
         AppLog.error('failover discovery failed', e);
         _noteRateLimit(asVpnError(e));
-        await _restartOldDial(oldDial, why, tunnelDown: tunnelDown);
+        await _restartOldDial(
+          oldDial,
+          why,
+          tunnelDown: tunnelDown,
+          sessionEpoch: sessionEpoch,
+        );
         return;
       }
     }
+    if (!sessionCurrent()) return;
     final target = _pickFailoverTarget(regions, oldDial);
     if (target == null) {
       if (snap.explicitTarget) {
@@ -222,8 +334,10 @@ extension ConnectionRecovery on ConnectionController {
         AppLog.info('failover pinned no-capacity ($pinned)');
         if (!tunnelDown) {
           await _stopTunnel('auto-failover');
+          if (!sessionCurrent()) return;
           tunnelDown = true;
         }
+        if (!sessionCurrent()) return;
         _stopPolling();
         _pollsSinceRotate = 0;
         snap = snap.copyWith(
@@ -243,7 +357,12 @@ extension ConnectionRecovery on ConnectionController {
       // momentum so the stall keeps healing instead of looping. There is
       // no config-refresh fallback left, so a reboot-rotated server key
       // can only be picked up by a manual reconnect.
-      await _restartOldDial(oldDial, why, tunnelDown: tunnelDown);
+      await _restartOldDial(
+        oldDial,
+        why,
+        tunnelDown: tunnelDown,
+        sessionEpoch: sessionEpoch,
+      );
       // Say why we stayed put after the restart reconnects.
       if (snap.phase == ConnPhase.connected &&
           snap.dial?.serverId == oldDial.serverId &&
@@ -286,50 +405,103 @@ extension ConnectionRecovery on ConnectionController {
       tunnelDown = switched.tunnelDown;
       if (switched.dial == null) {
         AppLog.error('failover switch network-failed', 'transport failure');
-        await _restartOldDial(oldDial, why, tunnelDown: tunnelDown);
+        await _restartOldDial(
+          oldDial,
+          why,
+          tunnelDown: tunnelDown,
+          sessionEpoch: sessionEpoch,
+        );
         return;
       }
       dial = switched.dial!;
       newPriv = kp.privateKey;
       newPub = kp.publicKey;
     } on DioException catch (e) {
+      final kind = asVpnError(e)?.kind;
       _noteRateLimit(asVpnError(e));
-      if (asVpnError(e)?.kind == ApiErrorKind.notFound) {
+      if (kind == ApiErrorKind.notFound) {
+        if (!sessionCurrent()) return;
         AppLog.info('failover 404 -> forget device');
         await _forgetDeviceAndIdle(
           stopReason: tunnelDown ? null : 'auto-failover',
         );
         return;
       }
+      if (kind == ApiErrorKind.noActivePeer) {
+        AppLog.info('failover peerless -> rebind fresh peer');
+        await _rebindAfterPeerless(
+          id: id,
+          target: target,
+          why: why,
+          attempt: attempt,
+          tunnelDown: tunnelDown,
+          sessionEpoch: sessionEpoch,
+        );
+        return;
+      }
       // App-level rejection with the tunnel still up proves the backend
       // reachable: keep the tunnel instead of flapping it.
       AppLog.error('failover switch failed', e);
+      if (!sessionCurrent()) return;
       if (!tunnelDown) {
         _keepConnected();
         return;
       }
-      await _restartOldDial(oldDial, why, tunnelDown: tunnelDown);
+      await _restartOldDial(
+        oldDial,
+        why,
+        tunnelDown: tunnelDown,
+        sessionEpoch: sessionEpoch,
+      );
       return;
     } catch (e) {
       AppLog.error('failover move failed', e);
+      if (!sessionCurrent()) return;
       if (!tunnelDown) {
         _keepConnected();
         return;
       }
-      await _restartOldDial(oldDial, why, tunnelDown: tunnelDown);
+      await _restartOldDial(
+        oldDial,
+        why,
+        tunnelDown: tunnelDown,
+        sessionEpoch: sessionEpoch,
+      );
       return;
     }
+    if (!sessionCurrent()) return;
     // Only now does the new key become the stored identity: it matches
     // the freshly bound server-side peer.
-    await _device.setKeypair(privateKey: newPriv, publicKey: newPub);
+    try {
+      await _device.setKeypair(privateKey: newPriv, publicKey: newPub);
+    } catch (e) {
+      AppLog.error('failover keypair persist failed', e);
+      if (!sessionCurrent()) return;
+      if (!tunnelDown) await _stopTunnel('auto-failover-persist-failed');
+      _stopPolling();
+      snap = snap.copyWith(
+        phase: ConnPhase.error,
+        message:
+            'Server unreachable ($why). Could not save the recovered key. '
+            'Tap Connect to retry.',
+        lastStage: null,
+        healthNote: null,
+        backendIssue: null,
+      );
+      return;
+    }
+    if (!sessionCurrent()) return;
     if (!tunnelDown) {
       // Through-tunnel switch success: single stop for the restart.
       await _stopTunnel('auto-failover-restart');
+      if (!sessionCurrent()) return;
       tunnelDown = true;
     }
     try {
-      await _startWith(dial);
+      await _startWith(dial, sessionEpoch: sessionEpoch);
+      if (!sessionCurrent()) return;
     } catch (e) {
+      if (!sessionCurrent()) return;
       final vpnErr = asVpnError(e);
       AppLog.error('failover restart failed', vpnErr?.message ?? e);
       _stopPolling();
@@ -341,6 +513,15 @@ extension ConnectionRecovery on ConnectionController {
       );
       return;
     }
+    _recordAutoFailoverSuccess(dial, target, attempt, why);
+  }
+
+  void _recordAutoFailoverSuccess(
+    DialParams dial,
+    ({String? regionId, String? serverId}) target,
+    int attempt,
+    String why,
+  ) {
     // [_startWith] resets heal health; re-assert the failover budget and
     // grant the new server fresh heals.
     snap = snap.copyWith(autoFailoverAttempts: attempt, autoHealAttempts: 0);
@@ -352,6 +533,50 @@ extension ConnectionRecovery on ConnectionController {
     AppLog.info(
       'failover ok ($why) attempt=$attempt server=${dial.serverName}',
     );
+  }
+
+  /// Rebinds a fresh peer after an automatic switch discovers that the
+  /// device was peerless. This mirrors the manual switch recovery instead of
+  /// restarting the stale cached dial.
+  Future<void> _rebindAfterPeerless({
+    required String id,
+    required ({String? regionId, String? serverId}) target,
+    required String why,
+    required int attempt,
+    required bool tunnelDown,
+    required int sessionEpoch,
+  }) async {
+    if (sessionEpoch != _sessionEpoch) return;
+    try {
+      if (!tunnelDown) {
+        await _stopTunnel('auto-failover-peerless');
+        if (sessionEpoch != _sessionEpoch) return;
+      }
+      final fresh = await _bindFreshPeer(
+        id,
+        regionId: target.regionId,
+        serverId: target.serverId,
+        sessionEpoch: sessionEpoch,
+      );
+      if (sessionEpoch != _sessionEpoch) return;
+      await _startWith(fresh, sessionEpoch: sessionEpoch);
+      if (sessionEpoch != _sessionEpoch) return;
+      _recordAutoFailoverSuccess(fresh, target, attempt, why);
+    } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
+      final vpnErr = asVpnError(e);
+      AppLog.error('failover peerless rebind failed', vpnErr?.message ?? e);
+      _stopPolling();
+      snap = snap.copyWith(
+        phase: ConnPhase.error,
+        message:
+            'Server unreachable ($why). Reconnect failed '
+            '(${vpnErr?.message ?? e}). Tap Connect.',
+        lastStage: null,
+        healthNote: null,
+        backendIssue: null,
+      );
+    }
   }
 
   /// Resolves the failover target for [oldDial] against fresh [regions].
@@ -399,6 +624,7 @@ extension ConnectionRecovery on ConnectionController {
     DialParams oldDial,
     String why, {
     bool tunnelDown = true,
+    required int sessionEpoch,
   }) async {
     // The failover count was already incremented before the tunnel stop;
     // [_startWith] resets it, so preserve it across the fallback restart.
@@ -406,10 +632,20 @@ extension ConnectionRecovery on ConnectionController {
     // the outage is still ongoing.
     final failovers = snap.autoFailoverAttempts;
     final pollFailures = snap.pollFailures;
-    if (!tunnelDown) await _stopTunnel('failover-fallback');
+    if (sessionEpoch != _sessionEpoch) return;
+    if (!tunnelDown) {
+      await _stopTunnel('failover-fallback');
+      if (sessionEpoch != _sessionEpoch) return;
+    }
     try {
-      await _startWith(oldDial, preservePollFailures: true);
+      await _startWith(
+        oldDial,
+        preservePollFailures: true,
+        sessionEpoch: sessionEpoch,
+      );
+      if (sessionEpoch != _sessionEpoch) return;
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error('failover fallback restart failed', vpnErr?.message ?? e);
       snap = snap.copyWith(

@@ -12,28 +12,39 @@ extension ConnectionConnect on ConnectionController {
     String? oneShotRegionId,
     String? oneShotServerId,
     DialParams? knownDial,
+    int? sessionEpoch,
   }) async {
+    final expectedSession = sessionEpoch ?? _sessionEpoch;
+    bool sessionCurrent() => expectedSession == _sessionEpoch;
+    if (!sessionCurrent()) return;
     var id = await _device.deviceId();
+    if (!sessionCurrent()) return;
     AppLog.info('connect start gen=$_tunnelEpoch device=${AppLog.redact(id)}');
     if (id == null) {
       // Freshly provisioned devices come back bound; dial straight away
       // instead of re-reading `config`. [_provision] is lock-free and
       // runs under this op's mutex slot.
-      await _provision(regionId: oneShotRegionId, serverId: oneShotServerId);
+      await _provision(
+        regionId: oneShotRegionId,
+        serverId: oneShotServerId,
+        sessionEpoch: expectedSession,
+      );
+      if (!sessionCurrent()) return;
       final provisioned = snap.dial;
       id = await _device.deviceId();
+      if (!sessionCurrent()) return;
       if (id == null || provisioned == null) {
         throw StateError('Provisioning did not return a device.');
       }
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Connecting…');
-      await _startWith(provisioned);
+      await _startWith(provisioned, sessionEpoch: expectedSession);
       return;
     }
     snap = snap.copyWith(phase: ConnPhase.working, message: 'Connecting…');
     if (knownDial != null) {
       // Caller already probed server truth (Auto Quick Connect): start the
       // live peer directly instead of re-reading `config`.
-      await _startWith(knownDial);
+      await _startWith(knownDial, sessionEpoch: expectedSession);
       return;
     }
     if (oneShotRegionId != null || oneShotServerId != null) {
@@ -44,14 +55,17 @@ extension ConnectionConnect on ConnectionController {
         id,
         regionId: oneShotRegionId,
         serverId: oneShotServerId,
+        sessionEpoch: expectedSession,
       );
-      await _startWith(dial);
+      if (!sessionCurrent()) return;
+      await _startWith(dial, sessionEpoch: expectedSession);
       return;
     }
     try {
       AppLog.info('connect config device=${AppLog.redact(id)}');
       final dial = await _api.config(id);
-      await _startWith(dial);
+      if (!sessionCurrent()) return;
+      await _startWith(dial, sessionEpoch: expectedSession);
       return;
     } on DioException catch (e) {
       // Only peerless (config after disconnect/GC) falls through to a
@@ -71,8 +85,10 @@ extension ConnectionConnect on ConnectionController {
       id,
       regionId: oneShotRegionId,
       serverId: oneShotServerId,
+      sessionEpoch: expectedSession,
     );
-    await _startWith(dial);
+    if (!sessionCurrent()) return;
+    await _startWith(dial, sessionEpoch: expectedSession);
   }
 
   /// Binds a fresh client peer for [deviceId] and returns the dial params.
@@ -90,8 +106,17 @@ extension ConnectionConnect on ConnectionController {
     String? regionId,
     String? serverId,
     CancelToken? cancelToken,
+    int? sessionEpoch,
   }) async {
+    final expectedSession = sessionEpoch ?? _sessionEpoch;
+    bool sessionCurrent() => expectedSession == _sessionEpoch;
+    if (!sessionCurrent()) {
+      throw StateError('Session changed before peer bind.');
+    }
     final kp = await _keys.generate();
+    if (!sessionCurrent()) {
+      throw StateError('Session changed before peer bind.');
+    }
     AppLog.info(
       'connect bind device=${AppLog.redact(deviceId)} '
       'pubkey=${AppLog.redact(kp.publicKey)}',
@@ -103,6 +128,9 @@ extension ConnectionConnect on ConnectionController {
       regionId: regionId ?? snap.regionId,
       cancelToken: cancelToken,
     );
+    if (!sessionCurrent()) {
+      throw StateError('Session changed after peer bind.');
+    }
     if (cancelToken != null && cancelToken.isCancelled) {
       // The caller already moved on: persisting now would bind this key
       // after the fallback's key, mismatching store and server.
@@ -115,6 +143,9 @@ extension ConnectionConnect on ConnectionController {
       privateKey: kp.privateKey,
       publicKey: kp.publicKey,
     );
+    if (!sessionCurrent()) {
+      throw StateError('Session changed after peer persistence.');
+    }
     return dial;
   }
 
@@ -127,18 +158,22 @@ extension ConnectionConnect on ConnectionController {
     DialParams? knownDial,
   }) async {
     final release = await _mutex.acquire('connect');
+    final sessionEpoch = _sessionEpoch;
     try {
       // A throttled client must not keep spending the shared per-IP limiter
       // budget: surface the countdown and skip the network entirely.
       if (_blockedByRateLimit('connect')) return;
+      if (sessionEpoch != _sessionEpoch) return;
       // Only an actual failure below sets the feedback flag again.
       snap = snap.copyWith(opFailed: false);
       await _connectBody(
         oneShotRegionId: oneShotRegionId,
         oneShotServerId: oneShotServerId,
         knownDial: knownDial,
+        sessionEpoch: sessionEpoch,
       );
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error(
         'connect failed kind=${vpnErr?.kind ?? e.runtimeType}',
@@ -148,16 +183,21 @@ extension ConnectionConnect on ConnectionController {
       if (vpnErr?.kind == ApiErrorKind.alreadyConnected) {
         AppLog.info('connect already-connected -> reload config');
         final id = await _device.deviceId();
+        if (sessionEpoch != _sessionEpoch) return;
         if (id != null) {
           try {
             final dial = await _api.config(id);
-            await _startWith(dial);
+            if (sessionEpoch != _sessionEpoch) return;
+            await _startWith(dial, sessionEpoch: sessionEpoch);
+            if (sessionEpoch != _sessionEpoch) return;
             await _pinCanonicalTarget(
               dial,
               regionRequest: snap.regionId != null,
             );
+            if (sessionEpoch != _sessionEpoch) return;
             return;
           } catch (e2) {
+            if (sessionEpoch != _sessionEpoch) return;
             final inner = asVpnError(e2);
             AppLog.error(
               'connect reload failed kind=${inner?.kind ?? e2.runtimeType}',
@@ -180,22 +220,27 @@ extension ConnectionConnect on ConnectionController {
         // (or the one-shot Auto pick).
         AppLog.info('connect key-in-use -> retry once with fresh key');
         final retryId = await _device.deviceId();
+        if (sessionEpoch != _sessionEpoch) return;
         if (retryId != null) {
           try {
             final kp = await _keys.generate();
+            if (sessionEpoch != _sessionEpoch) return;
             final dial = await _api.connect(
               deviceId: retryId,
               publicKey: kp.publicKey,
               serverId: oneShotServerId ?? snap.serverId,
               regionId: oneShotRegionId ?? snap.regionId,
             );
+            if (sessionEpoch != _sessionEpoch) return;
             await _device.setKeypair(
               privateKey: kp.privateKey,
               publicKey: kp.publicKey,
             );
-            await _startWith(dial);
+            if (sessionEpoch != _sessionEpoch) return;
+            await _startWith(dial, sessionEpoch: sessionEpoch);
             return;
           } catch (e2) {
+            if (sessionEpoch != _sessionEpoch) return;
             final inner = asVpnError(e2);
             AppLog.error(
               'connect retry failed kind=${inner?.kind ?? e2.runtimeType}',
@@ -213,9 +258,11 @@ extension ConnectionConnect on ConnectionController {
           }
         }
       }
+      if (sessionEpoch != _sessionEpoch) return;
       if (vpnErr?.kind == ApiErrorKind.notFound) {
         await _device.clearDevice();
       }
+      if (sessionEpoch != _sessionEpoch) return;
       snap = snap.copyWith(
         phase: ConnPhase.error,
         message: rateWait != null
@@ -252,7 +299,9 @@ extension ConnectionConnect on ConnectionController {
   ///  - peerless → `connect` a fresh peer on [best].
   /// Auto stays unpinned throughout (no [selectTarget]).
   Future<void> _autoConnectRegion(Region best) async {
+    final sessionEpoch = _sessionEpoch;
     final id = await _device.deviceId();
+    if (sessionEpoch != _sessionEpoch) return;
     if (id == null) {
       await _connectOp(oneShotRegionId: best.id);
       return;
@@ -261,6 +310,7 @@ extension ConnectionConnect on ConnectionController {
     try {
       live = await _probeActiveDial(id);
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error('quick connect probe failed', vpnErr?.message ?? e);
       final wait = _noteRateLimit(vpnErr);
@@ -274,7 +324,9 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Another op may have taken over while the probe was in flight.
-    if (snap.phase == ConnPhase.working) return;
+    if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+      return;
+    }
     if (live == null) {
       await _connectOp(oneShotRegionId: best.id);
       return;
@@ -311,6 +363,7 @@ extension ConnectionConnect on ConnectionController {
   /// check. A stale pin surfaces the backend error with the pin kept (no
   /// silent auto-pick fallback).
   Future<void> _quickConnectOp() async {
+    final sessionEpoch = _sessionEpoch;
     if (snap.phase == ConnPhase.working) return;
     // A throttled client must not run discovery or bind a peer either:
     // surface the countdown and skip the network entirely.
@@ -333,7 +386,9 @@ extension ConnectionConnect on ConnectionController {
     try {
       final saved = await _device.lastTarget();
       // Another op may have taken over while reading the store.
-      if (snap.phase == ConnPhase.working) return;
+      if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+        return;
+      }
       if (saved.serverId != null || saved.regionId != null) {
         if (snap.phase == ConnPhase.connected) {
           await switchServer(
@@ -351,12 +406,14 @@ extension ConnectionConnect on ConnectionController {
         return;
       }
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       AppLog.error('quick connect saved target read failed', e);
     }
     final List<Region> regions;
     try {
       regions = await _api.regions();
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error('quick connect discovery failed', vpnErr?.message ?? e);
       final wait = _noteRateLimit(vpnErr);
@@ -369,6 +426,7 @@ extension ConnectionConnect on ConnectionController {
       );
       return;
     }
+    if (sessionEpoch != _sessionEpoch) return;
     final best = autoPickRegion(regions);
     if (best == null) {
       AppLog.info('quick connect: no capacity');
@@ -379,7 +437,9 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Discovery awaited above: another op may have taken over meanwhile.
-    if (snap.phase == ConnPhase.working) return;
+    if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+      return;
+    }
     // Auto stays unpinned: one-shot the picked region without pinning, so
     // the next connect re-picks fresh.
     if (snap.phase == ConnPhase.connected) {

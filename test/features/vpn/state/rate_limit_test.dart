@@ -2,6 +2,7 @@ import 'package:boltmesh/core/errors.dart';
 import 'package:boltmesh/features/vpn/data/device_store.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
+import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -62,6 +63,31 @@ ProviderContainer makeContainer({
 }
 
 void main() {
+  test('429 on status arms the client cooldown', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw rateLimited(o, seconds: 5);
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final container = makeContainer(store: store, api: api);
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugTunnel = FakeTunnel(events);
+    await store.setDeviceId('dev-1');
+    await store.setKeypair(privateKey: 'P', publicKey: 'PUB');
+    await ctl.connect();
+
+    await ctl.pollStatusOnce();
+
+    final state = container.read(connectionProvider);
+    expect(state.pollFailures, 0);
+    expect(state.backendIssue, BackendIssue.serverError);
+    expect(ctl.debugRateLimitedUntil, isNotNull);
+  });
+
   test('429 on connect arms a cooldown and skips the next attempt', () async {
     final events = <String>[];
     final store = FakeStore();

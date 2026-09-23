@@ -5,6 +5,7 @@ extension ConnectionTunnel on ConnectionController {
   /// counters) whenever the tunnel is no longer the one they describe.
   void _resetLocalHealth() {
     _connectedAt = null;
+    _lastStatusAnswered = false;
     // A new tunnel generation re-earns its dead-echo strikes (see
     // [ConnectionTuning.echoStallStrikes]); a dead server will re-confirm
     // within a few ticks, while a recovered tunnel is never pre-charged.
@@ -105,7 +106,12 @@ extension ConnectionTunnel on ConnectionController {
   Future<void> _startWith(
     DialParams dial, {
     bool preservePollFailures = false,
+    int? sessionEpoch,
   }) async {
+    final expectedSession = sessionEpoch ?? _sessionEpoch;
+    bool sessionCurrent() => expectedSession == _sessionEpoch;
+    if (!sessionCurrent()) return;
+
     // Validate the Apple bundle ID before touching the live tunnel: a
     // missing define must fail fast instead of stopping the working tunnel
     // and then throwing.
@@ -115,7 +121,10 @@ extension ConnectionTunnel on ConnectionController {
       'server=${dial.serverName} ${dial.endpoint}:${dial.wgPort}',
     );
     final priv = await _device.privateKey();
+    if (!sessionCurrent()) return;
     if (priv == null) throw StateError('Missing private key. Reprovision.');
+    final allowLocal = await _device.allowLocal();
+    if (!sessionCurrent()) return;
     final conf = buildWgQuickConfig(
       privateKey: priv,
       assignedIp: dial.assignedIp,
@@ -123,12 +132,14 @@ extension ConnectionTunnel on ConnectionController {
       endpointHost: dial.endpoint,
       endpointPort: dial.wgPort,
       dns: dial.wgDns,
-      allowLocal: await _device.allowLocal(),
+      allowLocal: allowLocal,
     );
     await _ensureTunnelInit();
+    if (!sessionCurrent()) return;
     if (snap.phase == ConnPhase.connected) {
       // Never run two live tunnels (Windows/Wintun route wedge).
       await _stopTunnel('restart');
+      if (!sessionCurrent()) return;
     }
     // Apple platforms only (see `resolveProviderBundleId`): the plugin
     // requires a non-null String and ignores it on every other OS.
@@ -137,6 +148,13 @@ extension ConnectionTunnel on ConnectionController {
       wgQuickConfig: conf,
       providerBundleId: bundleId,
     );
+    if (!sessionCurrent()) {
+      // The auth listener can invalidate the operation while the native
+      // start call is in flight. Do not leave that old tunnel running; the
+      // serialized revocation cleanup will also clear its device identity.
+      await _stopTunnel('session-invalidated');
+      return;
+    }
     AppLog.info(
       'tunnel connected gen=$_tunnelEpoch device=${AppLog.redact(dial.deviceId)} '
       'server=${dial.serverName}',
@@ -174,6 +192,11 @@ extension ConnectionTunnel on ConnectionController {
       await _device.setLastDialJson(jsonEncode(dial.toJson()));
     } catch (e) {
       AppLog.error('persist dial failed', e);
+    }
+    if (!sessionCurrent()) {
+      await _stopTunnel('session-invalidated');
+      snap = const ConnState(message: 'Session ended. Please log in again.');
+      return;
     }
     _resetLocalHealth();
     // Anchor the never-handshook branch of the handshake policy (see

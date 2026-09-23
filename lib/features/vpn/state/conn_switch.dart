@@ -29,6 +29,7 @@ extension ConnectionSwitch on ConnectionController {
       return;
     }
     final release = await _mutex.acquire('switch');
+    final sessionEpoch = _sessionEpoch;
     final oldDial = snap.dial;
     final wasConnected = snap.phase == ConnPhase.connected;
     // Snapshot the working identity: the fresh key stays ephemeral until
@@ -57,6 +58,7 @@ extension ConnectionSwitch on ConnectionController {
       oldPriv = await _device.privateKey();
       oldPub = await _device.publicKey();
       id = await _device.deviceId();
+      if (sessionEpoch != _sessionEpoch) return;
       AppLog.info(
         'switch start gen=$_tunnelEpoch device=${AppLog.redact(id)} '
         'region=${regionId ?? '<null>'} server=${serverId ?? '<null>'}',
@@ -73,12 +75,18 @@ extension ConnectionSwitch on ConnectionController {
             explicitTarget: explicitTarget,
           );
         }
-        await _provision(regionId: regionId, serverId: serverId);
-        await _connectBody();
+        await _provision(
+          regionId: regionId,
+          serverId: serverId,
+          sessionEpoch: sessionEpoch,
+        );
+        await _connectBody(sessionEpoch: sessionEpoch);
+        if (sessionEpoch != _sessionEpoch) return;
         return;
       }
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Switching…');
       final kp = await _keys.generate();
+      if (sessionEpoch != _sessionEpoch) return;
       final deviceId = id;
       // Probe through the live tunnel first (loopback APIs bypass it without
       // a short timeout, but still without stopping). The tunnel is stopped
@@ -93,15 +101,24 @@ extension ConnectionSwitch on ConnectionController {
         ),
         wasConnected: wasConnected,
         stopLabel: 'switch',
-        onFallbackStart: () => snap = snap.copyWith(
-          phase: ConnPhase.working,
-          message: 'Retrying over direct connection…',
-        ),
-        onFallbackEnd: () => snap = snap.copyWith(
-          phase: ConnPhase.working,
-          message: 'Switching…',
-        ),
+        onFallbackStart: () {
+          if (sessionEpoch == _sessionEpoch) {
+            snap = snap.copyWith(
+              phase: ConnPhase.working,
+              message: 'Retrying over direct connection…',
+            );
+          }
+        },
+        onFallbackEnd: () {
+          if (sessionEpoch == _sessionEpoch) {
+            snap = snap.copyWith(
+              phase: ConnPhase.working,
+              message: 'Switching…',
+            );
+          }
+        },
       );
+      if (sessionEpoch != _sessionEpoch) return;
       tunnelDown = result.tunnelDown;
       // The in-tunnel probe failed at transport level: the server-side
       // outcome is unknown, so a double failure must say so below.
@@ -119,14 +136,19 @@ extension ConnectionSwitch on ConnectionController {
       // The tunnel may still be up (in-tunnel success): never run two live
       // tunnels (Windows/Wintun route wedge). Skipped when the fallback path
       // already stopped it.
-      if (!tunnelDown) await _stopTunnel('switch-restart');
+      if (!tunnelDown) {
+        await _stopTunnel('switch-restart');
+        if (sessionEpoch != _sessionEpoch) return;
+      }
       // Only now does the new key become the stored identity: it matches the
       // freshly bound server-side peer.
       await _device.setKeypair(
         privateKey: kp.privateKey,
         publicKey: kp.publicKey,
       );
-      await _startWith(dial);
+      if (sessionEpoch != _sessionEpoch) return;
+      await _startWith(dial, sessionEpoch: sessionEpoch);
+      if (sessionEpoch != _sessionEpoch) return;
       // Record the exact new target (one side is null by contract) so the
       // Regions tab highlights it and reconnects keep it. One-shot Auto
       // moves skip this so the state stays unpinned.
@@ -138,6 +160,7 @@ extension ConnectionSwitch on ConnectionController {
         );
       }
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error(
         'switch failed kind=${vpnErr?.kind ?? e.runtimeType}',
@@ -154,10 +177,13 @@ extension ConnectionSwitch on ConnectionController {
           if (!tunnelDown &&
               (snap.phase == ConnPhase.connected || wasConnected)) {
             await _stopTunnel('switch');
+            if (sessionEpoch != _sessionEpoch) return;
             tunnelDown = true;
           }
           final dial = await _api.config(id);
-          await _startWith(dial);
+          if (sessionEpoch != _sessionEpoch) return;
+          await _startWith(dial, sessionEpoch: sessionEpoch);
+          if (sessionEpoch != _sessionEpoch) return;
           // A one-shot Auto move recovers onto the live dial without
           // pinning; explicit moves re-pin the canonical target (user
           // intent, even though the post-success pin hasn't landed yet).
@@ -168,8 +194,10 @@ extension ConnectionSwitch on ConnectionController {
               preserveAuto: false,
             );
           }
+          if (sessionEpoch != _sessionEpoch) return;
           return;
         } catch (e2) {
+          if (sessionEpoch != _sessionEpoch) return;
           AppLog.error('switch already-bound reload failed', e2);
           _noteRateLimit(asVpnError(e2));
           // Fall through to the failure surfacing below.
@@ -198,16 +226,21 @@ extension ConnectionSwitch on ConnectionController {
           // and so the bind POST travels over the direct network.
           if (!tunnelDown) {
             await _stopTunnel('switch');
+            if (sessionEpoch != _sessionEpoch) return;
             tunnelDown = true;
           }
           final fresh = await _bindFreshPeer(
             id,
             regionId: regionId,
             serverId: serverId,
+            sessionEpoch: sessionEpoch,
           );
-          await _startWith(fresh);
+          if (sessionEpoch != _sessionEpoch) return;
+          await _startWith(fresh, sessionEpoch: sessionEpoch);
+          if (sessionEpoch != _sessionEpoch) return;
           return;
         } catch (e2) {
+          if (sessionEpoch != _sessionEpoch) return;
           AppLog.error('switch peerless bind failed', e2);
           _noteRateLimit(asVpnError(e2));
           // Fall through to the failure surfacing below.
@@ -215,7 +248,12 @@ extension ConnectionSwitch on ConnectionController {
       }
       // On a clean failure the POST never bound the ephemeral key and the
       // old pair still matches the server-side peer.
-      await _restoreKeypair(oldPriv: oldPriv, oldPub: oldPub, label: 'switch');
+      await _restoreKeypair(
+        oldPriv: oldPriv,
+        oldPub: oldPub,
+        label: 'switch',
+        sessionEpoch: sessionEpoch,
+      );
       // A double transport failure leaves the server-side outcome uncertain,
       // so say so: a Connect reconciles via config/connect. The fallback path
       // stops the tunnel before the direct POST, so a failure there means no
@@ -232,6 +270,7 @@ extension ConnectionSwitch on ConnectionController {
         cleanPrefix:
             'Switch failed, still on '
             '${oldDial?.serverName ?? 'the old server'}.',
+        sessionEpoch: sessionEpoch,
       );
     } finally {
       release();
@@ -257,8 +296,23 @@ extension ConnectionSwitch on ConnectionController {
       return;
     }
     final release = await _mutex.acquire(auto ? 'auto-rotate' : 'rotate');
-    final oldDial = snap.dial;
-    final wasConnected = snap.phase == ConnPhase.connected;
+    if (snap.phase != ConnPhase.connected || snap.dial == null) {
+      AppLog.info(
+        'rotate skipped (${auto ? 'auto' : 'manual'} session not connected)',
+      );
+      if (!auto) {
+        snap = snap.copyWith(
+          phase: ConnPhase.error,
+          message: 'No connected tunnel to rotate. Connect first.',
+          opFailed: true,
+        );
+      }
+      release();
+      return;
+    }
+    final oldDial = snap.dial!;
+    const wasConnected = true;
+    final sessionEpoch = _sessionEpoch;
     // Snapshot the working identity; read inside the `try` so a throwing
     // secure-storage read still releases the mutex (see _switchServerOp).
     String? oldPriv;
@@ -273,6 +327,7 @@ extension ConnectionSwitch on ConnectionController {
       oldPriv = await _device.privateKey();
       oldPub = await _device.publicKey();
       final id = await _device.deviceId();
+      if (sessionEpoch != _sessionEpoch) return;
       if (id == null) {
         if (!auto) {
           snap = snap.copyWith(
@@ -290,6 +345,7 @@ extension ConnectionSwitch on ConnectionController {
         );
       }
       final kp = await _keys.generate();
+      if (sessionEpoch != _sessionEpoch) return;
       final deviceId = id;
       // Probe through the live tunnel first; stop only when the backend is
       // unreachable through the current path (same rule as switch).
@@ -300,17 +356,24 @@ extension ConnectionSwitch on ConnectionController {
         stopLabel: 'rotate',
         onFallbackStart: auto
             ? null
-            : () => snap = snap.copyWith(
-                phase: ConnPhase.working,
-                message: 'Retrying over direct connection…',
-              ),
+            : () {
+                if (sessionEpoch != _sessionEpoch) return;
+                snap = snap.copyWith(
+                  phase: ConnPhase.working,
+                  message: 'Retrying over direct connection…',
+                );
+              },
         onFallbackEnd: auto
             ? null
-            : () => snap = snap.copyWith(
-                phase: ConnPhase.working,
-                message: 'Rotating…',
-              ),
+            : () {
+                if (sessionEpoch != _sessionEpoch) return;
+                snap = snap.copyWith(
+                  phase: ConnPhase.working,
+                  message: 'Rotating…',
+                );
+              },
       );
+      if (sessionEpoch != _sessionEpoch) return;
       tunnelDown = result.tunnelDown;
       ambiguous = result.probeTransportFailure;
       final dial = result.dial;
@@ -323,22 +386,34 @@ extension ConnectionSwitch on ConnectionController {
           'Rotate request failed. Check your connection and retry.',
         );
       }
-      if (!tunnelDown) await _stopTunnel('rotate-restart');
+      if (sessionEpoch != _sessionEpoch) return;
+      if (!tunnelDown) {
+        await _stopTunnel('rotate-restart');
+        if (sessionEpoch != _sessionEpoch) return;
+      }
       await _device.setKeypair(
         privateKey: kp.privateKey,
         publicKey: kp.publicKey,
       );
-      await _startWith(dial);
+      if (sessionEpoch != _sessionEpoch) return;
+      await _startWith(dial, sessionEpoch: sessionEpoch);
+      if (sessionEpoch != _sessionEpoch) return;
       _pollsSinceRotate = 0;
       AppLog.info('rotate ok device=${AppLog.redact(id)} auto=$auto');
     } catch (e) {
+      if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
       AppLog.error(
         'rotate failed kind=${vpnErr?.kind ?? e.runtimeType} auto=$auto',
         vpnErr?.message ?? e,
       );
       _noteRateLimit(vpnErr);
-      await _restoreKeypair(oldPriv: oldPriv, oldPub: oldPub, label: 'rotate');
+      await _restoreKeypair(
+        oldPriv: oldPriv,
+        oldPub: oldPub,
+        label: 'rotate',
+        sessionEpoch: sessionEpoch,
+      );
       // A failure after the fallback stop leaves no tunnel running: it must
       // surface `error` even for background rotations, otherwise the UI stays
       // `connected` with the old dial while nothing runs. Only a failure with
@@ -354,6 +429,7 @@ extension ConnectionSwitch on ConnectionController {
         ambiguousPrefix:
             'Rotate status unknown (request may have reached the server).',
         cleanPrefix: 'Rotate failed, still on the old key.',
+        sessionEpoch: sessionEpoch,
       );
     } finally {
       release();

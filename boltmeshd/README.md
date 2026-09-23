@@ -186,9 +186,12 @@ and on uninstall:
 boltmeshd.exe -uninstall   # stop + delete the service
 ```
 
-The `boltmeshd` service is auto-start. The GUI needs no elevation: it talks to
-the named pipe and the daemon creates/starts the `boltmesh0` tunnel service on
-demand. `-console` runs the daemon in the foreground for development.
+The `boltmeshd` service is auto-start. Installation also configures the
+Service Control Manager to restart the helper after 5, 15, and 60 seconds if it
+fails; the recovery count resets after 24 hours of healthy service. The GUI
+needs no elevation: it talks to the named pipe and the daemon creates/starts the
+`boltmesh0` tunnel service on demand. `-console` runs the daemon in the
+foreground for development.
 
 The config lives under `%ProgramData%\BoltMesh`. The daemon tightens that
 directory and the config file to a protected DACL granting only SYSTEM and

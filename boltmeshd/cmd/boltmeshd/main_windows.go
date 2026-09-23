@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -152,8 +153,37 @@ func installService() error {
 		return fmt.Errorf("open service %s: %w", windowsServiceName, err)
 	}
 	defer func() { _ = handle.Close() }()
+	if err := configureServiceRecovery(handle); err != nil {
+		return fmt.Errorf("configure service %s: %w", windowsServiceName, err)
+	}
 	if err := handle.Start(); err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
 		return fmt.Errorf("start service %s: %w", windowsServiceName, err)
+	}
+	return nil
+}
+
+const serviceRecoveryResetPeriod = 24 * 60 * 60 // seconds
+
+// serviceRecoveryActions is deliberately conservative: retry a daemon failure
+// with increasing delays. If failures continue, the SCM repeats the final
+// action; the reset period clears the failure count after a day of healthy
+// service, so recovery remains automatic without a tight crash loop.
+func serviceRecoveryActions() []mgr.RecoveryAction {
+	return []mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}
+}
+
+func configureServiceRecovery(handle *mgr.Service) error {
+	if err := handle.SetRecoveryActions(serviceRecoveryActions(), serviceRecoveryResetPeriod); err != nil {
+		return fmt.Errorf("configure service recovery actions: %w", err)
+	}
+	// Execute returns a non-zero service exit code for a serve failure. Ask
+	// SCM to treat that explicit non-crash failure as recoverable too.
+	if err := handle.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return fmt.Errorf("configure service recovery trigger: %w", err)
 	}
 	return nil
 }

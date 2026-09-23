@@ -225,13 +225,21 @@ class FakeDeviceStore extends DeviceStore {
   @override
   Future<String?> publicKey() async => _m['pub'];
 
+  /// Test hook run before a keypair write; lets recovery tests model a
+  /// secure-storage failure without replacing the whole store.
+  Future<void> Function(String privateKey, String publicKey)? setKeypairHook;
+
   @override
   Future<void> setKeypair({
     required String privateKey,
     required String publicKey,
-  }) async => _m
-    ..['priv'] = privateKey
-    ..['pub'] = publicKey;
+  }) async {
+    final hook = setKeypairHook;
+    if (hook != null) await hook(privateKey, publicKey);
+    _m
+      ..['priv'] = privateKey
+      ..['pub'] = publicKey;
+  }
 
   @override
   Future<String?> deviceName() async => _m['name'];

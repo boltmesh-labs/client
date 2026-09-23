@@ -97,9 +97,28 @@ class ConnectionController extends Notifier<ConnState> {
   /// to `connected` before the poll failed.
   int _tunnelEpoch = 0;
 
+  /// Bumped whenever the authenticated session changes. Recovery operations
+  /// capture it before any network/storage await and refuse to start a tunnel
+  /// again after a revocation (or a subsequent login) has superseded them.
+  int _sessionEpoch = 0;
+
   /// Background ticks (status poll + local health check); run only while
   /// connected (see [_startPolling]). Lifecycle owned by [PollingService].
   final PollingService _polling = PollingService();
+
+  /// True when the most recent status request received an application-level
+  /// response (including 401/403/409/429/5xx). A response proves the control
+  /// plane was reachable even when it rejected the request, so health must
+  /// not reinterpret it as a transport outage. Reset with the tunnel/session
+  /// health anchor in [_resetLocalHealth].
+  bool _lastStatusAnswered = false;
+
+  /// Shared single-flight guards for public/manual ticks as well as timer
+  /// ticks. Resume catch-up calls the public methods directly, so the
+  /// [PollingService] flags alone are not sufficient to prevent duplicate
+  /// status requests or overlapping recovery probes.
+  Future<void>? _statusPollInFlight;
+  Future<void>? _healthCheckInFlight;
 
   /// True while the app is hidden (paused), driven by [ResumeCoordinator].
   /// Slows the health tick onto [PollingService.backgroundHealthCheckInterval]
@@ -230,24 +249,33 @@ class ConnectionController extends Notifier<ConnState> {
     // logout already releases the device first; this covers the automatic
     // path.
     ref.listen(authProvider, (prev, next) {
-      final wasAuthed = prev?.value?.status == AuthStatus.authenticated;
-      final nowUnauth = next.value?.status == AuthStatus.unauthenticated;
+      // Every auth transition gets a generation, including a new login after
+      // a revocation. Recovery callbacks that were already awaiting a server
+      // or storage operation must not be allowed to resurrect a tunnel into a
+      // session that is no longer current.
+      final previousStatus = prev?.value?.status;
+      final nextStatus = next.value?.status;
+      // Loading → authenticated is startup hydration, not a session change;
+      // counting it would invalidate a cold restore that starts alongside the
+      // auth gate. Only an actual authenticated/unauthenticated transition
+      // supersedes recovery work.
+      if (previousStatus != null &&
+          nextStatus != null &&
+          previousStatus != nextStatus) {
+        _sessionEpoch++;
+      }
+      final wasAuthed = previousStatus == AuthStatus.authenticated;
+      final nowUnauth = nextStatus == AuthStatus.unauthenticated;
       if (!wasAuthed || !nowUnauth) return;
+      final sessionEpoch = _sessionEpoch;
       _stopPolling();
       _pollsSinceRotate = 0;
       _resetLocalHealth();
       _coldRestore.clear();
-      // Fire-and-forget: listen callbacks are sync; failures only log.
-      unawaited(
-        _stopTunnel('session-revoked').catchError((Object e) {
-          AppLog.error('session-revoked stop failed', e);
-        }),
-      );
-      unawaited(
-        _device.clearDevice().catchError((Object e) {
-          AppLog.error('session-revoked clear device failed', e);
-        }),
-      );
+      // Serialize teardown with an in-flight connect/heal/failover. The
+      // teardown is queued before any post-login VPN operation, so a later
+      // login cannot inherit the revoked device or tunnel.
+      unawaited(_teardownRevokedSession(sessionEpoch));
       state = const ConnState(message: 'Session ended. Please log in again.');
     });
     // React to OS link transitions instead of only on the next health tick:
@@ -302,10 +330,10 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> rotateKeys({bool auto = false}) => _rotateKeysOp(auto: auto);
 
   /// One status poll tick (`GET /vpn-devices/{id}/status`).
-  Future<void> pollStatusOnce() => _pollStatusOp();
+  Future<void> pollStatusOnce() => _pollStatusOnce();
 
   /// One local, backend-free health tick.
-  Future<void> checkHealthOnce() => _healthCheckOp();
+  Future<void> checkHealthOnce() => _healthCheckOnce();
 
   /// Foreground-resume catch-up: backend-free health tick, then a status
   /// poll only when the last snapshot is stale.
