@@ -14,6 +14,18 @@ abstract final class TunnelTuning {
   static const healthTimeout = Duration(seconds: 3);
 
   /// Bound for native tunnel stops. Graceful teardown gets this long, then an
-  /// automated hard-kill retry fires (same budget) without user input.
+  /// automated hard-kill retry fires without user input. The plugin adapter
+  /// uses the same budget; the helper uses [helperStopRetryTimeout] for the
+  /// retry so it can wait out daemon cleanup.
   static const stopTimeout = Duration(seconds: 3);
+
+  /// Client exchange budget for a privileged helper operation. It covers the
+  /// daemon's command plus bounded failure cleanup, and is intentionally
+  /// longer than the shared plugin [opTimeout].
+  static const helperOpTimeout = Duration(seconds: 45);
+
+  /// A stop retry may have to wait for a canceled operation's manager gate to
+  /// release before it can run. Keep the second attempt bounded separately
+  /// from the first three-second cancellation deadline.
+  static const helperStopRetryTimeout = Duration(seconds: 10);
 }

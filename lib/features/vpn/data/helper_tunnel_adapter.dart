@@ -41,7 +41,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Future<void> ensureInitialized() async {
     if (_initialized) return;
-    await _client.ping().timeout(TunnelTuning.opTimeout);
+    await _client.ping(timeout: TunnelTuning.healthTimeout);
     _initialized = true;
   }
 
@@ -51,14 +51,14 @@ class HelperTunnelAdapter implements TunnelAdapter {
     required String wgQuickConfig,
     required String providerBundleId,
   }) async {
-    await _client.up(wgQuickConfig).timeout(TunnelTuning.opTimeout);
+    await _client.up(wgQuickConfig, timeout: TunnelTuning.helperOpTimeout);
     _initialized = true;
   }
 
   @override
   Future<void> stop(String reason) async {
     try {
-      await _client.down().timeout(TunnelTuning.stopTimeout);
+      await _client.down(timeout: TunnelTuning.stopTimeout);
       AppLog.info('helper tunnel stopped ($reason)');
       return;
     } on TimeoutException catch (e) {
@@ -67,7 +67,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
       AppLog.error('helper stop failed ($reason), retrying', e);
     }
     try {
-      await _client.down().timeout(TunnelTuning.stopTimeout);
+      await _client.down(timeout: TunnelTuning.helperStopRetryTimeout);
       AppLog.info('helper tunnel stopped on retry ($reason)');
     } catch (e) {
       AppLog.error('helper stop retry failed ($reason)', e);
@@ -78,7 +78,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   Future<VpnStage?> readStage() async {
     try {
       return _stageOf(
-        await _client.status().timeout(TunnelTuning.healthTimeout),
+        await _client.status(timeout: TunnelTuning.healthTimeout),
       );
     } catch (e) {
       AppLog.info('helper stage read failed (unknown, ignoring): $e');
@@ -89,7 +89,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Future<Map<String, dynamic>?> readTraffic() async {
     try {
-      final status = await _client.status().timeout(TunnelTuning.healthTimeout);
+      final status = await _client.status(timeout: TunnelTuning.healthTimeout);
       if (!status.up) return null;
       return {'rxBytes': status.rxBytes, 'txBytes': status.txBytes};
     } catch (e) {
@@ -101,7 +101,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Future<DateTime?> readHandshake() async {
     try {
-      final status = await _client.status().timeout(TunnelTuning.healthTimeout);
+      final status = await _client.status(timeout: TunnelTuning.healthTimeout);
       return status.up ? status.lastHandshake : null;
     } catch (e) {
       AppLog.info('helper handshake read failed (unknown, ignoring): $e');
@@ -112,7 +112,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Future<ActivePeer?> getActivePeer() async {
     try {
-      final status = await _client.status().timeout(TunnelTuning.healthTimeout);
+      final status = await _client.status(timeout: TunnelTuning.healthTimeout);
       if (!status.up || status.publicKey.isEmpty) return null;
       return ActivePeer(publicKey: status.publicKey, endpoint: status.endpoint);
     } catch (e) {
@@ -124,7 +124,7 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Future<bool> killGhost() async {
     try {
-      final status = await _client.down().timeout(TunnelTuning.opTimeout);
+      final status = await _client.down(timeout: TunnelTuning.helperOpTimeout);
       return !status.up;
     } catch (e) {
       AppLog.info('helper ghost kill failed (ignoring): $e');

@@ -11,6 +11,7 @@
 // only wires it to the method channel.
 #include "helper_pipe.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,13 +49,51 @@ void RegisterHelperPipe(flutter::FlutterEngine* engine) {
           result->NotImplemented();
           return;
         }
-        const auto* request = std::get_if<std::string>(call.arguments());
-        if (request == nullptr) {
-          result->Error("bad_request", "exchange requires a JSON string");
+        std::string request;
+        unsigned long timeout_ms = io::kIoTimeoutMs;
+        if (const auto* text = std::get_if<std::string>(call.arguments());
+            text != nullptr) {
+          // Accept the original string form for compatibility with older
+          // clients and the standalone transport tests.
+          request = *text;
+        } else if (const auto* arguments =
+                       std::get_if<flutter::EncodableMap>(call.arguments());
+                   arguments != nullptr) {
+          const auto request_it =
+              arguments->find(flutter::EncodableValue("request"));
+          if (request_it == arguments->end()) {
+            result->Error("bad_request", "exchange requires a request");
+            return;
+          }
+          const auto* request_text =
+              std::get_if<std::string>(&request_it->second);
+          if (request_text == nullptr) {
+            result->Error("bad_request", "exchange request must be a string");
+            return;
+          }
+          request = *request_text;
+
+          const auto timeout_it =
+              arguments->find(flutter::EncodableValue("timeoutMs"));
+          if (timeout_it != arguments->end()) {
+            const auto* timeout_value =
+                std::get_if<int32_t>(&timeout_it->second);
+            if (timeout_value == nullptr || *timeout_value <= 0 ||
+                static_cast<unsigned long>(*timeout_value) >
+                    io::kMaxIoTimeoutMs) {
+              result->Error("bad_request", "exchange timeout is invalid");
+              return;
+            }
+            timeout_ms = static_cast<unsigned long>(*timeout_value);
+          }
+        } else {
+          result->Error("bad_request", "exchange requires a JSON request");
           return;
         }
+
         std::string response;
-        if (!io::ExchangePipe(io::kHelperPipe, *request, &response)) {
+        if (!io::ExchangePipe(io::kHelperPipe, request, &response,
+                              timeout_ms)) {
           result->Error("unavailable", "boltmeshd pipe unavailable");
           return;
         }

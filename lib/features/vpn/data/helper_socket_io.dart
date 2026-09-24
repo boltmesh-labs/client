@@ -20,7 +20,7 @@ HelperSocket createHelperSocket() {
 /// A fresh connection per request keeps the transport stateless (no
 /// interleaving, no half-closed socket to recover); a UDS connect is cheap
 /// next to the ~10s health tick that drives these reads.
-class UnixHelperSocket implements HelperSocket {
+class UnixHelperSocket implements HelperSocketWithTimeout {
   UnixHelperSocket({
     this.path = helperSocketPath,
     this.connectTimeout = defaultConnectTimeout,
@@ -31,9 +31,10 @@ class UnixHelperSocket implements HelperSocket {
   /// normally instant; a full accept queue must still fail fast.
   static const defaultConnectTimeout = Duration(seconds: 5);
 
-  /// Upper bound on the response read. Without it a daemon that accepts the
-  /// connection but never answers would leave the read pending forever (and
-  /// the socket undestroyed); on expiry the socket is torn down by `finally`.
+  /// Upper bound on the response read for the legacy/no-deadline exchange.
+  /// Deadline-aware calls use their supplied total budget instead. Without a
+  /// bound a daemon that accepts the connection but never answers would leave
+  /// the read pending forever; on expiry the socket is torn down by `finally`.
   static const defaultReadTimeout = Duration(seconds: 10);
 
   final String path;
@@ -48,26 +49,48 @@ class UnixHelperSocket implements HelperSocket {
   bool get isSupported => Platform.isLinux;
 
   @override
-  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) async {
+  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) =>
+      _exchange(request);
+
+  @override
+  Future<Map<String, dynamic>> exchangeWithTimeout(
+    Map<String, dynamic> request, {
+    required Duration timeout,
+  }) => _exchange(request, overallTimeout: timeout);
+
+  Future<Map<String, dynamic>> _exchange(
+    Map<String, dynamic> request, {
+    Duration? overallTimeout,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    Duration bounded(Duration configured) {
+      final budget = overallTimeout;
+      if (budget == null) return configured;
+      final available = budget - stopwatch.elapsed;
+      if (available.isNegative) return Duration.zero;
+      return available < configured ? available : configured;
+    }
+
     late final Socket socket;
     try {
       socket = await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
-      ).timeout(connectTimeout);
+        timeout: bounded(connectTimeout),
+      );
     } catch (e) {
       throw HelperTransportException('helper socket unavailable: $e');
     }
 
     try {
       socket.write('${jsonEncode(request)}\n');
-      await socket.flush();
+      await socket.flush().timeout(bounded(const Duration(seconds: 5)));
       final line = await socket
           .cast<List<int>>()
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .first
-          .timeout(readTimeout);
+          .timeout(bounded(readTimeout));
       final decoded = jsonDecode(line);
       if (decoded is! Map) {
         throw HelperTransportException('helper response is not an object');
@@ -80,6 +103,9 @@ class UnixHelperSocket implements HelperSocket {
     } catch (e) {
       throw HelperTransportException('helper request failed: $e');
     } finally {
+      // Destroying the socket is the cancellation path: boltmeshd observes
+      // EOF and cancels the request context instead of continuing privileged
+      // work after this exchange has timed out.
       socket.destroy();
     }
   }
@@ -92,7 +118,7 @@ class UnixHelperSocket implements HelperSocket {
 /// performs the CreateFile/WriteFile/ReadFile exchange and returns one
 /// response line. The framing is identical to [UnixHelperSocket], so the
 /// helper daemon serves both transports with the same code.
-class NativePipeHelperSocket implements HelperSocket {
+class NativePipeHelperSocket implements HelperSocketWithTimeout {
   NativePipeHelperSocket({MethodChannel? channel})
     : _channel = channel ?? defaultChannel;
 
@@ -105,13 +131,28 @@ class NativePipeHelperSocket implements HelperSocket {
   bool get isSupported => Platform.isWindows;
 
   @override
-  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) async {
+  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) =>
+      _exchange(request);
+
+  @override
+  Future<Map<String, dynamic>> exchangeWithTimeout(
+    Map<String, dynamic> request, {
+    required Duration timeout,
+  }) => _exchange(request, timeout: timeout);
+
+  Future<Map<String, dynamic>> _exchange(
+    Map<String, dynamic> request, {
+    Duration? timeout,
+  }) async {
     final String? response;
     try {
-      response = await _channel.invokeMethod<String>(
-        'exchange',
-        jsonEncode(request),
-      );
+      final Object arguments = timeout == null
+          ? jsonEncode(request)
+          : <String, dynamic>{
+              'request': jsonEncode(request),
+              'timeoutMs': timeout.inMilliseconds,
+            };
+      response = await _channel.invokeMethod<String>('exchange', arguments);
     } on MissingPluginException {
       throw HelperTransportException('helper pipe channel unavailable');
     } on PlatformException catch (e) {

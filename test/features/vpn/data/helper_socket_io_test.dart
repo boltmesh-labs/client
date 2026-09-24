@@ -151,6 +151,22 @@ void main() {
       expect(response, {'ok': true, 'op': 'ping'});
     });
 
+    test('forwards a per-exchange deadline to the native pipe', () async {
+      Map<Object?, Object?>? sent;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        sent = Map<Object?, Object?>.from(call.arguments as Map);
+        return jsonEncode({'ok': true});
+      });
+
+      await NativePipeHelperSocket(channel: channel).exchangeWithTimeout({
+        'op': 'down',
+      }, timeout: const Duration(seconds: 3));
+
+      expect(sent, isNotNull);
+      expect(sent!['timeoutMs'], 3000);
+      expect(jsonDecode(sent!['request'] as String), {'op': 'down'});
+    });
+
     test('a missing handler is a transport failure', () {
       final socket = NativePipeHelperSocket(
         channel: const MethodChannel('test/missing'),

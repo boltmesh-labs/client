@@ -338,7 +338,10 @@ rest of the pipeline (which files, when, verify) is unchanged.
   `GET /vpn-regions` (cached 60s), then switch with its `region_id`.
 - Disconnect: graceful `stopVpn()` (3s budget, one automated hard-kill
   retry on timeout with no user input) then `POST .../disconnect` (no body,
-  idempotent, works with lapsed subscription).
+  idempotent, works with lapsed subscription). On Linux/Windows the helper
+  transport forwards each call's operation/cancellation deadline; closing
+  the transport cancels the daemon request, and a retry waits for the
+  original tunnel operation instead of racing its lock.
 - Rotate: `POST /vpn-devices/{id}/rotate-keys` with a fresh public key
   (same server + IP, tunnel restarts on the new config). Automatic every
   24h of connected time (counted in status polls).

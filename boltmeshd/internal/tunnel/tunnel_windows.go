@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 
 	"boltmeshd/internal/config"
@@ -66,10 +65,10 @@ type Manager struct {
 	iface string
 	dir   string
 
-	// mu serializes up/down. TryLock (not Lock) is deliberate: a second
-	// concurrent request gets `unavailable` immediately instead of piling up
-	// behind a slow service start.
-	mu   sync.Mutex
+	// gate serializes up/down. A bounded request waits for the current
+	// operation (or its cancellation) instead of racing a retry against a
+	// service start that may still be mutating tunnel state.
+	gate operationGate
 	busy atomic.Bool
 
 	service tunnelService
@@ -108,13 +107,13 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 		return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
 	}
 
-	if !m.mu.TryLock() {
+	if !m.gate.acquire(ctx) {
 		return nil, &protocol.OpError{
 			Code: protocol.CodeUnavailable,
-			Err:  errors.New("another tunnel operation is already in progress"),
+			Err:  operationUnavailable(ctx),
 		}
 	}
-	defer m.mu.Unlock()
+	defer m.gate.release()
 	m.busy.Store(true)
 	defer m.busy.Store(false)
 
@@ -150,13 +149,13 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 // Down tears the tunnel down. It is idempotent: true means no tunnel is
 // running afterwards, including when it was already down.
 func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
-	if !m.mu.TryLock() {
+	if !m.gate.acquire(ctx) {
 		return nil, &protocol.OpError{
 			Code: protocol.CodeUnavailable,
-			Err:  errors.New("another tunnel operation is already in progress"),
+			Err:  operationUnavailable(ctx),
 		}
 	}
-	defer m.mu.Unlock()
+	defer m.gate.release()
 
 	// Deliberately no `busy` here: `busy` means "an up is in flight" and only
 	// makes Status report `connecting`. During a down the service's own

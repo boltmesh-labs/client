@@ -31,3 +31,20 @@ abstract class HelperSocket {
   /// [HelperTransportException] when the daemon is unreachable.
   Future<Map<String, dynamic>> exchange(Map<String, dynamic> request);
 }
+
+/// Optional transport capability for deadline-aware exchanges.
+///
+/// [HelperSocket] intentionally keeps its original one-argument contract so
+/// small injected test doubles and future transports remain source-compatible.
+/// Production transports implement this interface so [HelperClient] can give
+/// the transport the same deadline it uses for the caller. A transport that
+/// does not implement it still gets a Future.timeout backstop from the client.
+abstract class HelperSocketWithTimeout implements HelperSocket {
+  /// Sends one request with a total exchange deadline. Implementations must
+  /// close/cancel their underlying connection when the deadline expires, not
+  /// merely return a timeout error to the Dart caller.
+  Future<Map<String, dynamic>> exchangeWithTimeout(
+    Map<String, dynamic> request, {
+    required Duration timeout,
+  });
+}

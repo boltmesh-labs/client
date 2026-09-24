@@ -19,6 +19,17 @@ import 'helper_socket_stub.dart'
     if (dart.library.io) 'helper_socket_io.dart'
     as socket_platform;
 
+class _MutationSlot {
+  final Completer<void> done = Completer<void>();
+  bool abandoned = false;
+
+  void abandon() => abandoned = true;
+
+  void release() {
+    if (!done.isCompleted) done.complete();
+  }
+}
+
 /// Wire-protocol version; must match the helper's `protocol.Version`.
 const helperProtocolVersion = 1;
 
@@ -116,13 +127,12 @@ class HelperClient {
   Set<String> _capabilities = const {};
   Set<String> get capabilities => _capabilities;
 
-  /// Default backstop deadline for one helper round-trip. The socket
-  /// transport has its own read deadline (see `helper_socket_io.dart`), but
-  /// an injected or future transport could ignore it: the per-call timeout
-  /// guarantees the returned future always settles, so one wedged daemon can
-  /// never leave [_statusInFlight] pending forever and poison every later
-  /// read.
-  static const defaultCallTimeout = Duration(seconds: 10);
+  /// Default backstop deadline for one helper round-trip. It is longer than
+  /// the daemon's complete-operation budget so a normal helper response wins
+  /// the race; the transport receives this same deadline and closes its
+  /// connection when it expires. The per-call timeout still guarantees that
+  /// an injected or future transport cannot leave a caller pending forever.
+  static const defaultCallTimeout = Duration(seconds: 45);
 
   /// Per-instance override of [defaultCallTimeout] (tests use a short one).
   final Duration callTimeout;
@@ -134,47 +144,175 @@ class HelperClient {
   /// so the next tick and any `up`/`down` after it always read fresh daemon
   /// state.
   Future<HelperStatus>? _statusInFlight;
+  Duration? _statusInFlightTimeout;
+
+  /// Serializes lifecycle mutations. The tail follows the raw exchange, not
+  /// just the public timeout wrapper, so a timed-out legacy transport can
+  /// never overlap its retry with the operation it was meant to cancel.
+  Future<void> _mutationTail = Future<void>.value();
 
   /// True when this platform has a helper to talk to.
   bool get isSupported => _socket.isSupported;
 
   /// Liveness + version check.
-  Future<HelperStatus> ping() => _call('ping');
+  Future<HelperStatus> ping({Duration? timeout}) =>
+      _call('ping', timeout: timeout);
 
   /// Current tunnel status. Concurrent callers share one request.
-  Future<HelperStatus> status() {
+  Future<HelperStatus> status({Duration? timeout}) {
+    final effectiveTimeout = _effectiveTimeout(timeout);
     final inFlight = _statusInFlight;
-    if (inFlight != null) return inFlight;
-    final future = _call('status');
+    if (inFlight != null) {
+      final inFlightTimeout = _statusInFlightTimeout;
+      if (inFlightTimeout != null && effectiveTimeout < inFlightTimeout) {
+        return _statusWithDeadline(inFlight, effectiveTimeout);
+      }
+      return inFlight;
+    }
+    final future = _call('status', timeout: timeout);
     _statusInFlight = future;
+    _statusInFlightTimeout = effectiveTimeout;
     unawaited(
       future.then((_) {}, onError: (_) {}).whenComplete(() {
-        _statusInFlight = null;
+        if (identical(_statusInFlight, future)) {
+          _statusInFlight = null;
+          _statusInFlightTimeout = null;
+        }
       }),
     );
     return future;
   }
 
+  Future<HelperStatus> _statusWithDeadline(
+    Future<HelperStatus> future,
+    Duration timeout,
+  ) async {
+    try {
+      return await future.timeout(timeout);
+    } on TimeoutException {
+      throw HelperTransportException('helper status timed out');
+    }
+  }
+
   /// Validates and starts the tunnel with [wgQuickConfig].
-  Future<HelperStatus> up(String wgQuickConfig) =>
-      _call('up', config: wgQuickConfig);
+  Future<HelperStatus> up(String wgQuickConfig, {Duration? timeout}) =>
+      _enqueueMutation(
+        _effectiveTimeout(timeout),
+        (track) => _call(
+          'up',
+          config: wgQuickConfig,
+          timeout: timeout,
+          onExchange: track,
+        ),
+      );
 
   /// Idempotent teardown.
-  Future<HelperStatus> down() => _call('down');
+  Future<HelperStatus> down({Duration? timeout}) => _enqueueMutation(
+    _effectiveTimeout(timeout),
+    (track) => _call('down', timeout: timeout, onExchange: track),
+  );
 
-  Future<HelperStatus> _call(String op, {String? config}) async {
+  Future<HelperStatus> _enqueueMutation(
+    Duration queueTimeout,
+    Future<HelperStatus> Function(void Function(Future<Map<String, dynamic>>))
+    start,
+  ) {
+    final previous = _mutationTail;
+    final slot = _MutationSlot();
+    // Reserve the lane synchronously. Otherwise two calls made in the same
+    // event-loop turn could both capture the old completed tail and overlap.
+    _mutationTail = slot.done.future;
+    final result = Completer<HelperStatus>();
+    unawaited(result.future.then((_) {}, onError: (_) {}));
+    unawaited(() async {
+      var exchangeStarted = false;
+      try {
+        await previous.timeout(queueTimeout);
+        if (slot.abandoned) {
+          slot.release();
+          return;
+        }
+        result.complete(
+          await start((exchange) {
+            exchangeStarted = true;
+            // Keep the lane occupied until the transport itself settles. A
+            // Future.timeout on a legacy exchange does not cancel its source.
+            unawaited(
+              exchange.then<void>(
+                (_) => slot.release(),
+                onError: (_, _) => slot.release(),
+              ),
+            );
+          }),
+        );
+      } on TimeoutException {
+        slot.abandon();
+        if (!result.isCompleted) {
+          result.completeError(
+            HelperTransportException(
+              'previous helper operation is still in progress',
+            ),
+          );
+        }
+        // Do not release the slot yet: a timed-out waiter must not let a
+        // later mutation bypass the still-running raw exchange ahead of it.
+        unawaited(
+          previous.then<void>(
+            (_) => slot.release(),
+            onError: (_, _) => slot.release(),
+          ),
+        );
+      } catch (e, st) {
+        if (!result.isCompleted) result.completeError(e, st);
+        if (!exchangeStarted) slot.release();
+      }
+    }());
+    return result.future;
+  }
+
+  /// Uses the caller's requested budget without allowing a per-instance test
+  /// or embedding override to make a shipped operation live longer than its
+  /// adapter budget.
+  Duration _effectiveTimeout(Duration? requested) {
+    if (requested == null) return callTimeout;
+    return callTimeout.compareTo(requested) < 0 ? callTimeout : requested;
+  }
+
+  Future<HelperStatus> _call(
+    String op, {
+    String? config,
+    Duration? timeout,
+    void Function(Future<Map<String, dynamic>>)? onExchange,
+  }) async {
     final requestId = '${++_seq}';
+    final effectiveTimeout = _effectiveTimeout(timeout);
+    final request = <String, dynamic>{
+      'v': helperProtocolVersion,
+      'id': requestId,
+      'caps': helperCapabilities,
+      'op': op,
+      'config': ?config,
+    };
     final Map<String, dynamic> response;
     try {
-      response = await _socket
-          .exchange({
-            'v': helperProtocolVersion,
-            'id': requestId,
-            'caps': helperCapabilities,
-            'op': op,
-            'config': ?config,
-          })
-          .timeout(callTimeout);
+      final Future<Map<String, dynamic>> exchange;
+      final timedSocket = _socket;
+      if (timedSocket is HelperSocketWithTimeout) {
+        // The production transports close the socket/native pipe themselves
+        // when this deadline expires. That close is the cancellation signal
+        // observed by boltmeshd; Future.timeout alone would leave the request
+        // running on the daemon after the UI had already given up.
+        exchange = timedSocket.exchangeWithTimeout(
+          request,
+          timeout: effectiveTimeout,
+        );
+      } else {
+        // Keep injected/legacy transports source-compatible. They still get a
+        // caller-side backstop, but cannot provide transport cancellation.
+        exchange = timedSocket.exchange(request);
+      }
+      onExchange?.call(exchange);
+      response = await exchange.timeout(effectiveTimeout);
     } on TimeoutException {
       // A wedged daemon must surface as a transport failure (null/unknown to
       // the health tick), never as a future that stays pending forever.

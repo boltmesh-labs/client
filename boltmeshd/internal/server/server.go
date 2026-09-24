@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"boltmeshd/internal/protocol"
@@ -23,10 +24,22 @@ import (
 // without buffering it all.
 const maxRequestLine = 128 * 1024
 
-// requestTimeout bounds one privileged operation so a wedged wg-quick cannot
-// hold a client forever. It is slightly longer than the tunnel command
-// timeout so the daemon's own diagnostic wins the race.
-const requestTimeout = 35 * time.Second
+// requestTimeout is the daemon-side budget for one complete privileged
+// operation, including bounded failure cleanup. It is longer than the Linux
+// command budget and shorter than HelperClient.defaultCallTimeout, so the
+// daemon normally produces a response before the client's transport backstop.
+// Shorter client budgets (notably the three-second stop budget) cancel the
+// connection, which in turn cancels the request context.
+const requestTimeout = 40 * time.Second
+
+// connectionIdleTimeout prevents a peer that opens a socket and never sends
+// a newline from retaining a handler forever. It is intentionally longer than
+// a request so a client can finish writing a large, valid config.
+const connectionIdleTimeout = requestTimeout + 5*time.Second
+
+// responseWriteTimeout prevents a client that stops reading from pinning a
+// handler after the privileged operation has completed.
+const responseWriteTimeout = 5 * time.Second
 
 // Manager is the tunnel surface the server serves. *tunnel.Manager satisfies
 // it; tests substitute a fake.
@@ -49,36 +62,58 @@ func New(manager Manager, log *slog.Logger) *Server {
 
 // Serve accepts connections until ctx is canceled or the listener fails.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	serveCtx, cancel := context.WithCancel(ctx)
 	// Cancel must unblock Accept: closing the listener is what makes a
-	// signal-triggered shutdown actually exit.
-	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
-	defer stop()
+	// signal-triggered shutdown actually exit. The same context is canceled
+	// for an unexpected listener failure so active privileged handlers unwind
+	// before Serve returns.
+	stop := context.AfterFunc(serveCtx, func() { _ = ln.Close() })
+	var handlers sync.WaitGroup
+	defer func() {
+		cancel()
+		stop()
+		handlers.Wait()
+	}()
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if serveCtx.Err() != nil {
 				// A canceled context is a clean shutdown, not a failure.
 				return nil
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
-		go s.handle(ctx, conn)
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			s.handle(serveCtx, conn)
+		}()
 	}
 }
 
-func (s *Server) handle(ctx context.Context, conn net.Conn) {
+func (s *Server) handle(parent context.Context, conn net.Conn) {
+	// A client uses one connection for the request and closes it when its
+	// deadline expires. Tie the request context to that connection so a
+	// caller giving up also cancels the privileged operation.
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
 	reader := bufio.NewReaderSize(conn, maxRequestLine)
 	writer := bufio.NewWriter(conn)
 
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout))
 		line, tooLarge, err := readLine(reader)
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return
 		}
 		if tooLarge {
-			if err := writeResponse(writer, protocol.Fail("", protocol.CodeBadRequest, "request too large")); err != nil {
+			if err := writeBoundedResponse(conn, writer, protocol.Fail("", protocol.CodeBadRequest, "request too large")); err != nil {
 				return
 			}
 			continue
@@ -95,7 +130,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		// forward-compatible extension.
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			if err := writeResponse(writer, protocol.Fail("", protocol.CodeBadRequest, "invalid JSON")); err != nil {
+			if err := writeBoundedResponse(conn, writer, protocol.Fail("", protocol.CodeBadRequest, "invalid JSON")); err != nil {
 				return
 			}
 			continue
@@ -103,14 +138,44 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		// Reject trailing tokens after the object so a line frames exactly one
 		// request.
 		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-			if err := writeResponse(writer, protocol.Fail("", protocol.CodeBadRequest, "trailing data after request")); err != nil {
+			if err := writeBoundedResponse(conn, writer, protocol.Fail("", protocol.CodeBadRequest, "trailing data after request")); err != nil {
 				return
 			}
 			continue
 		}
-		if err := writeResponse(writer, s.dispatch(ctx, &req)); err != nil {
+		// Peek at the next byte while the operation runs. A read EOF is the
+		// transport's cancellation signal; waiting for the next request in a
+		// separate goroutine lets a closed client cancel ctx even though the
+		// normal read loop is busy dispatching this request.
+		_ = conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout))
+		peekDone := make(chan error, 1)
+		go func() {
+			_, err := reader.Peek(1)
+			if errors.Is(err, bufio.ErrBufferFull) {
+				// The next request is already buffered; this is not a
+				// disconnect. The normal read loop can consume it after the
+				// current response.
+				err = nil
+			} else if err != nil {
+				cancel()
+			}
+			peekDone <- err
+		}()
+
+		if ctx.Err() != nil {
 			return
 		}
+		resp := s.dispatch(ctx, &req)
+		if ctx.Err() != nil {
+			return
+		}
+		if err := writeBoundedResponse(conn, writer, resp); err != nil {
+			return
+		}
+		if err := <-peekDone; err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Time{})
 	}
 }
 
@@ -191,6 +256,12 @@ func readLine(reader *bufio.Reader) (line []byte, tooLarge bool, err error) {
 			return nil, false, readErr
 		}
 	}
+}
+
+func writeBoundedResponse(conn net.Conn, writer *bufio.Writer, resp protocol.Response) error {
+	_ = conn.SetWriteDeadline(time.Now().Add(responseWriteTimeout))
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	return writeResponse(writer, resp)
 }
 
 func writeResponse(writer *bufio.Writer, resp protocol.Response) error {

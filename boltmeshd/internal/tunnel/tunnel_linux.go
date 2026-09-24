@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
@@ -32,7 +32,16 @@ const (
 	ipBinary         = "ip"
 	resolvconfBinary = "resolvconf"
 	resolvectlBinary = "resolvectl"
+
+	// commandTimeout bounds the complete lifecycle operation and each
+	// privileged tool invocation within it. The server supplies a longer
+	// request deadline for bounded failure cleanup; a caller's shorter
+	// cancellation deadline still wins. The extra wait bound lets
+	// CombinedOutput return even if a descendant outside the process group
+	// keeps an output pipe open.
 	commandTimeout   = 30 * time.Second
+	cleanupTimeout   = 5 * time.Second
+	commandWaitDelay = 1 * time.Second
 )
 
 // toolDirs are the only directories searched for the privileged tools the
@@ -64,10 +73,10 @@ type Manager struct {
 	iface string
 	dir   string
 
-	// mu serializes up/down. TryLock (not Lock) is deliberate: a second
-	// concurrent request gets `unavailable` immediately instead of piling up
-	// behind a slow wg-quick.
-	mu   sync.Mutex
+	// gate serializes up/down. A bounded request waits for the current
+	// operation (or its cancellation) instead of racing a retry against a
+	// command that may still be mutating tunnel state.
+	gate operationGate
 	busy atomic.Bool
 
 	run        runFunc
@@ -99,6 +108,16 @@ func (m *Manager) tool(name string) (string, error) {
 	return path, nil
 }
 
+// runWithTimeout applies the command budget at the manager boundary too, so
+// injected run seams and future backends observe the same deadline as the
+// production exec implementation.
+func (m *Manager) runWithTimeout(ctx context.Context, name string, args ...string) error {
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	_, err := m.run(commandCtx, name, args...)
+	return err
+}
+
 // Up validates the config, writes it to the root-only path, and starts the
 // tunnel. An existing tunnel is torn down first so the requested config is
 // always the one applied (never two live tunnels).
@@ -109,15 +128,22 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 		return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
 	}
 
-	if !m.mu.TryLock() {
+	if !m.gate.acquire(ctx) {
 		return nil, &protocol.OpError{
 			Code: protocol.CodeUnavailable,
-			Err:  errors.New("another tunnel operation is already in progress"),
+			Err:  operationUnavailable(ctx),
 		}
 	}
-	defer m.mu.Unlock()
+	defer m.gate.release()
 	m.busy.Store(true)
 	defer m.busy.Store(false)
+
+	// Bound the whole lifecycle operation, not just one tool invocation. A
+	// retry must not be able to enter while a sequence of down/up commands is
+	// still consuming the manager gate.
+	operationCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	ctx = operationCtx
 
 	// Resolve before writing anything: a missing tool must not leave a
 	// privileged config behind.
@@ -136,14 +162,16 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	if err := os.WriteFile(m.configPath(), []byte(wgQuickConfig), 0o600); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
 	}
-	if _, err := m.run(ctx, wgQuick, "up", m.configPath()); err != nil {
+	if err := m.runWithTimeout(ctx, wgQuick, "up", m.configPath()); err != nil {
 		// wg-quick can configure DNS before a later route or configuration
 		// step fails. Its failure trap does not reliably remove that DNS
 		// state, and deleting the config would prevent a proper down from
 		// finding the interface. Keep the config until cleanup has finished.
-		// The failed command may have exhausted the request context; give the
-		// destructive cleanup its own bounded lifetime.
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
+		// A failed/canceled wg-quick may already have changed DNS or created a
+		// link. Keep the config until a bounded recovery pass finishes, but do
+		// not let that pass inherit an already-canceled request. The manager
+		// gate remains held while cleanup runs, so a retry cannot race it.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		if cleanupErr := m.cleanup(cleanupCtx, true); cleanupErr != nil {
 			return nil, &protocol.OpError{
@@ -159,13 +187,17 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 // Down tears the tunnel down. It is idempotent: true means no tunnel is
 // running afterwards, including when it was already down.
 func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
-	if !m.mu.TryLock() {
+	if !m.gate.acquire(ctx) {
 		return nil, &protocol.OpError{
 			Code: protocol.CodeUnavailable,
-			Err:  errors.New("another tunnel operation is already in progress"),
+			Err:  operationUnavailable(ctx),
 		}
 	}
-	defer m.mu.Unlock()
+	defer m.gate.release()
+
+	operationCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	ctx = operationCtx
 
 	// Deliberately no `busy` here: `busy` means "an up is in flight" and only
 	// makes Status report `connecting`. During a down the device's own
@@ -233,7 +265,7 @@ func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
 		wgQuick, err := m.tool(wgQuickBinary)
 		if err != nil {
 			downErr = err
-		} else if _, err := m.run(ctx, wgQuick, "down", m.configPath()); err != nil {
+		} else if err := m.runWithTimeout(ctx, wgQuick, "down", m.configPath()); err != nil {
 			downErr = err
 		}
 
@@ -250,7 +282,7 @@ func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
 				ip, ipErr := m.tool(ipBinary)
 				if ipErr != nil {
 					downErr = fmt.Errorf("wg-quick down: %w; locate ip: %w", downErr, ipErr)
-				} else if _, delErr := m.run(ctx, ip, "link", "del", m.iface); delErr != nil {
+				} else if delErr := m.runWithTimeout(ctx, ip, "link", "del", m.iface); delErr != nil {
 					downErr = fmt.Errorf("wg-quick down: %w; ip link del: %w", downErr, delErr)
 				} else {
 					// The direct link deletion completed the link teardown even
@@ -294,17 +326,15 @@ func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
 // common case; resolvectl is a fallback for installations exposing only the
 // native systemd-resolved tool.
 func (m *Manager) clearResolverState(ctx context.Context) error {
-	// A preceding wg-quick/ip cleanup may have consumed the operation
-	// context. DNS removal is the safety-critical part, so give it a fresh
-	// bounded context when the original one is already done.
-	if ctx.Err() != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
-		defer cancel()
+	// Do not resurrect resolver cleanup after the caller canceled. The
+	// surviving config is deliberately retained so a later down retry can
+	// perform this cleanup with a fresh, bounded request.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("resolver cleanup canceled: %w", err)
 	}
 
 	if path, err := m.lookup(resolvconfBinary); err == nil {
-		if _, err := m.run(ctx, path, "-d", m.iface, "-f"); err != nil {
+		if err := m.runWithTimeout(ctx, path, "-d", m.iface, "-f"); err != nil {
 			return &protocol.OpError{
 				Code: protocol.CodeInternal,
 				Err:  fmt.Errorf("resolvconf cleanup: %w", err),
@@ -318,7 +348,7 @@ func (m *Manager) clearResolverState(ctx context.Context) error {
 	// installed; a failing resolvconf command is reported rather than being
 	// papered over with a broader per-link revert.
 	if path, err := m.lookup(resolvectlBinary); err == nil {
-		if _, err := m.run(ctx, path, "revert", m.iface); err != nil {
+		if err := m.runWithTimeout(ctx, path, "revert", m.iface); err != nil {
 			return &protocol.OpError{
 				Code: protocol.CodeInternal,
 				Err:  fmt.Errorf("resolvectl cleanup: %w", err),
@@ -336,10 +366,50 @@ func (m *Manager) configPath() string {
 	return filepath.Join(m.dir, m.iface+".conf")
 }
 
+func terminateProcessGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return nil
+}
+
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	// Keep the command deadline at the command boundary as well as in the
+	// server request. This also protects direct Manager callers and cleanup
+	// paths that do not pass through Server.dispatch.
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(commandCtx, name, args...)
+	// wg-quick is a shell script and may leave children behind. Put the
+	// command in its own process group so cancellation terminates descendants
+	// too, rather than only the direct wg-quick process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// If a descendant escaped the group and keeps stdout/stderr open, do not
+	// let CombinedOutput wait forever for the pipe to reach EOF.
+	cmd.WaitDelay = commandWaitDelay
+	cmd.Cancel = func() error { return terminateProcessGroup(cmd) }
+
 	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// A shell can exit while a child keeps stdout/stderr open. WaitDelay
+		// bounds the pipe wait; terminate the still-live group as well so an
+		// orphan cannot continue privileged work after this call returns.
+		_ = terminateProcessGroup(cmd)
+	}
 	if err != nil {
+		// CommandContext reports signal termination when the process group is
+		// killed. Preserve the useful deadline/cancellation cause for the
+		// manager and wire error mapping.
+		if commandCtx.Err() != nil {
+			err = commandCtx.Err()
+		}
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return out, fmt.Errorf("%w: %s", err, msg)
 		}

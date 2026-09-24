@@ -21,6 +21,33 @@ class _ScriptedSocket implements HelperSocket {
   }
 }
 
+class _TimedSocket implements HelperSocketWithTimeout {
+  _TimedSocket(this.responder);
+
+  final Future<Map<String, dynamic>> Function(
+    Map<String, dynamic> request,
+    Duration timeout,
+  )
+  responder;
+  Duration? receivedTimeout;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<Map<String, dynamic>> exchange(Map<String, dynamic> request) =>
+      responder(request, const Duration(seconds: 10));
+
+  @override
+  Future<Map<String, dynamic>> exchangeWithTimeout(
+    Map<String, dynamic> request, {
+    required Duration timeout,
+  }) {
+    receivedTimeout = timeout;
+    return responder(request, timeout);
+  }
+}
+
 /// A complete, well-formed status object. The client validates the full
 /// schema, so partial fixtures are no longer accepted.
 Map<String, dynamic> _status({
@@ -379,6 +406,61 @@ void main() {
     );
     expect(calls, 2);
   });
+
+  test('a retry waits for the previous raw mutation exchange', () async {
+    var calls = 0;
+    final firstExchange = Completer<Map<String, dynamic>>();
+    final socket = _ScriptedSocket((request) {
+      calls++;
+      if (calls == 1) return firstExchange.future;
+      return Future.value(_ok(request['id'], _status()));
+    });
+    final client = HelperClient(
+      socket: socket,
+      callTimeout: const Duration(milliseconds: 100),
+    );
+
+    final first = client.down(timeout: const Duration(milliseconds: 20));
+    final retry = client.down(timeout: const Duration(milliseconds: 100));
+    await expectLater(first, throwsA(isA<HelperTransportException>()));
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, 1, reason: 'retry must wait for the first raw exchange');
+
+    firstExchange.complete(_ok('1', _status()));
+    await retry;
+    expect(calls, 2);
+  });
+
+  test(
+    'forwards the shorter operation deadline to a timed transport',
+    () async {
+      final socket = _TimedSocket(
+        (request, _) async => _ok(request['id'], _status()),
+      );
+      final client = HelperClient(socket: socket);
+
+      await client.down(timeout: const Duration(seconds: 3));
+
+      expect(socket.receivedTimeout, const Duration(seconds: 3));
+    },
+  );
+
+  test(
+    'does not let a test callTimeout extend a shipped operation budget',
+    () async {
+      final socket = _TimedSocket(
+        (request, _) async => _ok(request['id'], _status()),
+      );
+      final client = HelperClient(
+        socket: socket,
+        callTimeout: const Duration(milliseconds: 20),
+      );
+
+      await client.ping(timeout: const Duration(seconds: 3));
+
+      expect(socket.receivedTimeout, const Duration(milliseconds: 20));
+    },
+  );
 
   test('helperProtocolVersion matches the Go daemon constant', () {
     final source = File('boltmeshd/internal/protocol/protocol.go')

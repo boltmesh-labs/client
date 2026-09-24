@@ -47,6 +47,27 @@ func (f *fakeManager) Down(context.Context) (*protocol.Status, error) {
 
 func (f *fakeManager) Status() *protocol.Status { return &f.status }
 
+type cancelOnContextManager struct {
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (m *cancelOnContextManager) Up(ctx context.Context, _ string) (*protocol.Status, error) {
+	close(m.started)
+	<-ctx.Done()
+	close(m.canceled)
+	return nil, ctx.Err()
+}
+
+func (m *cancelOnContextManager) Down(ctx context.Context) (*protocol.Status, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *cancelOnContextManager) Status() *protocol.Status {
+	return &protocol.Status{Interface: "boltmesh0", Stage: protocol.StageDisconnected}
+}
+
 type testClient struct {
 	t    *testing.T
 	conn net.Conn
@@ -151,6 +172,79 @@ func TestOpErrorMapsToWireCode(t *testing.T) {
 	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: "x"})
 	if resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeBadConfig {
 		t.Fatalf("response = %+v, want bad_config", resp)
+	}
+}
+
+func TestClosingClientCancelsPrivilegedOperation(t *testing.T) {
+	m := &cancelOnContextManager{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	c := newClient(t, m)
+	c.sendRaw(`{"v":1,"id":"1","op":"up","config":"[Interface]\nPrivateKey = x\n"}`)
+
+	select {
+	case <-m.started:
+	case <-time.After(time.Second):
+		t.Fatal("manager did not start the operation")
+	}
+	if err := c.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-m.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("closing the client did not cancel the operation")
+	}
+}
+
+func TestServeWaitsForHandlersOnShutdown(t *testing.T) {
+	m := &cancelOnContextManager{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	path := filepath.Join(t.TempDir(), "shutdown.sock")
+	ln, err := Listen(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- New(m, slog.New(slog.NewTextHandler(io.Discard, nil))).Serve(ctx, ln) }()
+
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte(`{"v":1,"id":"1","op":"up","config":"x"}` + "\n")); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	select {
+	case <-m.started:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("manager did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve() = %v, want clean shutdown", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve returned before active handler finished")
+	}
+	select {
+	case <-m.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel active handler")
 	}
 }
 

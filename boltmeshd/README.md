@@ -57,6 +57,16 @@ Error codes: `bad_request`, `bad_config`, `unavailable`, `internal`.
 `bad_request` covers envelope violations; `bad_config` is reserved for config
 content that fails validation.
 
+Each complete privileged request has a 40-second daemon budget: up to 30
+seconds for the command sequence plus five seconds for bounded failure cleanup,
+with the remaining margin for transport and scheduling. The normal client
+backstop is 45 seconds. A client may use a shorter cancellation budget (the
+stop path uses 3 seconds); closing its socket or named pipe cancels the request
+context. Linux commands run in their own process group with a bounded wait for
+output pipes, so cancellation cannot leave a `wg-quick` descendant holding the
+privileged operation. A bounded retry waits for the manager's lifecycle gate
+rather than issuing a concurrent teardown.
+
 Stages: `connected`, `connecting` (an `up` is in flight), `disconnected`.
 A zero `lastHandshake` or empty counters mean *unknown*, never *dead* — the
 app's health policy decides.

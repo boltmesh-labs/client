@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -382,7 +386,101 @@ func TestStatusReportsConnectingWhileBusy(t *testing.T) {
 	}
 }
 
-func TestUpRejectsConcurrentOperation(t *testing.T) {
+func TestCanceledUpCompletesCleanupBeforeReleasingGate(t *testing.T) {
+	m := newTestManager(t, false, deviceWithPeers(t), nil)
+	started := make(chan struct{})
+	calls := &[]runCall{}
+	m.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, runCall{name: name, args: args})
+		if len(args) > 0 && args[0] == "up" {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Up(ctx, validConfig)
+		done <- err
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Up() = nil, want cancellation error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled Up did not finish bounded cleanup")
+	}
+	if len(*calls) != 3 {
+		t.Fatalf("cleanup calls = %+v, want up, down, resolver", *calls)
+	}
+	if (*calls)[1].args[0] != "down" || (*calls)[2].name != resolvconfBinary {
+		t.Fatalf("cleanup order = %+v, want down then resolver", *calls)
+	}
+	if _, err := os.Stat(m.configPath()); !os.IsNotExist(err) {
+		t.Fatal("config remained after canceled Up cleanup")
+	}
+}
+
+func TestRunCommandDeadlineKillsProcessGroup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := runCommand(ctx, "/bin/sh", "-c", "sleep 30 & wait")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runCommand() error = %v, want context deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("runCommand() took %s after cancellation", elapsed)
+	}
+}
+
+func TestRunCommandKillsDescendantAfterLeaderExit(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	_, err := runCommand(
+		context.Background(),
+		"/bin/sh",
+		"-c",
+		fmt.Sprintf("sleep 60 & echo $! > %q", pidFile),
+	)
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("runCommand() error = %v, want exec.ErrWaitDelay", err)
+	}
+
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		// A killed child may remain as a zombie until the reaper gets it; it
+		// is no longer running privileged work in that state.
+		if stat, statErr := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); statErr == nil {
+			fields := strings.Fields(string(stat))
+			if len(fields) > 2 && fields[2] == "Z" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("descendant process %d survived command cleanup", pid)
+}
+
+func TestQueuedOperationCanBeCanceledBeforeEnteringManager(t *testing.T) {
 	m := newTestManager(t, false, deviceWithPeers(t), nil)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -401,10 +499,17 @@ func TestUpRejectsConcurrentOperation(t *testing.T) {
 	}()
 	<-started
 
-	_, err := m.Down(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	downDone := make(chan error, 1)
+	go func() {
+		_, err := m.Down(ctx)
+		downDone <- err
+	}()
+	cancel()
+
 	var opErr *protocol.OpError
-	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeUnavailable {
-		t.Fatalf("Down() while busy = %v, want unavailable", err)
+	if err := <-downDone; !errors.As(err, &opErr) || opErr.Code != protocol.CodeUnavailable {
+		t.Fatalf("canceled Down() = %v, want unavailable without entering manager", err)
 	}
 
 	close(release)
