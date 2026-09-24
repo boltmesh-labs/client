@@ -118,6 +118,44 @@ else
   bad 'Linux desktop enrollment contract is incomplete'
 fi
 
+# Fastforge concatenates postinstall entries into one shell script, and the
+# Debian packager appends `exit 0`. The first custom entry must therefore
+# propagate the prepended status and enable fail-fast mode before any helper
+# setup runs. Only NetworkManager's optional configuration reload may suppress
+# an error; a package with a failed install, enrollment, or socket setup must
+# not be reported as configured.
+postinstall_ok=1
+for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
+  postinstall_section="$(
+    sed -n '/^postinstall_scripts:/,/^postuninstall_scripts:/p' "$package_config"
+  )"
+  prior_status_line="$(printf '%s\n' "$postinstall_section" | grep -nF 'postinstall_status=$?' | cut -d: -f1)"
+  fail_fast_line="$(printf '%s\n' "$postinstall_section" | grep -nF '    set -e' | cut -d: -f1)"
+  helper_install_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - install -Dm755' | sed -n '1p' | cut -d: -f1)"
+  daemon_reload_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - systemctl daemon-reload' | cut -d: -f1)"
+  socket_enable_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - systemctl enable --now boltmeshd.socket' | cut -d: -f1)"
+  nmcli_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - nmcli general reload conf >/dev/null 2>&1 || true' | cut -d: -f1)"
+  unexpected_suppression="$(
+    printf '%s\n' "$postinstall_section" |
+      grep -F '|| true' |
+      grep -vF 'nmcli general reload conf' || true
+  )"
+
+  if [[ -z "$prior_status_line" || -z "$fail_fast_line" || -z "$helper_install_line" ||
+    -z "$daemon_reload_line" || -z "$socket_enable_line" || -z "$nmcli_line" ||
+    -n "$unexpected_suppression" ||
+    "$prior_status_line" -ge "$fail_fast_line" || "$fail_fast_line" -ge "$helper_install_line" ||
+    "$helper_install_line" -ge "$daemon_reload_line" || "$daemon_reload_line" -ge "$socket_enable_line" ||
+    "$socket_enable_line" -ge "$nmcli_line" ]]; then
+    postinstall_ok=0
+  fi
+done
+if [[ "$postinstall_ok" -eq 1 ]]; then
+  ok 'Linux package postinstall fails fast after critical helper setup errors'
+else
+  bad 'Linux package postinstall can mask a critical helper setup error'
+fi
+
 # --- Linux: the helper stages into a bundle and runs ----------------------
 if command -v go >/dev/null 2>&1; then
   bundle="$(mktemp -d)"

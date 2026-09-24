@@ -35,6 +35,16 @@ startup_notify: true
 # staged files live under /opt and are owned by dpkg; the installed copies
 # below are not, so postrm removes them explicitly.
 postinstall_scripts:
+  # Fastforge prepends launcher setup and appends `exit 0` to this script.
+  # Capture the status left by that setup, then fail fast so the final exit
+  # cannot hide an unusable helper or socket. NetworkManager is
+  # optional, so only its configuration reload remains best-effort.
+  - |
+    postinstall_status=$?
+    if [ "$postinstall_status" -ne 0 ]; then
+      exit "$postinstall_status"
+    fi
+    set -e
   - install -Dm755 /opt/boltmesh/boltmeshd/boltmeshd /usr/libexec/boltmesh/boltmeshd
   - install -Dm644 /opt/boltmesh/boltmeshd/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
   - install -Dm644 /opt/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket
@@ -53,8 +63,8 @@ postinstall_scripts:
       printf 'boltmesh: desktop-user enrollment failed; run /usr/libexec/boltmesh/boltmesh-enroll-user --uid UID as root\n' >&2
       exit "$status"
     fi
-  - systemctl daemon-reload >/dev/null 2>&1 || true
-  - systemctl enable --now boltmeshd.socket >/dev/null 2>&1 || true
+  - systemctl daemon-reload
+  - systemctl enable --now boltmeshd.socket
   - nmcli general reload conf >/dev/null 2>&1 || true
 postuninstall_scripts:
   # Reload the new unit definitions, then stop and verify the daemon before
