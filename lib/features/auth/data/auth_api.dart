@@ -55,9 +55,15 @@ class AuthApi {
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
+    final refreshToken = parseRefreshToken(r.headers['set-cookie']);
+    if (refreshToken == null || refreshToken.isEmpty) {
+      throw const FormatException(
+        'Login response has no refresh_token cookie.',
+      );
+    }
     return AuthTokens.fromLogin(
       r.data as Map<String, dynamic>,
-      refreshToken: parseRefreshToken(r.headers['set-cookie']),
+      refreshToken: refreshToken,
     );
   }
 
@@ -168,9 +174,15 @@ class AuthApi {
       '/auth/native/exchange',
       data: {'code': code, 'code_verifier': codeVerifier},
     );
+    final refreshToken = parseRefreshToken(r.headers['set-cookie']);
+    if (refreshToken == null || refreshToken.isEmpty) {
+      throw const FormatException(
+        'OAuth exchange response has no refresh_token cookie.',
+      );
+    }
     return AuthTokens.fromLogin(
       r.data as Map<String, dynamic>,
-      refreshToken: parseRefreshToken(r.headers['set-cookie']),
+      refreshToken: refreshToken,
     );
   }
 

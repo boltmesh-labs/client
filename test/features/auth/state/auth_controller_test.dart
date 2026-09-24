@@ -189,14 +189,19 @@ ProviderContainer makeAuthContainer(
   Map<String, int>? calls,
   OAuthAuthenticate? oauthBrowser,
   String? loopback,
+  Future<String?> Function(Ref)? loopbackProvider,
 }) {
+  final loopbackOverride = switch (loopbackProvider) {
+    final provider? => provider,
+    null => (Ref _) async => loopback,
+  };
   final container = ProviderContainer(
     overrides: [
       sessionStoreProvider.overrideWithValue(store),
       authApiProvider.overrideWithValue(AuthApi(dio)),
       // Default is the mobile path (no loopback); desktop tests pass an
       // explicit loopback URL so the real socket bind never runs on the VM.
-      nativeLoopbackProvider.overrideWith((_) async => loopback),
+      nativeLoopbackProvider.overrideWith(loopbackOverride),
       if (oauthBrowser != null)
         oauthAuthenticateProvider.overrideWithValue(oauthBrowser),
     ],
@@ -426,6 +431,21 @@ void main() {
     expect(await store.refreshToken(), isNull);
   });
 
+  test('restore clears an expired session without a refresh token', () async {
+    final store = FakeAuthStore();
+    await store.setAuth(
+      accessToken: 'expired',
+      expiresAt: DateTime.now().subtract(const Duration(minutes: 1)),
+      username: 'u',
+    );
+    final container = makeAuthContainer(store, fakeSessionDio({}));
+
+    final restored = await settleRestore(container);
+
+    expect(restored.status, AuthStatus.unauthenticated);
+    expect(await store.apiToken(), isNull);
+  });
+
   test('restore with valid stored tokens skips the network', () async {
     final calls = <String, int>{};
     final store = FakeAuthStore();
@@ -594,6 +614,30 @@ void main() {
     expect(calls['/auth/native/exchange'], 1);
   });
 
+  test('oauth allocates a fresh loopback URL for each attempt', () async {
+    final store = FakeAuthStore();
+    var allocations = 0;
+    final container = makeAuthContainer(
+      store,
+      fakeSessionDio({}),
+      loopbackProvider: (_) async {
+        allocations++;
+        return 'http://127.0.0.1:${40000 + allocations}/callback';
+      },
+      oauthBrowser: ({
+        required String url,
+        required String callbackUrlScheme,
+        FlutterWebAuth2Options? options,
+      }) async => '$callbackUrlScheme?code=abc123',
+    );
+    await settleRestore(container);
+
+    await container.read(authProvider.notifier).signInWithProvider('google');
+    await container.read(authProvider.notifier).signInWithProvider('github');
+
+    expect(allocations, 2);
+  });
+
   test('oauth error param surfaces the provider message', () async {
     final store = FakeAuthStore();
     final container = makeAuthContainer(
@@ -653,6 +697,33 @@ void main() {
     final state = container.read(authProvider).requireValue;
     expect(state.status, AuthStatus.unauthenticated);
     expect(state.error, 'Sign-in was cancelled.');
+  });
+
+  test('oauth platform failures are not reported as cancellation', () async {
+    final store = FakeAuthStore();
+    final container = makeAuthContainer(
+      store,
+      fakeSessionDio({}),
+      oauthBrowser: ({
+        required String url,
+        required String callbackUrlScheme,
+        FlutterWebAuth2Options? options,
+      }) => throw PlatformException(code: 'BROWSER_UNAVAILABLE'),
+    );
+    await settleRestore(container);
+
+    await container.read(authProvider.notifier).signInWithProvider('google');
+
+    final state = container.read(authProvider).requireValue;
+    expect(state.status, AuthStatus.unauthenticated);
+    expect(state.error, isNot('Sign-in was cancelled.'));
+  });
+
+  test('sanitizeOauthError removes Unicode bidi controls', () {
+    expect(
+      sanitizeOauthError('safe\u202egnippihs\u202cerror'),
+      'safegnippihserror',
+    );
   });
 
   test('loginMessage maps kinds', () {

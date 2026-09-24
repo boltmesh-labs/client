@@ -353,8 +353,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   loopback address and listens on it; mobile uses the `boltmesh://`
   custom scheme), provider consent redirects back with the single-use
   code (`boltmesh://auth/callback?code=...`, scheme registered in
-  `AndroidManifest.xml` + iOS/macOS `Info.plist`; override with
-  `--dart-define=OAUTH_CALLBACK_SCHEME=...`), the app exchanges the
+  `AndroidManifest.xml` + iOS/macOS `Info.plist`), the app exchanges the
   single-use code at `POST /auth/native/exchange` and resolves the display
   name via `GET /users`. Closing the browser/tab cancels silently.
   Access renews proactively

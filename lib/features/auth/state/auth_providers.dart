@@ -163,24 +163,49 @@ class AuthController extends AsyncNotifier<AuthState> {
       // to the single-use code, so another app that hijacks the callback
       // scheme cannot redeem a stolen code. See `data/pkce.dart`.
       final pkce = generatePkcePair();
-      // Null on mobile/web: fall back to the custom-scheme flow.
-      final loopback = await ref.read(nativeLoopbackProvider.future);
-      final url = AuthApi.oauthAuthorizeUrl(
-        provider,
-        nativeCallback: loopback,
-        codeChallenge: pkce.challenge,
-      );
-      AppLog.info('auth oauth start provider=$provider url=$url');
-      final callback = await ref.read(oauthAuthenticateProvider)(
-        url: url,
-        callbackUrlScheme: loopback ?? Env.oauthCallbackScheme,
-        options: loopback == null
-            ? null
-            : const FlutterWebAuth2Options(
-                useWebview: false,
-                landingPageHtml: AuthApi.desktopLandingPageHtml,
-              ),
-      );
+      final oauthAuthenticate = ref.read(oauthAuthenticateProvider);
+
+      Future<String> authenticate() async {
+        // Allocate a fresh loopback port for every attempt. The provider is
+        // intentionally cached by Riverpod, so invalidate it before reading;
+        // reusing the first port makes a transient bind conflict permanent for
+        // the lifetime of this provider container. The plugin binds the port
+        // after this allocation, so retry once if that unavoidable hand-off
+        // loses a race with another local process.
+        for (var attempt = 0; attempt < 2; attempt++) {
+          ref.invalidate(nativeLoopbackProvider);
+          final loopback = await ref.read(nativeLoopbackProvider.future);
+          final url = AuthApi.oauthAuthorizeUrl(
+            provider,
+            nativeCallback: loopback,
+            codeChallenge: pkce.challenge,
+          );
+          AppLog.info('auth oauth start provider=$provider url=$url');
+          try {
+            return await oauthAuthenticate(
+              url: url,
+              callbackUrlScheme: loopback ?? Env.oauthCallbackScheme,
+              options: loopback == null
+                  ? null
+                  : const FlutterWebAuth2Options(
+                      useWebview: false,
+                      landingPageHtml: AuthApi.desktopLandingPageHtml,
+                    ),
+            );
+          } catch (e) {
+            if (loopback != null &&
+                attempt == 0 &&
+                native_loopback.isLoopbackBindFailure(e)) {
+              AppLog.info('auth oauth loopback port busy; retrying');
+              continue;
+            }
+            rethrow;
+          }
+        }
+        throw StateError('Unable to allocate an OAuth loopback port.');
+      }
+
+      final callback = await authenticate();
       final params = Uri.parse(callback).queryParameters;
       // The callback is attacker-reachable on Android (any app may register
       // the scheme): bound and strip the provider-supplied error before it is
@@ -226,14 +251,24 @@ class AuthController extends AsyncNotifier<AuthState> {
       state = AsyncData(
         AuthState(status: AuthStatus.authenticated, username: username),
       );
-    } on PlatformException {
-      // Browser dismissed before the callback (back button / swipe / tab
-      // closed on desktop).
-      AppLog.info('auth oauth cancelled');
+    } on PlatformException catch (e) {
+      // The plugin uses CANCELED for an actual browser dismissal. Other
+      // PlatformExceptions (missing browser, timeout, invalid platform
+      // configuration) are failures, not user cancellation.
+      if (e.code.toUpperCase() == 'CANCELED') {
+        AppLog.info('auth oauth cancelled');
+        if (!ref.mounted) return;
+        final failed = state.value ?? const AuthState();
+        state = AsyncData(
+          failed.copyWith(working: false, error: 'Sign-in was cancelled.'),
+        );
+        return;
+      }
+      AppLog.error('auth oauth platform failure', e);
       if (!ref.mounted) return;
       final failed = state.value ?? const AuthState();
       state = AsyncData(
-        failed.copyWith(working: false, error: 'Sign-in was cancelled.'),
+        failed.copyWith(working: false, error: loginMessage(e)),
       );
     } catch (e) {
       AppLog.error('auth oauth login failed', asVpnError(e)?.message ?? e);

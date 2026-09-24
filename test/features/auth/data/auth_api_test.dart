@@ -80,10 +80,12 @@ void main() {
     expect(body['remember_me'], 'true');
   });
 
-  test('login without refresh cookie keeps null refresh token', () async {
+  test('login without refresh cookie is rejected', () async {
     final api = AuthApi(fakeAuthDio(respond: (_) => tokenJson()));
-    final tokens = await api.login(identifier: 'u', password: 'p');
-    expect(tokens.refreshToken, isNull);
+    expect(
+      () => api.login(identifier: 'u', password: 'p'),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('fromLogin throws without access token', () {
@@ -136,6 +138,14 @@ void main() {
     final body = req.data as Map;
     expect(body['code'], 'code-abc');
     expect(body['code_verifier'], 'verifier-xyz');
+  });
+
+  test('exchange without refresh cookie is rejected', () async {
+    final api = AuthApi(fakeAuthDio(respond: (_) => tokenJson()));
+    expect(
+      () => api.exchangeNativeCode('code-abc', codeVerifier: 'verifier'),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('profileUsername resolves the display name', () async {

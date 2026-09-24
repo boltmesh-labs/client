@@ -35,6 +35,10 @@ extension AuthSession on AuthController {
           fallbackUsername: username,
         );
         if (refreshed != null) return refreshed;
+      } else {
+        // An expired/partial session without a refresh token cannot recover.
+        // Remove it rather than leaving an unusable access credential behind.
+        await _clearAuthBestEffort();
       }
       return const AuthState();
     } catch (e) {

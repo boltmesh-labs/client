@@ -40,11 +40,12 @@ class Env {
 
   /// Custom URL scheme the backend redirects OAuth logins to
   /// (`NATIVE_APP_CALLBACK_URL`, default `boltmesh://auth/callback`).
-  /// Override per flavor with `--dart-define=OAUTH_CALLBACK_SCHEME=...`.
-  static const oauthCallbackScheme = String.fromEnvironment(
-    'OAUTH_CALLBACK_SCHEME',
-    defaultValue: 'boltmesh',
-  );
+  ///
+  /// This must stay in sync with the schemes registered in the native
+  /// Android manifest and Apple platform plists. It is intentionally not a
+  /// Dart define: changing only the Dart value would make the plugin wait for
+  /// a callback that the operating system cannot route to this app.
+  static const oauthCallbackScheme = 'boltmesh';
 
   /// Optional public-key (SPKI) pins: comma-separated base64-encoded SHA-256
   /// digests of the server certificate's `SubjectPublicKeyInfo` (set via
