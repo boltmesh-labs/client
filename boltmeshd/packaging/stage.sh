@@ -7,7 +7,10 @@
 # postinstall moves them to /usr/libexec + /usr/lib/systemd/system.
 #
 # The packager exports BUILD_OUTPUT_DIRECTORY (the Flutter bundle) and runs
-# this with the client/ directory as the working directory.
+# this with the client/ directory as the working directory.  The enrollment
+# command is staged as well: package managers do not reliably identify the
+# invoking desktop user, so the deb/rpm postinstall can discover it or expose
+# an explicit root-run command when discovery is ambiguous.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,5 +31,6 @@ mkdir -p "$stage"
 install -m 0644 "$here/../deploy/boltmeshd.service" "$stage/boltmeshd.service"
 install -m 0644 "$here/../deploy/boltmeshd.socket" "$stage/boltmeshd.socket"
 install -m 0644 "$here/../deploy/99-boltmesh-unmanaged.conf" "$stage/99-boltmesh-unmanaged.conf"
+install -m 0755 "$here/enroll-user.sh" "$stage/boltmesh-enroll-user"
 
 echo "staged boltmeshd ($goarch) into $stage"

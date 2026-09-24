@@ -150,10 +150,15 @@ in `test/support/fakes.dart`.
   (`boltmeshd/`, installed by the deb/rpm, socket-activated, `boltmesh`
   group). The app itself holds no privilege and never runs
   `sudo`/`wg`/`wg-quick`; the daemon needs `wireguard-tools` for `wg-quick`.
+  The package enrolls the validated installing account or a unique active
+  graphical user when possible; when no trustworthy hint exists or multiple
+  users are active, explicitly run
+  `sudo /usr/libexec/boltmesh/boltmesh-enroll-user --uid "$(id -u USER)"`.
   Stopping or uninstalling the package tears down the managed interface,
   routes, and resolver state before removing the helper. Persistent helper
-  failures land in `/var/log/boltmesh/boltmeshd.log`
-  (JSON lines); see `boltmeshd/README.md`.
+  failures land in
+  `/var/log/boltmesh/boltmeshd.log` (JSON lines); see
+  [`boltmeshd/README.md`](boltmeshd/README.md).
   OAuth uses the same ephemeral loopback listener as Windows
   (`http://127.0.0.1:{port}/callback`) opened in the system browser, so the
   browser must be able to reach `API_BASE_URL` — the packaged deb/rpm pins

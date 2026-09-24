@@ -54,6 +54,14 @@ else
   bad 'Linux shutdown cleanup contract is incomplete'
 fi
 
+if grep -qE '^SocketUser=root$' boltmeshd/deploy/boltmeshd.socket &&
+  grep -qE '^SocketGroup=boltmesh$' boltmeshd/deploy/boltmeshd.socket &&
+  grep -qE '^SocketMode=0660$' boltmeshd/deploy/boltmeshd.socket; then
+  ok 'Linux helper socket remains root:boltmesh 0660'
+else
+  bad 'Linux helper socket access contract is incomplete'
+fi
+
 for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
   reload_line="$(grep -n 'systemctl daemon-reload' "$package_config" | sed -n '2p' | cut -d: -f1)"
   service_line="$(grep -n 'stop_unit boltmeshd.service' "$package_config" | cut -d: -f1)"
@@ -69,14 +77,57 @@ for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/m
   fi
 done
 
+# The package must not infer authorization solely from SUDO_USER or discard a
+# failed group update.  The staged command handles polkit metadata, logind
+# discovery, and an explicit fallback for root-shell/headless installs.
+enrollment_ok=1
+enrollment_script=boltmeshd/packaging/enroll-user.sh
+[[ -x "$enrollment_script" ]] || enrollment_ok=0
+sh -n "$enrollment_script" || enrollment_ok=0
+grep -qF 'PKEXEC_UID' "$enrollment_script" || enrollment_ok=0
+grep -qF 'SUDO_USER' "$enrollment_script" || enrollment_ok=0
+grep -qF 'loginctl' "$enrollment_script" || enrollment_ok=0
+grep -qF 'session_remote' "$enrollment_script" || enrollment_ok=0
+grep -qF 'session_class' "$enrollment_script" || enrollment_ok=0
+grep -qF 'x11|wayland' "$enrollment_script" || enrollment_ok=0
+# loginctl emits a formatted table; keep whitespace-aware parsing in the helper.
+grep -qF 'read -r session_id session_uid' "$enrollment_script" || enrollment_ok=0
+! grep -qF 'session_line%% *' "$enrollment_script" || enrollment_ok=0
+grep -qF 'usermod -aG' "$enrollment_script" || enrollment_ok=0
+for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
+  enroll_line="$(grep -nF '/usr/libexec/boltmesh/boltmesh-enroll-user --auto' "$package_config" | cut -d: -f1)"
+  socket_enable_line="$(grep -nF 'systemctl enable --now boltmeshd.socket' "$package_config" | cut -d: -f1)"
+  grep -qF 'rm -f /usr/libexec/boltmesh/boltmesh-enroll-user' "$package_config" || enrollment_ok=0
+  if [[ "$package_config" == *'/deb/'* ]]; then
+    grep -qE '^  - passwd$' "$package_config" || enrollment_ok=0
+    grep -qE '^  - systemd$' "$package_config" || enrollment_ok=0
+  else
+    grep -qE '^  - shadow-utils$' "$package_config" || enrollment_ok=0
+    grep -qE '^  - systemd$' "$package_config" || enrollment_ok=0
+  fi
+  if [[ -z "$enroll_line" || -z "$socket_enable_line" || "$enroll_line" -ge "$socket_enable_line" ]]; then
+    enrollment_ok=0
+  elif grep -qE '^[[:space:]]*[^#].*(SUDO_USER|usermod)' "$package_config" ||
+    grep -qF 'boltmesh-enroll-user --auto || true' "$package_config"; then
+    enrollment_ok=0
+  fi
+done
+if [[ "$enrollment_ok" -eq 1 ]]; then
+  ok 'Linux desktop enrollment is independent of the package manager caller'
+else
+  bad 'Linux desktop enrollment contract is incomplete'
+fi
+
 # --- Linux: the helper stages into a bundle and runs ----------------------
 if command -v go >/dev/null 2>&1; then
   bundle="$(mktemp -d)"
   trap 'rm -rf "$bundle"' EXIT
   if BUILD_OUTPUT_DIRECTORY="$bundle" bash boltmeshd/packaging/stage.sh >/dev/null 2>&1; then
-    for artifact in boltmeshd boltmeshd.service boltmeshd.socket 99-boltmesh-unmanaged.conf; do
+    for artifact in boltmeshd boltmeshd.service boltmeshd.socket 99-boltmesh-unmanaged.conf boltmesh-enroll-user; do
       [[ -f "$bundle/boltmeshd/$artifact" ]] || bad "staged payload is missing $artifact"
     done
+    [[ -x "$bundle/boltmeshd/boltmesh-enroll-user" ]] ||
+      bad "staged desktop enrollment command is not executable"
     if [[ -x "$bundle/boltmeshd/boltmeshd" ]] &&
       "$bundle/boltmeshd/boltmeshd" --version >/dev/null 2>&1; then
       ok "boltmeshd stages into the bundle and reports a version"

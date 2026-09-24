@@ -14,6 +14,9 @@ requires:
   - libsoup3
   # flutter_secure_storage_linux links libsecret.
   - libsecret
+  # boltmeshd enrollment uses account-management tools and loginctl.
+  - shadow-utils
+  - systemd
   - wireguard-tools
 generic_name: VPN Client
 keywords:
@@ -29,9 +32,21 @@ postinstall_scripts:
   - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd /usr/libexec/boltmesh/boltmeshd
   - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
   - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket
+  - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmesh-enroll-user /usr/libexec/boltmesh/boltmesh-enroll-user
   - install -Dm644 /usr/share/boltmesh/boltmeshd/99-boltmesh-unmanaged.conf /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
-  - getent group boltmesh >/dev/null 2>&1 || groupadd --system boltmesh
-  - 'if [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then usermod -aG boltmesh "$SUDO_USER" || true; fi'
+  # Create the group and enroll the unique active desktop user when the
+  # helper validates SUDO_UID/PKEXEC_UID or loginctl identifies one.  If no
+  # unambiguous user exists, the command prints an actionable warning and the
+  # package remains usable in a headless install; an administrator can run
+  # the installed command explicitly.
+  - |
+    if /usr/libexec/boltmesh/boltmesh-enroll-user --auto; then
+      :
+    else
+      status="$?"
+      printf 'boltmesh: desktop-user enrollment failed; run /usr/libexec/boltmesh/boltmesh-enroll-user --uid UID as root\n' >&2
+      exit "$status"
+    fi
   - systemctl daemon-reload >/dev/null 2>&1 || true
   - systemctl enable --now boltmeshd.socket >/dev/null 2>&1 || true
   - nmcli general reload conf >/dev/null 2>&1 || true
@@ -80,6 +95,7 @@ postuninstall_scripts:
     rmdir /run/boltmesh >/dev/null 2>&1 || true
     rm -f /usr/lib/systemd/system/boltmeshd.service /usr/lib/systemd/system/boltmeshd.socket
     rm -f /usr/libexec/boltmesh/boltmeshd
+    rm -f /usr/libexec/boltmesh/boltmesh-enroll-user
     rm -f /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
     rmdir /usr/libexec/boltmesh >/dev/null 2>&1 || true
     systemctl daemon-reload >/dev/null 2>&1 || true

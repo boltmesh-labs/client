@@ -94,7 +94,7 @@ If you deploy the BoltMesh client, please:
 1. **Run supported versions** — update promptly when patch releases ship.
 2. **Verify downloads** — obtain installers and packages only from official GitHub Releases for this repository, then check them against `SHA256SUMS` and the published Sigstore attestations/signatures (see [DEPLOYMENT.md](DEPLOYMENT.md#verifying-a-release)).
 3. **Keep TLS verification on** — do not weaken `API_BASE_URL` to `http://` outside throwaway development, and prefer an SPKI pin for pinned deployments.
-4. **Keep privilege minimal** — on Linux, only add desktop users who should control the tunnel to the `boltmesh` group; `boltmeshd` runs as root on their behalf. On Windows, the pipe is limited to SYSTEM, Administrators and Interactive Users, and only the installer needs elevation.
+4. **Keep privilege minimal** — on Linux, only add desktop users who should control the tunnel to the `boltmesh` group. The package uses a validated installer hint or a unique active graphical session, but operators should use the root-only `/usr/libexec/boltmesh/boltmesh-enroll-user --uid UID` command to make any additional enrollment explicit; `boltmeshd` runs as root on enrolled users' behalf. On Windows, the pipe is limited to SYSTEM, Administrators and Interactive Users, and only the installer needs elevation.
 5. **Review CI changes as security-sensitive code** — audit modifications to `.github/workflows/`, the signing hooks under `windows/packaging/` and `boltmeshd/packaging/`, and `tool/` with the same scrutiny as source changes.
 
 ## Contact

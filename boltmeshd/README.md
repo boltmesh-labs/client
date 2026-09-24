@@ -112,9 +112,12 @@ capabilities). `status` keeps its line lean and carries no `caps`.
   whose owner and DACL are set before any bytes are written, so a pre-existing
   file or open handle cannot redirect or observe a new secret.
 - **Linux**: the socket is `0660 root:boltmesh`; only members of the
-  `boltmesh` group can connect. The daemon runs as root with
-  `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`,
-  restricted address families, and no new namespaces.
+  `boltmesh` group can connect. The package's root-only
+  `/usr/libexec/boltmesh/boltmesh-enroll-user` command is the explicit enrollment
+  boundary; the Flutter app never elevates itself or changes group membership.
+  The daemon runs as root with `NoNewPrivileges`, `ProtectSystem=full`,
+  `ProtectHome`, `PrivateTmp`, restricted address families, and no new
+  namespaces.
 
 ## Logging
 
@@ -168,12 +171,28 @@ Windows runner (and `GOOS=windows go vet` on Linux).
 ## Linux: install (from the deb/rpm)
 
 The packages install the binary to `/usr/libexec/boltmesh/boltmeshd`, the
-units to `/usr/lib/systemd/system/`, create the `boltmesh` group, add the
-desktop user to it, and enable the socket:
+units to `/usr/lib/systemd/system/`, create the `boltmesh` group, and enable
+the socket. During post-install, BoltMesh first uses a validated elevation
+hint (`PKEXEC_UID`/`SUDO_UID` or a resolved legacy `SUDO_USER`) to identify the
+installing account. Without such a hint, it enrolls a unique active graphical
+session when logind can identify one. This works for sudo, root-shell,
+PackageKit, and polkit-launched package managers without granting the group to
+every local account. PackageKit has no portable transaction-to-caller identity,
+so if logind is unavailable or more than one desktop user is active, the
+install leaves enrollment explicit rather than guessing. Run the root command
+for the login that should control the tunnel:
 
 ```sh
+sudo /usr/libexec/boltmesh/boltmesh-enroll-user --uid "$(id -u alice)"
+# Or, from a desktop policy agent:
+pkexec /usr/libexec/boltmesh/boltmesh-enroll-user --uid "$(id -u alice)"
 sudo systemctl enable --now boltmeshd.socket
 ```
+
+An attempted enrollment that fails is reported and fails the post-install
+rather than being silently ignored. The enrollment command is separate from
+the Flutter app, so the app never needs elevation. To revoke access later, use
+`sudo gpasswd -d alice boltmesh`; do not remove the shared group itself.
 
 They also drop a NetworkManager configuration at
 `/etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf` that marks
@@ -242,6 +261,11 @@ sudo usermod -aG boltmesh "$USER"   # re-login afterwards
 make build-amd64
 sudo ./bin/boltmeshd-linux-amd64 --socket=/run/boltmesh/boltmeshd.sock
 ```
+
+Do not run a helper from this user-writable checkout with `sudo`; use the
+root-owned packaged command for production enrollment. Log out and back in
+after enrollment so the new supplementary group is present in the desktop
+process.
 
 `wireguard-tools` must be installed for `wg-quick`.
 
