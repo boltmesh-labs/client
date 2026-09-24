@@ -34,20 +34,25 @@ func defaultLogFile() string {
 	return filepath.Join(tunnel.DefaultConfigDir, "logs", "boltmeshd.log")
 }
 
-// prepareLogFile creates the log directory and tightens it to SYSTEM and
-// Administrators, matching the config directory. ProgramData's default ACE lets
-// every local user read, and the failure log records privileged operation
-// errors, so it gets the same protected DACL. os.Chmod is a no-op on Windows,
-// so the ACL is the real control.
+// prepareLogFile creates a fresh private log file in a verified directory.
+// ProgramData's default ACE lets every local user read, and a pre-existing log
+// may be user-owned or a reparse point. SecureLogFile rejects the latter and
+// replaces the former before logging opens it in append mode.
 func prepareLogFile(path string) error {
-	if path == "" {
+	return tunnel.SecureLogFile(path)
+}
+
+// prepareFilesystem runs before configureLogging, including for -install. It
+// closes the pre-service window in which a standard user could pre-create the
+// config directory or a junction at the configured path.
+func prepareFilesystem(opts options) error {
+	if opts.uninstall {
 		return nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
+	if err := tunnel.ProtectDir(opts.configDir); err != nil {
+		return fmt.Errorf("secure config directory %q: %w", opts.configDir, err)
 	}
-	return tunnel.ProtectDir(dir)
+	return nil
 }
 
 // run installs/uninstalls the service, runs in the foreground for
@@ -55,7 +60,7 @@ func prepareLogFile(path string) error {
 func run(opts options) error {
 	switch {
 	case opts.install:
-		return installService()
+		return installService(opts)
 	case opts.uninstall:
 		return uninstallService()
 	case opts.console:
@@ -122,7 +127,14 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, changes
 	}
 }
 
-func installService() error {
+func installService(opts options) error {
+	// This is deliberately repeated at the elevated installation boundary,
+	// even though prepareFilesystem also runs from main. It makes the
+	// invariant explicit and keeps direct callers of installService safe.
+	if err := tunnel.ProtectDir(opts.configDir); err != nil {
+		return fmt.Errorf("secure config directory %q: %w", opts.configDir, err)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)

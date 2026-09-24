@@ -33,6 +33,10 @@ func prepareLogFile(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o750)
 }
 
+// prepareFilesystem is a no-op on Unix. The Windows implementation hardens
+// the machine-wide config directory before any privileged file operation.
+func prepareFilesystem(_ options) error { return nil }
+
 // run binds the Unix socket and serves until a signal arrives. It is separate
 // from main so signal cleanup (the deferred stop) runs before any os.Exit.
 func run(opts options) error {

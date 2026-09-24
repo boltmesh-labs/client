@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -262,6 +264,39 @@ func TestProtectConfigDirAppliesACL(t *testing.T) {
 	}
 	if len(sids) != 2 || !sids[localSystemSID] || !sids[administratorsSID] {
 		t.Fatalf("applied DACL SIDs = %v, want exactly %s and %s", sids, localSystemSID, administratorsSID)
+	}
+}
+
+func TestWritePrivateFileProtectsBeforeWritingAndReplacesDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "boltmesh0.conf")
+	if err := os.WriteFile(path, []byte("attacker-controlled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	protected := false
+	if err := writePrivateFile(path, []byte("fresh-secret"), func(tempPath string) error {
+		protected = true
+		data, err := os.ReadFile(tempPath)
+		if err != nil {
+			return err
+		}
+		if len(data) != 0 {
+			return fmt.Errorf("temporary file contains %d bytes before protection", len(data))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("writePrivateFile() = %v", err)
+	}
+	if !protected {
+		t.Fatal("temporary file was not protected")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "fresh-secret" {
+		t.Fatalf("config = %q, want fresh-secret", got)
 	}
 }
 

@@ -92,9 +92,12 @@ capabilities). `status` keeps its line lean and carries no `caps`.
   `wireguard_svc.exe` installed beside it), never taken from the client. A
   client that could name the service binary would turn a LocalSystem service
   into arbitrary code execution. The named pipe is ACL'd to SYSTEM,
-  Administrators and Interactive Users, and the persisted wg-quick config
-  directory/file to SYSTEM and Administrators only (a protected DACL, so
-  ProgramData inheritance cannot widen it).
+  Administrators and Interactive Users. During elevated installation the
+  machine-wide config and log directories are verified, made SYSTEM-owned, and
+  given a protected SYSTEM + Administrators DACL; reparse points are rejected.
+  Config and log files are replaced through fresh exclusive temporary files
+  whose owner and DACL are set before any bytes are written, so a pre-existing
+  file or open handle cannot redirect or observe a new secret.
 - **Linux**: the socket is `0660 root:boltmesh`; only members of the
   `boltmesh` group can connect. The daemon runs as root with
   `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`,
@@ -115,7 +118,7 @@ The daemon logs twice, with independent levels:
 | OS | Path |
 | --- | --- |
 | Linux | `/var/log/boltmesh/boltmeshd.log` (systemd `LogsDirectory=boltmesh`, mode `0750`) |
-| Windows | `%ProgramData%\BoltMesh\logs\boltmeshd.log` (protected DACL: SYSTEM + Administrators) |
+| Windows | `%ProgramData%\BoltMesh\logs\boltmeshd.log` (fresh SYSTEM-owned file; protected DACL: SYSTEM + Administrators) |
 
 Override the path with `-log-file` or `BOLTMESHD_LOG_FILE`; an empty value
 disables file logging. A path that cannot be created or opened is reported and
@@ -193,12 +196,13 @@ needs no elevation: it talks to the named pipe and the daemon creates/starts the
 `boltmesh0` tunnel service on demand. `-console` runs the daemon in the
 foreground for development.
 
-The config lives under `%ProgramData%\BoltMesh`. The daemon tightens that
-directory and the config file to a protected DACL granting only SYSTEM and
-Administrators on every `up` (`internal/tunnel/security_windows.go`), so
-ProgramData's default `BUILTIN\Users` inheritance cannot expose the WireGuard
-private key. `os.Chmod` is a no-op protection on Windows, so this is the real
-control.
+The config lives under `%ProgramData%\BoltMesh`. Elevated `-install` verifies
+and hardens that directory before registering the service; the daemon repeats
+the check before every `up`. Reparse points are rejected, the directory is
+SYSTEM-owned, and each config update writes a fresh exclusive temporary file
+with its owner and protected SYSTEM + Administrators DACL applied before the
+private key is written, then atomically renames it into place. The persistent
+log is prepared the same way before the logging package opens it.
 
 ## Linux: run from source (development)
 

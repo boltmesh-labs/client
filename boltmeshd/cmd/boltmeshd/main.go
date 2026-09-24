@@ -99,7 +99,12 @@ func main() {
 	}
 
 	// Configured after the version short-circuit so `--version` touches no
-	// filesystem state.
+	// filesystem state. On Windows this also hardens the config directory
+	// before the installer or service can open any file beneath it.
+	if err := prepareFilesystem(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "boltmeshd: secure filesystem paths: %v\n", err)
+		os.Exit(1)
+	}
 	configureLogging(opts)
 
 	if err := run(opts); err != nil {

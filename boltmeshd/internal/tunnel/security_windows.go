@@ -3,7 +3,11 @@
 package tunnel
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -15,49 +19,127 @@ const (
 	administratorsSID = "S-1-5-32-544"
 )
 
-// protectConfigDir tightens the DACL on dir to SYSTEM and Administrators only,
-// propagating the ACEs to child files (the wg-quick config). os.Chmod is a
-// no-op protection on Windows, so without this the privileged config — which
-// carries the WireGuard private key — inherits ProgramData's default ACE for
-// BUILTIN\Users and is readable by every local user.
-//
-// The DACL is protected (PROTECTED_DACL_SECURITY_INFORMATION), so inheritance
-// from C:\ProgramData cannot widen it.
+const (
+	// Do not request DELETE while applying security to a path. Apart from
+	// being unnecessary, it lets an already-open handle with a permissive
+	// share mode turn a hardening operation into a replacement race.
+	configSecurityAccess = windows.GENERIC_READ | windows.GENERIC_WRITE |
+		windows.WRITE_DAC | windows.WRITE_OWNER | windows.READ_CONTROL
+	configDirectoryShare = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE
+	allPathShares        = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
+)
+
+// protectConfigDir creates dir if necessary, rejects reparse points in its
+// path, and makes the directory itself SYSTEM-owned with a protected DACL.
+// The DACL is propagated to children so a newly-created config cannot inherit
+// ProgramData's BUILTIN\Users access. The DACL alone is not sufficient: the
+// owner must also be changed, otherwise the user who created a directory (or
+// file) before installation can change it back later. If an existing object
+// cannot be opened for a handle-based owner/DACL update, the operation fails
+// closed rather than falling back to a pathname security update.
 func protectConfigDir(dir string) error {
-	acl, err := configACL(windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+	if dir == "" {
+		return errors.New("config directory is empty")
+	}
+	if !filepath.IsAbs(dir) {
+		absolute, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("resolve config directory %q: %w", dir, err)
+		}
+		dir = absolute
+	}
+	if err := ensureDirectory(dir); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	handle, err := openPathNoReparse(dir, configSecurityAccess, configDirectoryShare)
 	if err != nil {
+		return fmt.Errorf("open config directory %q: %w", dir, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+
+	if err := requireDirectory(handle, dir); err != nil {
 		return err
 	}
-	return setConfigDACL(dir, acl)
-}
-
-// ProtectDir applies the same SYSTEM + Administrators protected DACL to dir.
-// Exported so the persistent failure log can live in a directory beside the
-// config without inheriting ProgramData's world-readable ACE.
-func ProtectDir(dir string) error { return protectConfigDir(dir) }
-
-// protectConfigFile applies the same ACEs to an existing config file without
-// inheritance, so a file left with a loose DACL by an older build is tightened
-// on the next write.
-func protectConfigFile(path string) error {
-	acl, err := configACL(windows.NO_INHERITANCE)
-	if err != nil {
+	if err := setConfigSecurity(handle, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT); err != nil {
+		return fmt.Errorf("protect config directory %q: %w", dir, err)
+	}
+	if err := rejectReparseHandle(handle, dir); err != nil {
 		return err
 	}
-	return setConfigDACL(path, acl)
+	if err := verifyConfigSecurity(handle); err != nil {
+		return fmt.Errorf("verify config directory %q: %w", dir, err)
+	}
+	return nil
 }
 
+// setConfigDACL is retained for package-level Windows callers that supplied
+// an ACL explicitly. New code uses setConfigSecurity, which also changes the
+// owner through a verified handle.
+//
+//nolint:unused // kept as a compatibility seam for Windows package tests.
 func setConfigDACL(path string, acl *windows.ACL) error {
-	if err := windows.SetNamedSecurityInfo(
-		path,
+	owner, err := windows.StringToSid(localSystemSID)
+	if err != nil {
+		return fmt.Errorf("resolve SYSTEM SID: %w", err)
+	}
+	handle, err := openPathNoReparse(path, configSecurityAccess, configDirectoryShare)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+	if err := setConfigSecurityOnHandle(handle, owner, acl); err != nil {
+		return fmt.Errorf("set security on %s: %w", path, err)
+	}
+	return nil
+}
+
+// setConfigSecurityOnHandle applies owner and DACL to an already-open object.
+func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *windows.ACL) error {
+	if err := windows.SetSecurityInfo(
+		handle,
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
+		windows.OWNER_SECURITY_INFORMATION|
+			windows.DACL_SECURITY_INFORMATION|
+			windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		owner,
 		nil,
 		acl,
 		nil,
 	); err != nil {
-		return fmt.Errorf("set DACL on %s: %w", path, err)
+		return fmt.Errorf("set owner and DACL: %w", err)
+	}
+	return nil
+}
+
+// ProtectDir applies the same SYSTEM + Administrators owner and protected
+// DACL to dir. It is exported so the persistent failure log can live in a
+// directory beside the config without inheriting ProgramData's world-readable
+// ACE.
+func ProtectDir(dir string) error { return protectConfigDir(dir) }
+
+// protectConfigFile applies the owner and DACL to an existing regular file
+// without following a reparse point. The file is normally a freshly-created
+// temporary file; the path-based API is kept small so the manager can inject
+// a no-op in platform tests.
+func protectConfigFile(path string) error {
+	handle, err := openPathNoReparse(path, configSecurityAccess, configDirectoryShare)
+	if err != nil {
+		return fmt.Errorf("open config file %q: %w", path, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+
+	if err := requireRegularFile(handle, path); err != nil {
+		return err
+	}
+	if err := setConfigSecurity(handle, windows.NO_INHERITANCE); err != nil {
+		return fmt.Errorf("protect config file %q: %w", path, err)
+	}
+	if err := rejectReparseHandle(handle, path); err != nil {
+		return err
+	}
+	if err := verifyConfigSecurity(handle); err != nil {
+		return fmt.Errorf("verify config file %q: %w", path, err)
 	}
 	return nil
 }
@@ -103,4 +185,381 @@ func configACL(inheritance uint32) (*windows.ACL, error) {
 		return nil, fmt.Errorf("build config ACL: %w", err)
 	}
 	return acl, nil
+}
+
+// setConfigSecurity changes both pieces of state that an untrusted creator can
+// otherwise retain: the owner and the protected DACL. Applying them through a
+// handle also means a path swap cannot redirect the operation to another
+// object between the open and the security update.
+func setConfigSecurity(handle windows.Handle, inheritance uint32) error {
+	owner, err := windows.StringToSid(localSystemSID)
+	if err != nil {
+		return fmt.Errorf("resolve SYSTEM SID: %w", err)
+	}
+	acl, err := configACL(inheritance)
+	if err != nil {
+		return err
+	}
+	return setConfigSecurityOnHandle(handle, owner, acl)
+}
+
+// verifyConfigSecurity makes a successful SetSecurityInfo call meaningful. In
+// particular, an inherited or third-party ACE would reintroduce the original
+// ProgramData disclosure even if the API reported success.
+func verifyConfigSecurity(handle windows.Handle) error {
+	sd, err := windows.GetSecurityInfo(
+		handle,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return fmt.Errorf("read security descriptor: %w", err)
+	}
+
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("read owner: %w", err)
+	}
+	system, err := windows.StringToSid(localSystemSID)
+	if err != nil {
+		return fmt.Errorf("resolve SYSTEM SID: %w", err)
+	}
+	if owner == nil || !owner.Equals(system) {
+		ownerSID := "<nil>"
+		if owner != nil {
+			ownerSID = owner.String()
+		}
+		return fmt.Errorf("owner is %s, want %s", ownerSID, localSystemSID)
+	}
+
+	control, _, err := sd.Control()
+	if err != nil {
+		return fmt.Errorf("read DACL control: %w", err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return errors.New("DACL is inheritable; expected a protected DACL")
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("read DACL: %w", err)
+	}
+	if dacl == nil || dacl.AceCount == 0 {
+		return errors.New("DACL is empty")
+	}
+
+	admins, err := windows.StringToSid(administratorsSID)
+	if err != nil {
+		return fmt.Errorf("resolve Administrators SID: %w", err)
+	}
+	seenSystem, seenAdmins := false, false
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return fmt.Errorf("read DACL ACE %d: %w", i, err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("DACL ACE %d is not an allow ACE", i)
+		}
+		if ace.Header.AceFlags&windows.INHERITED_ACE != 0 {
+			return fmt.Errorf("DACL ACE %d is inherited", i)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(system):
+			seenSystem = true
+		case sid.Equals(admins):
+			seenAdmins = true
+		default:
+			return fmt.Errorf("DACL contains unexpected SID %s", sid.String())
+		}
+	}
+	if !seenSystem || !seenAdmins {
+		return errors.New("DACL does not contain both SYSTEM and Administrators")
+	}
+	return nil
+}
+
+// ensureDirectory creates each missing component separately and inspects
+// every existing component with FILE_FLAG_OPEN_REPARSE_POINT. os.MkdirAll is
+// intentionally not used here: it can traverse a junction created by a user
+// before the elevated installer gets a chance to harden the final directory.
+func ensureDirectory(path string) error {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve directory path %q: %w", path, err)
+		}
+		path = filepath.Clean(absolute)
+	}
+
+	parent := filepath.Dir(path)
+	if parent != path {
+		if err := ensureDirectory(parent); err != nil {
+			return err
+		}
+	}
+
+	handle, err := openPathNoReparse(path, 0, allPathShares)
+	if err == nil {
+		defer func() { _ = windows.CloseHandle(handle) }()
+		return requireDirectory(handle, path)
+	}
+	if !isMissingPathError(err) {
+		return fmt.Errorf("inspect directory %q: %w", path, err)
+	}
+
+	if mkdirErr := os.Mkdir(path, 0o700); mkdirErr != nil && !isAlreadyExistsError(mkdirErr) {
+		return fmt.Errorf("create directory %q: %w", path, mkdirErr)
+	}
+	handle, err = openPathNoReparse(path, 0, allPathShares)
+	if err != nil {
+		return fmt.Errorf("inspect created directory %q: %w", path, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+	return requireDirectory(handle, path)
+}
+
+func openPathNoReparse(path string, access, share uint32) (windows.Handle, error) {
+	pathp, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	handle, err := windows.CreateFile(
+		pathp,
+		access,
+		share,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err := rejectReparseHandle(handle, path); err != nil {
+		_ = windows.CloseHandle(handle)
+		return 0, err
+	}
+	return handle, nil
+}
+
+func rejectReparseHandle(handle windows.Handle, path string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read attributes for %q: %w", path, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("%q is a reparse point", path)
+	}
+	return nil
+}
+
+func requireDirectory(handle windows.Handle, path string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read directory attributes for %q: %w", path, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DEVICE != 0 {
+		return fmt.Errorf("%q is a device", path)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return fmt.Errorf("%q is not a directory", path)
+	}
+	return nil
+}
+
+func requireRegularFile(handle windows.Handle, path string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read file attributes for %q: %w", path, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DEVICE != 0 {
+		return fmt.Errorf("%q is a device, not a file", path)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		return fmt.Errorf("%q is a directory, not a file", path)
+	}
+	return nil
+}
+
+func isMissingPathError(err error) bool {
+	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
+}
+
+func isAlreadyExistsError(err error) bool {
+	return errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS)
+}
+
+// rejectReparseFile checks an optional destination without following a link.
+// A missing destination is fine; a directory or reparse point is not. If the
+// destination denies metadata access, it is deliberately not opened: the
+// subsequent MoveFileEx operates on the directory entry and must not turn a
+// user-created deny ACE into a denial of service. MoveFileEx never writes
+// through a destination reparse point, so an uninspectable entry is safe to
+// replace.
+func rejectReparseFile(path string) error {
+	// A zero desired access is intentional: Windows can inspect attributes for
+	// an existing object even when a deny ACE blocks SYSTEM's read access.
+	handle, err := openPathNoReparse(path, 0, allPathShares)
+	if err == nil {
+		defer func() { _ = windows.CloseHandle(handle) }()
+		return requireRegularFile(handle, path)
+	}
+	if isMissingPathError(err) {
+		return nil
+	}
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return fmt.Errorf("inspect destination %q: %w", path, err)
+	}
+
+	// A deny ACE on a pre-created destination must not make the privileged
+	// writer depend on access to that object. GetFileAttributes is only a
+	// best-effort reparse check here; MoveFileEx still replaces the directory
+	// entry itself, never the target of a link.
+	pathp, pathErr := windows.UTF16PtrFromString(path)
+	if pathErr != nil {
+		return pathErr
+	}
+	attrs, attrErr := windows.GetFileAttributes(pathp)
+	if attrErr != nil {
+		if isMissingPathError(attrErr) || errors.Is(attrErr, windows.ERROR_ACCESS_DENIED) {
+			return nil
+		}
+		return fmt.Errorf("inspect destination %q: %w", path, attrErr)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("%q is a reparse point", path)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_DEVICE != 0 {
+		return fmt.Errorf("%q is a device, not a file", path)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		return fmt.Errorf("%q is a directory, not a file", path)
+	}
+	return nil
+}
+
+// writePrivateFile writes data to a newly-created exclusive temporary file,
+// applies the private owner/DACL before the first write, and only then
+// atomically replaces path. The source is never opened or truncated through a
+// pre-existing destination, so an old read handle cannot observe the new
+// secret. A failed operation removes the temporary file.
+func writePrivateFile(path string, data []byte, protect func(string) error) error {
+	if path == "" {
+		return errors.New("destination path is empty")
+	}
+	path = filepath.Clean(path)
+	dir := filepath.Dir(path)
+	if err := ensureDirectory(dir); err != nil {
+		return fmt.Errorf("verify parent directory: %w", err)
+	}
+	// Keep a no-delete-share handle on the parent for the whole staging and
+	// replacement operation. Once the directory has been secured, this also
+	// prevents a path swap from redirecting the temporary-file operations.
+	dirHandle, err := openPathNoReparse(dir, windows.FILE_READ_ATTRIBUTES, configDirectoryShare)
+	if err != nil {
+		return fmt.Errorf("open parent directory: %w", err)
+	}
+	parentClosed := false
+	closeParent := func() {
+		if !parentClosed {
+			_ = windows.CloseHandle(dirHandle)
+			parentClosed = true
+		}
+	}
+	defer closeParent()
+	if err := requireDirectory(dirHandle, dir); err != nil {
+		return err
+	}
+	if err := rejectReparseFile(path); err != nil {
+		return err
+	}
+
+	// os.CreateTemp opens with O_CREATE|O_EXCL (CREATE_NEW on Windows), so a
+	// pre-created name or reparse entry can never be opened and truncated.
+	temp, err := os.CreateTemp(dir, ".boltmeshd-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		_ = temp.Close()
+		closeParent()
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if protect == nil {
+		protect = protectConfigFile
+	}
+	if err := protect(tempPath); err != nil {
+		return fmt.Errorf("protect temporary file: %w", err)
+	}
+	if _, err := temp.Write(data); err != nil {
+		return fmt.Errorf("write temporary file: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+
+	// Re-check both directory entries immediately before replacement. This
+	// closes the common installer/startup race where another process creates a
+	// reparse point after the first inspection.
+	if err := rejectReparseFile(tempPath); err != nil {
+		return fmt.Errorf("inspect temporary file: %w", err)
+	}
+	if err := rejectReparseFile(path); err != nil {
+		return err
+	}
+	from, err := windows.UTF16PtrFromString(tempPath)
+	if err != nil {
+		return err
+	}
+	to, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	// REPLACE_EXISTING performs the old-entry cleanup as part of the same
+	// directory operation. There is no remove/truncate window in which a
+	// pre-existing object can be mistaken for the new config.
+	if err := windows.MoveFileEx(
+		from,
+		to,
+		windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH,
+	); err != nil {
+		return fmt.Errorf("replace destination %q: %w", path, err)
+	}
+	committed = true
+	return nil
+}
+
+// SecureLogFile prepares a fresh, private active log file. The logging
+// package subsequently opens this already-hardened path with append mode; it
+// never gets to follow a pre-existing file or reparse point. A fresh file is
+// intentional: a pre-created log can have an owner-controlled DACL or an open
+// read handle, neither of which can safely be repaired in place.
+func SecureLogFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve log file path %q: %w", path, err)
+		}
+		path = absolute
+	}
+	if err := protectConfigDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("protect log directory: %w", err)
+	}
+	if err := writePrivateFile(path, nil, protectConfigFile); err != nil {
+		return fmt.Errorf("create private log file: %w", err)
+	}
+	return nil
 }
