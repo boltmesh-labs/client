@@ -10,6 +10,9 @@ extension ConnectionSwitch on ConnectionController {
     // False for one-shot Auto moves: the picked target is dialed without
     // pinning, so the state stays unpinned and later connects re-pick.
     bool pinTarget = true,
+    // Quick Connect's snapshot of [_teardownEpoch]: a Disconnect that landed
+    // during its lock-free discovery must win over this queued switch.
+    int? expectedTeardown,
   }) async {
     // Clear any previous failure signal first: only an actual failure below
     // sets it again, so the benign same-target no-op never snacks.
@@ -57,6 +60,12 @@ extension ConnectionSwitch on ConnectionController {
     // backend's /switch POST rejects with 404).
     String? id;
     try {
+      // Quick Connect snapshotted [_teardownEpoch] before its lock-free
+      // discovery: a Disconnect that landed while this switch was queued must
+      // win. Checked first so a superseded switch surfaces nothing.
+      if (expectedTeardown != null && expectedTeardown != _teardownEpoch) {
+        return;
+      }
       // A throttled client must not spend more of the shared limiter budget:
       // surface the countdown and skip the POST (a live tunnel stays up).
       if (_blockedByRateLimit('switch')) return;

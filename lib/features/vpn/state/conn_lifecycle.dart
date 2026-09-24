@@ -21,6 +21,9 @@ extension ConnectionLifecycle on ConnectionController {
   Future<void> _teardownRevokedSession(int sessionEpoch) async {
     final release = await _mutex.acquire('session-revoked');
     try {
+      // An in-flight lock-free discovery/probe belonging to the revoked
+      // session must not dial once this queued teardown has run.
+      _teardownEpoch++;
       if (sessionEpoch != _sessionEpoch) {
         // A new login may already have changed the auth generation, but the
         // physical tunnel and device identity still belong to the revoked
@@ -55,6 +58,8 @@ extension ConnectionLifecycle on ConnectionController {
     _pollsSinceRotate = 0;
     _resetLocalHealth();
     _coldRestore.clear();
+    // Supersede any lock-free discovery/probe still in flight.
+    _teardownEpoch++;
     snap = const ConnState(message: 'Ready');
   }
 
@@ -212,6 +217,9 @@ extension ConnectionLifecycle on ConnectionController {
   /// and local wipe run under one lock and a concurrent Connect can never
   /// interleave to bind a device that [_device.clearDevice] then wipes.
   Future<void> _disconnectBody() async {
+    // Bump before the first await so a lock-free Quick Connect discovery
+    // that already ran can never bind/dial after this explicit teardown.
+    _teardownEpoch++;
     try {
       // The tunnel stop is authoritative and never throws: run it first so
       // a secure-storage read failure can never leave the tunnel up while

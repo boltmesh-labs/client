@@ -80,6 +80,10 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
   Future<void> _quickConnect() async {
     final ctl = ref.read(connectionProvider.notifier);
     await ctl.selectAuto();
+    // The awaited persist can outlive a logout that tears this screen down;
+    // never issue the connect into a dead session. Logout during the connect
+    // itself is superseded by the controller's teardown/session guards.
+    if (!mounted) return;
     await ctl.quickConnect();
     if (!mounted) return;
     showSwitchFeedback(context, ref.read(connectionProvider));

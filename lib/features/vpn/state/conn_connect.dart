@@ -159,10 +159,18 @@ extension ConnectionConnect on ConnectionController {
     String? oneShotRegionId,
     String? oneShotServerId,
     DialParams? knownDial,
+    int? expectedTeardown,
   }) async {
     final release = await _mutex.acquire('connect');
     final sessionEpoch = _sessionEpoch;
     try {
+      // A lock-free caller (Quick Connect) captured [_teardownEpoch] before
+      // its discovery/probe await: a Disconnect that landed meanwhile must
+      // win even though this op only acquired the mutex after it. Checked
+      // first so a superseded op never writes a stale stage/message.
+      if (expectedTeardown != null && expectedTeardown != _teardownEpoch) {
+        return;
+      }
       // A throttled client must not keep spending the shared per-IP limiter
       // budget: surface the countdown and skip the network entirely.
       if (_blockedByRateLimit('connect')) return;
@@ -308,19 +316,30 @@ extension ConnectionConnect on ConnectionController {
   ///  - live peer elsewhere → one-shot `switch` onto [best];
   ///  - peerless → `connect` a fresh peer on [best].
   /// Auto stays unpinned throughout (no [selectTarget]).
-  Future<void> _autoConnectRegion(Region best) async {
+  ///
+  /// [expectedTeardown] is the caller's [_teardownEpoch] captured before its
+  /// own discovery await: the device read and server probe below are
+  /// lock-free, so a Disconnect that lands while they are in flight must
+  /// abort instead of binding a fresh tunnel behind it.
+  Future<void> _autoConnectRegion(Region best, {int? expectedTeardown}) async {
     final sessionEpoch = _sessionEpoch;
+    final teardownEpoch = expectedTeardown ?? _teardownEpoch;
+    bool superseded() =>
+        sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     final id = await _device.deviceId();
-    if (sessionEpoch != _sessionEpoch) return;
+    if (superseded()) return;
     if (id == null) {
-      await _connectOp(oneShotRegionId: best.id);
+      await _connectOp(
+        oneShotRegionId: best.id,
+        expectedTeardown: teardownEpoch,
+      );
       return;
     }
     DialParams? live;
     try {
       live = await _probeActiveDial(id);
     } catch (e) {
-      if (sessionEpoch != _sessionEpoch) return;
+      if (superseded()) return;
       final vpnErr = asVpnError(e);
       AppLog.error('quick connect probe failed', vpnErr?.message ?? e);
       final wait = _noteRateLimit(vpnErr);
@@ -334,24 +353,28 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Another op may have taken over while the probe was in flight.
-    if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+    if (superseded() || snap.phase == ConnPhase.working) {
       return;
     }
     if (live == null) {
-      await _connectOp(oneShotRegionId: best.id);
+      await _connectOp(
+        oneShotRegionId: best.id,
+        expectedTeardown: teardownEpoch,
+      );
       return;
     }
     // Promote for the closure below (`live` is a nullable local).
     final peer = live;
     if (best.servers.any((s) => s.id == peer.serverId)) {
-      await _connectOp(knownDial: peer);
+      await _connectOp(knownDial: peer, expectedTeardown: teardownEpoch);
       return;
     }
-    await switchServer(
+    await _switchServerOp(
       regionId: best.id,
       serverId: null,
       explicitTarget: false,
       pinTarget: false,
+      expectedTeardown: teardownEpoch,
     );
   }
 
@@ -371,9 +394,15 @@ extension ConnectionConnect on ConnectionController {
   /// [_autoConnectRegion] (which probes then reuses/switches/connects).
   /// Never pre-pins before a switch: that would trip the same-target skip
   /// check. A stale pin surfaces the backend error with the pin kept (no
-  /// silent auto-pick fallback).
+  /// silent auto-pick fallback). The whole discovery/probe sequence is
+  /// lock-free by design, so it snapshots [_teardownEpoch] up front and
+  /// aborts the moment a Disconnect (or reset/revocation) has landed: the
+  /// later teardown must win even though the connect started first.
   Future<void> _quickConnectOp() async {
     final sessionEpoch = _sessionEpoch;
+    final teardownEpoch = _teardownEpoch;
+    bool superseded() =>
+        sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     if (snap.phase == ConnPhase.working) return;
     // A throttled client must not run discovery or bind a peer either:
     // surface the countdown and skip the network entirely.
@@ -385,10 +414,14 @@ extension ConnectionConnect on ConnectionController {
     // disconnect → Connect stays on the same target.
     if (snap.serverId != null || snap.regionId != null) {
       if (snap.phase == ConnPhase.connected) {
-        await switchServer(regionId: snap.regionId, serverId: snap.serverId);
+        await _switchServerOp(
+          regionId: snap.regionId,
+          serverId: snap.serverId,
+          expectedTeardown: teardownEpoch,
+        );
         return;
       }
-      await connect();
+      await _connectOp(expectedTeardown: teardownEpoch);
       return;
     }
     // Restart survival: the in-memory pin is gone but the persisted one
@@ -396,14 +429,15 @@ extension ConnectionConnect on ConnectionController {
     try {
       final saved = await _device.lastTarget();
       // Another op may have taken over while reading the store.
-      if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+      if (superseded() || snap.phase == ConnPhase.working) {
         return;
       }
       if (saved.serverId != null || saved.regionId != null) {
         if (snap.phase == ConnPhase.connected) {
-          await switchServer(
+          await _switchServerOp(
             regionId: saved.regionId,
             serverId: saved.serverId,
+            expectedTeardown: teardownEpoch,
           );
           return;
         }
@@ -412,18 +446,18 @@ extension ConnectionConnect on ConnectionController {
           serverId: saved.serverId,
           explicitTarget: saved.explicitTarget,
         );
-        await connect();
+        await _connectOp(expectedTeardown: teardownEpoch);
         return;
       }
     } catch (e) {
-      if (sessionEpoch != _sessionEpoch) return;
+      if (superseded()) return;
       AppLog.error('quick connect saved target read failed', e);
     }
     final List<Region> regions;
     try {
       regions = await _api.regions();
     } catch (e) {
-      if (sessionEpoch != _sessionEpoch) return;
+      if (superseded()) return;
       final vpnErr = asVpnError(e);
       AppLog.error('quick connect discovery failed', vpnErr?.message ?? e);
       final wait = _noteRateLimit(vpnErr);
@@ -436,7 +470,7 @@ extension ConnectionConnect on ConnectionController {
       );
       return;
     }
-    if (sessionEpoch != _sessionEpoch) return;
+    if (superseded()) return;
     final best = autoPickRegion(regions);
     if (best == null) {
       AppLog.info('quick connect: no capacity');
@@ -447,7 +481,7 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Discovery awaited above: another op may have taken over meanwhile.
-    if (sessionEpoch != _sessionEpoch || snap.phase == ConnPhase.working) {
+    if (superseded() || snap.phase == ConnPhase.working) {
       return;
     }
     // Auto stays unpinned: one-shot the picked region without pinning, so
@@ -462,16 +496,17 @@ extension ConnectionConnect on ConnectionController {
         );
         return;
       }
-      await switchServer(
+      await _switchServerOp(
         regionId: best.id,
         serverId: null,
         explicitTarget: false,
         pinTarget: false,
+        expectedTeardown: teardownEpoch,
       );
       return;
     }
     // Not connected: reuse the live peer, switch it, or bind a fresh one
     // based on server truth (never a blind bind that would 409).
-    await _autoConnectRegion(best);
+    await _autoConnectRegion(best, expectedTeardown: teardownEpoch);
   }
 }

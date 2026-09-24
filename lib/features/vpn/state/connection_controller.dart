@@ -102,6 +102,15 @@ class ConnectionController extends Notifier<ConnState> {
   /// again after a revocation (or a subsequent login) has superseded them.
   int _sessionEpoch = 0;
 
+  /// Bumped on every explicit teardown: Disconnect, Reset/Forget-device, and
+  /// session revocation. A lock-free operation spanning awaits — Quick
+  /// Connect discovery then probe/bind/start — captures it before its first
+  /// await and refuses to dial once it changed, so a Disconnect tapped while
+  /// discovery is in flight can never be undone by the earlier connect.
+  /// Distinct from [_sessionEpoch] (auth transitions) and [_tunnelEpoch]
+  /// (every tunnel stop, including internal restarts).
+  int _teardownEpoch = 0;
+
   /// Background ticks (status poll + local health check); run only while
   /// connected (see [_startPolling]). Lifecycle owned by [PollingService].
   final PollingService _polling = PollingService();
