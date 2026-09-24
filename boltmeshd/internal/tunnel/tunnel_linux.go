@@ -28,9 +28,11 @@ const (
 	// config.
 	DefaultConfigDir = "/run/boltmesh"
 
-	wgQuickBinary  = "wg-quick"
-	ipBinary       = "ip"
-	commandTimeout = 30 * time.Second
+	wgQuickBinary    = "wg-quick"
+	ipBinary         = "ip"
+	resolvconfBinary = "resolvconf"
+	resolvectlBinary = "resolvectl"
+	commandTimeout   = 30 * time.Second
 )
 
 // toolDirs are the only directories searched for the privileged tools the
@@ -38,7 +40,8 @@ const (
 // daemon runs as root, so resolving a bare name through PATH on a manual
 // launch would let a caller-influenced PATH (or a stray wg-quick in the
 // working directory) execute as root. wg-quick's own child lookups (wg, ip,
-// resolvconf) remain PATH-based — that is the tool's behaviour, not ours.
+// resolvconf) remain PATH-based — that is the tool's behaviour, not ours;
+// resolver cleanup below resolves its tools through this fixed list.
 var toolDirs = []string{"/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 
 // findTool returns the absolute path of name under [toolDirs], or an error
@@ -134,7 +137,20 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
 	}
 	if _, err := m.run(ctx, wgQuick, "up", m.configPath()); err != nil {
-		_ = os.Remove(m.configPath())
+		// wg-quick can configure DNS before a later route or configuration
+		// step fails. Its failure trap does not reliably remove that DNS
+		// state, and deleting the config would prevent a proper down from
+		// finding the interface. Keep the config until cleanup has finished.
+		// The failed command may have exhausted the request context; give the
+		// destructive cleanup its own bounded lifetime.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
+		defer cancel()
+		if cleanupErr := m.cleanup(cleanupCtx, true); cleanupErr != nil {
+			return nil, &protocol.OpError{
+				Code: protocol.CodeInternal,
+				Err:  fmt.Errorf("wg-quick up: %w; cleanup failed: %w", err, cleanupErr),
+			}
+		}
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("wg-quick up: %w", err)}
 	}
 	return m.Status(), nil
@@ -195,30 +211,124 @@ func (m *Manager) Status() *protocol.Status {
 }
 
 func (m *Manager) down(ctx context.Context) error {
-	if !m.linkExists(m.iface) {
-		_ = os.Remove(m.configPath())
-		return nil
-	}
-	wgQuick, err := m.tool(wgQuickBinary)
-	if err != nil {
-		return err
-	}
-	if _, err := m.run(ctx, wgQuick, "down", m.configPath()); err != nil {
-		// wg-quick can strand a link when its own bookkeeping is gone
-		// (missing config, stale DNS). Delete the link directly so `down`
-		// stays idempotent; addresses and routes die with the link.
-		ip, ipErr := m.tool(ipBinary)
-		if ipErr != nil {
-			return ipErr
+	// A normal down does not need to invoke wg-quick when the link is already
+	// absent. The resolver cleanup still runs: deleting a link does not remove
+	// a per-interface resolvconf/systemd-resolved entry.
+	return m.cleanup(ctx, m.linkExists(m.iface))
+}
+
+// cleanup tears down the link and removes its resolver state. attemptDown is
+// true when this is recovery after a failed wg-quick up, where the config must
+// be offered to wg-quick even if the link has already disappeared.
+//
+// The config is removed only after all required cleanup has succeeded. Keeping
+// it on an incomplete cleanup lets a later down retry the resolver cleanup
+// instead of losing the only handle on the interface's state.
+func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
+	linkPresent := m.linkExists(m.iface)
+	var cleanupErrs []error
+
+	if attemptDown {
+		var downErr error
+		wgQuick, err := m.tool(wgQuickBinary)
+		if err != nil {
+			downErr = err
+		} else if _, err := m.run(ctx, wgQuick, "down", m.configPath()); err != nil {
+			downErr = err
 		}
-		if _, delErr := m.run(ctx, ip, "link", "del", m.iface); delErr != nil {
-			return &protocol.OpError{
-				Code: protocol.CodeInternal,
-				Err:  fmt.Errorf("wg-quick down: %w; ip link del: %w", err, delErr),
+
+		// wg-quick can strand a link when its own bookkeeping is gone
+		// (missing config or stale state). If it could not tear the link down,
+		// remove it directly; addresses and routes die with the link.
+		if downErr != nil && linkPresent {
+			if !m.linkExists(m.iface) {
+				// wg-quick may have removed the link before reporting a
+				// bookkeeping/DNS error. Treat that race as a completed link
+				// teardown; resolver cleanup below is still required.
+				downErr = nil
+			} else {
+				ip, ipErr := m.tool(ipBinary)
+				if ipErr != nil {
+					downErr = fmt.Errorf("wg-quick down: %w; locate ip: %w", downErr, ipErr)
+				} else if _, delErr := m.run(ctx, ip, "link", "del", m.iface); delErr != nil {
+					downErr = fmt.Errorf("wg-quick down: %w; ip link del: %w", downErr, delErr)
+				} else {
+					// The direct link deletion completed the link teardown even
+					// though wg-quick's bookkeeping was stale.
+					downErr = nil
+				}
 			}
 		}
+
+		// A down failure is expected when recovery follows a failed up and
+		// the link is already gone. In that case resolver cleanup below is
+		// still required, but there is no link error to report.
+		if downErr != nil && linkPresent {
+			cleanupErrs = append(cleanupErrs, downErr)
+		}
 	}
-	_ = os.Remove(m.configPath())
+
+	if err := m.clearResolverState(ctx); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if len(cleanupErrs) > 0 {
+		return &protocol.OpError{
+			Code: protocol.CodeInternal,
+			Err:  errors.Join(cleanupErrs...),
+		}
+	}
+
+	if err := os.Remove(m.configPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return &protocol.OpError{
+			Code: protocol.CodeInternal,
+			Err:  fmt.Errorf("remove config: %w", err),
+		}
+	}
+	return nil
+}
+
+// clearResolverState removes the fixed interface's DNS entry independently of
+// wg-quick. wg-quick's unset_dns is best effort (and its failure trap can skip
+// it), while resolvconf state is independent of the link's lifetime. The
+// systemd-resolved compatibility implementation of resolvconf covers the
+// common case; resolvectl is a fallback for installations exposing only the
+// native systemd-resolved tool.
+func (m *Manager) clearResolverState(ctx context.Context) error {
+	// A preceding wg-quick/ip cleanup may have consumed the operation
+	// context. DNS removal is the safety-critical part, so give it a fresh
+	// bounded context when the original one is already done.
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
+		defer cancel()
+	}
+
+	if path, err := m.lookup(resolvconfBinary); err == nil {
+		if _, err := m.run(ctx, path, "-d", m.iface, "-f"); err != nil {
+			return &protocol.OpError{
+				Code: protocol.CodeInternal,
+				Err:  fmt.Errorf("resolvconf cleanup: %w", err),
+			}
+		}
+		return nil
+	}
+
+	// Some systemd-resolved installations expose resolvectl without the
+	// resolvconf compatibility command. Use it only when resolvconf is not
+	// installed; a failing resolvconf command is reported rather than being
+	// papered over with a broader per-link revert.
+	if path, err := m.lookup(resolvectlBinary); err == nil {
+		if _, err := m.run(ctx, path, "revert", m.iface); err != nil {
+			return &protocol.OpError{
+				Code: protocol.CodeInternal,
+				Err:  fmt.Errorf("resolvectl cleanup: %w", err),
+			}
+		}
+		return nil
+	}
+
+	// Neither resolver tool is installed, so there is no resolver state for
+	// wg-quick to have configured on this system.
 	return nil
 }
 

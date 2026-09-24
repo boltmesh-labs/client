@@ -5,6 +5,7 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -186,11 +187,11 @@ func TestUpBouncesExistingLink(t *testing.T) {
 	if _, err := m.Up(context.Background(), validConfig); err != nil {
 		t.Fatalf("Up() = %v", err)
 	}
-	if len(*calls) != 2 {
-		t.Fatalf("calls = %+v, want down then up", *calls)
+	if len(*calls) != 3 {
+		t.Fatalf("calls = %+v, want down, resolver cleanup, then up", *calls)
 	}
-	if (*calls)[0].args[0] != "down" || (*calls)[1].args[0] != "up" {
-		t.Fatalf("call order = %+v, want down then up", *calls)
+	if (*calls)[0].args[0] != "down" || (*calls)[1].name != resolvconfBinary || (*calls)[2].args[0] != "up" {
+		t.Fatalf("call order = %+v, want down, resolver cleanup, then up", *calls)
 	}
 }
 
@@ -219,8 +220,18 @@ func TestUpOverwritesStaleConfig(t *testing.T) {
 // A failed wg-quick up must not leave the privileged config behind.
 func TestUpRemovesConfigWhenWgQuickUpFails(t *testing.T) {
 	m := newTestManager(t, false, deviceWithPeers(t), nil)
-	m.run = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-		return []byte("boom"), errors.New("exit status 1")
+	calls := &[]runCall{}
+	m.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, runCall{name: name, args: args})
+		if len(args) > 0 && args[0] == "up" {
+			return []byte("boom"), errors.New("exit status 1")
+		}
+		if len(args) > 0 && args[0] == "down" {
+			if _, statErr := os.Stat(m.configPath()); statErr != nil {
+				t.Fatalf("config was removed before wg-quick down: %v", statErr)
+			}
+		}
+		return nil, nil
 	}
 
 	_, err := m.Up(context.Background(), validConfig)
@@ -231,6 +242,15 @@ func TestUpRemovesConfigWhenWgQuickUpFails(t *testing.T) {
 	if _, statErr := os.Stat(m.configPath()); !os.IsNotExist(statErr) {
 		t.Fatal("config left behind after a failed wg-quick up")
 	}
+	if len(*calls) != 3 {
+		t.Fatalf("calls = %+v, want up, wg-quick down, then resolver cleanup", *calls)
+	}
+	if (*calls)[1].name != wgQuickBinary || (*calls)[1].args[0] != "down" {
+		t.Fatalf("cleanup calls = %+v, want wg-quick down after failed up", *calls)
+	}
+	if (*calls)[2].name != resolvconfBinary {
+		t.Fatalf("cleanup calls = %+v, want resolver cleanup after failed up", *calls)
+	}
 }
 
 // Down must clean up a config orphaned by an unclean exit even when the
@@ -240,12 +260,17 @@ func TestDownRemovesStaleConfigWhenLinkAbsent(t *testing.T) {
 	if err := os.WriteFile(m.configPath(), []byte(validConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	calls, run := recordRuns()
+	m.run = run
 
 	if _, err := m.Down(context.Background()); err != nil {
 		t.Fatalf("Down() = %v", err)
 	}
 	if _, err := os.Stat(m.configPath()); !os.IsNotExist(err) {
 		t.Fatal("stale config not removed by Down")
+	}
+	if len(*calls) != 1 || (*calls)[0].name != resolvconfBinary {
+		t.Fatalf("calls = %+v, want resolver cleanup with the link absent", *calls)
 	}
 }
 
@@ -261,8 +286,30 @@ func TestDownIsIdempotentWhenAbsent(t *testing.T) {
 	if status.Up || status.Stage != protocol.StageDisconnected {
 		t.Fatalf("Down() status = %+v, want disconnected", status)
 	}
-	if len(*calls) != 0 {
-		t.Fatalf("calls = %+v, want none", *calls)
+	if len(*calls) != 1 || (*calls)[0].name != resolvconfBinary {
+		t.Fatalf("calls = %+v, want resolver cleanup only", *calls)
+	}
+}
+
+func TestDownUsesResolvectlWhenResolvconfIsUnavailable(t *testing.T) {
+	m := newTestManager(t, false, nil, errors.New("no device"))
+	m.lookup = func(name string) (string, error) {
+		if name == resolvconfBinary {
+			return "", errors.New("resolvconf is not installed")
+		}
+		return name, nil
+	}
+	calls, run := recordRuns()
+	m.run = run
+
+	if _, err := m.Down(context.Background()); err != nil {
+		t.Fatalf("Down() = %v", err)
+	}
+	if len(*calls) != 1 || (*calls)[0].name != resolvectlBinary {
+		t.Fatalf("calls = %+v, want resolvectl fallback", *calls)
+	}
+	if got := (*calls)[0].args; len(got) != 2 || got[0] != "revert" || got[1] != DefaultInterface {
+		t.Fatalf("resolvectl args = %v, want [revert %s]", got, DefaultInterface)
 	}
 }
 
@@ -280,11 +327,28 @@ func TestDownFallsBackToLinkDelete(t *testing.T) {
 	if _, err := m.Down(context.Background()); err != nil {
 		t.Fatalf("Down() = %v", err)
 	}
-	if len(*calls) != 2 || (*calls)[1].name != ipBinary {
-		t.Fatalf("calls = %+v, want wg-quick down then ip link del", *calls)
+	if len(*calls) != 3 || (*calls)[1].name != ipBinary || (*calls)[2].name != resolvconfBinary {
+		t.Fatalf("calls = %+v, want wg-quick down, ip link del, then resolver cleanup", *calls)
 	}
 	if _, err := os.Stat(m.configPath()); !os.IsNotExist(err) {
 		t.Fatal("config not removed after down")
+	}
+}
+
+func TestDownKeepsConfigWhenResolverCleanupFails(t *testing.T) {
+	m := newTestManager(t, false, nil, errors.New("no device"))
+	if err := os.WriteFile(m.configPath(), []byte(validConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("resolver cleanup failed for %s", name)
+	}
+
+	if _, err := m.Down(context.Background()); err == nil {
+		t.Fatal("Down() = nil, want resolver cleanup error")
+	}
+	if _, err := os.Stat(m.configPath()); err != nil {
+		t.Fatalf("config was removed despite failed resolver cleanup: %v", err)
 	}
 }
 
