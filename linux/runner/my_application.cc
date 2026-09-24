@@ -45,12 +45,14 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "boltmesh");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "boltmesh");
   }
+
+  // Do not seed the native title here. Flutter supplies the localized title
+  // through window_manager once the application has generated it; GTK keeps
+  // the header bar and WM_NAME in sync when that title is set.
+  gtk_window_set_title(window, "");
 
   // Portrait, phone-shaped UI: default narrow and refuse sizes where the
   // bottom navigation and content stop being usable.

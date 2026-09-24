@@ -219,6 +219,29 @@ else
   bad 'Linux package postinstall can mask a critical helper setup error'
 fi
 
+# --- Linux: native title and desktop window identity -----------------------
+runner=linux/runner/my_application.cc
+if grep -qF 'gtk_header_bar_set_title(header_bar, "boltmesh")' "$runner" ||
+  grep -qF 'gtk_window_set_title(window, "boltmesh")' "$runner"; then
+  bad 'Linux runner still hard-codes the native GTK title'
+else
+  ok 'Linux runner leaves the native title to Flutter'
+fi
+
+for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
+  if grep -qE '^[[:space:]]*startup_wm_class:[[:space:]]*com\.boltmesh\.boltmesh[[:space:]]*$' "$package_config"; then
+    ok "Linux desktop entry declares the GTK WM_CLASS: $package_config"
+  else
+    bad "Linux desktop entry omits the xprop-confirmed WM_CLASS: $package_config"
+  fi
+done
+rpm_config=linux/packaging/rpm/make_config.yaml
+if grep -qF "printf '\\n%s\\n' 'StartupWMClass=com.boltmesh.boltmesh'" "$rpm_config"; then
+  ok 'RPM postinstall adds StartupWMClass to its generated desktop entry'
+else
+  bad 'RPM postinstall does not add StartupWMClass to its generated desktop entry'
+fi
+
 # --- Linux: the helper stages into a bundle and runs ----------------------
 if command -v go >/dev/null 2>&1; then
   bundle="$(mktemp -d)"

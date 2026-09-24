@@ -35,6 +35,10 @@ categories:
   - Network
   - Utility
 startup_notify: true
+# xprop reports the GTK window class as
+# "com.boltmesh.boltmesh", "Com.boltmesh.boltmesh". GNOME checks the
+# instance component first, so keep it aligned with the application ID.
+startup_wm_class: com.boltmesh.boltmesh
 # boltmeshd is staged inside the bundle at /opt/boltmesh/boltmeshd/ by
 # `boltmeshd/packaging/stage.sh` (a pre-package hook). These scripts
 # move it into place, create the socket group, and enable the socket. The

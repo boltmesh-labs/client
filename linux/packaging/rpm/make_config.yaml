@@ -32,6 +32,10 @@ categories:
   - Network
   - Utility
 startup_notify: true
+# xprop reports the GTK window class as
+# "com.boltmesh.boltmesh", "Com.boltmesh.boltmesh". GNOME checks the
+# instance component first, so keep it aligned with the application ID.
+startup_wm_class: com.boltmesh.boltmesh
 # See the deb make_config for the staging contract. On rpm the bundle is
 # installed under /usr/share/boltmesh, so boltmeshd is staged there.
 postinstall_scripts:
@@ -45,6 +49,17 @@ postinstall_scripts:
       exit "$postinstall_status"
     fi
     set -e
+  # Fastforge 0.6.x emits StartupWMClass for DEB but not RPM. Add the
+  # xprop-confirmed class to the generated RPM desktop entry as well.
+  - |
+    desktop_entry=/usr/share/applications/boltmesh.desktop
+    if [ ! -f "$desktop_entry" ]; then
+      printf 'boltmesh: desktop entry missing; cannot set StartupWMClass\n' >&2
+      exit 1
+    fi
+    sed -i '/^StartupWMClass=/d' "$desktop_entry"
+    # Fastforge's generated desktop file has no trailing newline.
+    printf '\n%s\n' 'StartupWMClass=com.boltmesh.boltmesh' >> "$desktop_entry"
   # RPM passes 1 for an initial install and 2 for an upgrade. The helper and
   # its units are installed by this script rather than owned by the RPM, so RPM
   # cannot stop the old process for us. Quiesce both units before overwriting

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,7 +27,12 @@ class BoltMeshApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       // Localized OS/task-switcher title; a static `title:` cannot translate.
-      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
+      onGenerateTitle: (context) {
+        final title = AppLocalizations.of(context).appTitle;
+        // Linux's Flutter embedder does not apply Title to GTK's WM_NAME.
+        unawaited(setDesktopWindowTitle(title));
+        return title;
+      },
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       localeResolutionCallback: resolveAppLocale,

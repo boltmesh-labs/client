@@ -44,6 +44,21 @@ Future<void> initDesktopWindow() async {
   await windowManager.ensureInitialized();
 }
 
+/// Applies Flutter's generated application title to the native desktop window.
+///
+/// Flutter's `Title` widget updates the application switcher description, but
+/// the Linux embedder does not forward that value to GTK's WM_NAME. The
+/// desktop `window_manager` channel does update the real GTK window (and its
+/// header bar), so use it for the visible title as well.
+Future<void> setDesktopWindowTitle(String title) async {
+  if (!Platform.isLinux || !supportsDesktopTray) return;
+  try {
+    await windowManager.setTitle(title);
+  } catch (error) {
+    AppLog.error('desktop window title update failed', error);
+  }
+}
+
 /// The real tray backend, or null when the tray feature does not apply
 /// (mobile/web, or `flutter test`).
 TrayPlatform? createSystemTrayPlatform() =>
