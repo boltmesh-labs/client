@@ -34,13 +34,23 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- OAuth system-browser flow: the backend redirects to
-                 boltmesh://auth/callback?code=... after provider consent. -->
-            <intent-filter>
+        </activity>
+        <!-- flutter_web_auth_2 completes custom-scheme callbacks in this
+             activity. Keep the filter narrow to the OAuth return URI; a
+             scheme-only filter on MainActivity never resolves the plugin
+             callback in browsers that fall back to Custom Tabs. -->
+        <activity
+            android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
+            android:exported="true"
+            android:taskAffinity="">
+            <intent-filter android:label="flutter_web_auth_2">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="boltmesh"/>
+                <data
+                    android:scheme="boltmesh"
+                    android:host="auth"
+                    android:path="/callback"/>
             </intent-filter>
         </activity>
         <service

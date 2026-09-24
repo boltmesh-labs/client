@@ -76,7 +76,36 @@ require_manifest 'orban\.group\.wireguard_flutter\.VpnForegroundService' \
   'plugin foreground service'
 require_manifest 'android:stopWithTask="false"' \
   'stopWithTask=false (cached engine survives a task swipe)'
-require_manifest 'android:scheme="boltmesh"' 'OAuth callback scheme'
+# The plugin only receives custom-scheme callbacks through its own
+# CallbackActivity. Check the activity and its scoped URI together; checking
+# for a scheme anywhere in the manifest would also pass when it is registered
+# on MainActivity, which does not complete the plugin request.
+callback_activity="$(
+  sed -n '/android:name="com\.linusu\.flutter_web_auth_2\.CallbackActivity"/,/<\/activity>/p' \
+    "$manifest"
+)"
+if [[ -n "$callback_activity" ]] &&
+  grep -qF 'android:exported="true"' <<< "$callback_activity" &&
+  grep -qF 'android:taskAffinity=""' <<< "$callback_activity" &&
+  grep -qF 'android:name="android.intent.action.VIEW"' <<< "$callback_activity" &&
+  grep -qF 'android:name="android.intent.category.DEFAULT"' <<< "$callback_activity" &&
+  grep -qF 'android:name="android.intent.category.BROWSABLE"' <<< "$callback_activity" &&
+  grep -qF 'android:scheme="boltmesh"' <<< "$callback_activity" &&
+  grep -qF 'android:host="auth"' <<< "$callback_activity" &&
+  grep -qF 'android:path="/callback"' <<< "$callback_activity"; then
+  ok "Android manifest: OAuth CallbackActivity is exported and scoped to boltmesh://auth/callback"
+else
+  bad "Android manifest is missing the exported, scoped OAuth CallbackActivity"
+fi
+
+main_activity="$(
+  sed -n '/android:name="\.MainActivity"/,/<\/activity>/p' "$manifest"
+)"
+if [[ -n "$main_activity" ]] && ! grep -qF 'android:scheme="boltmesh"' <<< "$main_activity"; then
+  ok "Android manifest: MainActivity does not own the OAuth callback"
+else
+  bad "Android manifest registers an OAuth scheme on MainActivity"
+fi
 
 # --- Windows: the helper channel is wired end to end ----------------------
 channel='com.boltmesh/helper'
