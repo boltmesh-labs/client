@@ -67,7 +67,10 @@
              longer owns the surviving TUN (stage reads then lie).
              stopWithTask=false keeps the process (and the cached FlutterEngine
              hosting the background auto-heal tick) alive after the task is
-             swiped away while a tunnel is up. -->
+             swiped away while a tunnel is up. The build overlays the service
+             with android/patches/wireguard_flutter_plus/VpnForegroundService.kt:
+             it starts the notification only for an explicit START, is not
+             sticky after process death, and opens MainActivity on tap. -->
         <service
             android:name="orban.group.wireguard_flutter.VpnForegroundService"
             android:exported="false"

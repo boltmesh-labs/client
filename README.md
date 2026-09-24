@@ -85,7 +85,12 @@ in `test/support/fakes.dart`.
   Accept the system VPN consent dialog on first connect.
 - **Android foreground service**: the plugin's
   `VpnForegroundService` keeps the tunnel's foreground notification alive
-  while connected. Behavior is API-level dependent:
+  while connected. The Android build overlays a reviewed service implementation
+  from `android/patches/wireguard_flutter_plus/` (the upstream 1.0.7 service
+  is sticky and starts its notification from `onCreate()`): BoltMesh only
+  enters the foreground after an explicit `START` request, returns
+  `START_NOT_STICKY`, and ignores a null restart intent. A notification tap
+  opens `MainActivity`. Behavior is API-level dependent:
 
   | API | Android | Foreground-service behavior |
   | --- | --- | --- |
@@ -94,7 +99,9 @@ in `test/support/fakes.dart`.
   | 34 | 14 | Typed foreground services are mandatory: `FOREGROUND_SERVICE_CONNECTED_DEVICE` (declared) plus the `connectedDevice` type, or `startForeground` throws. |
 
   The service is declared with `android:stopWithTask="false"`, so a task
-  swipe leaves it running (see the background-healing bullet below).
+  swipe leaves it running (see the background-healing bullet below). It is not
+  sticky across process death: the overlay stops a null restart before it can
+  create or update a notification.
   Doze/app-standby and OEM battery managers may defer the service; the
   WireGuard tunnel itself is in-kernel and keeps passing traffic regardless.
 - **Android background healing**: the app runs on a process-cached
@@ -103,9 +110,10 @@ in `test/support/fakes.dart`.
   the Activity but not the Dart isolate. Together with the plugin's
   `VpnForegroundService` (`android:stopWithTask="false"`), the background
   health tick (15s while the app is hidden) and the heal → failover ladder
-  keep running while the app is "killed". The app's native channels live in `TunnelHost` (process scope) so
-  a detached Activity's `cleanUpFlutterEngine` cannot cancel them. A true
-  process death (force-stop / OOM) still cold-starts via
+  keep running while the app is "killed". The app's native channels live in
+  `TunnelHost` (process scope) so a detached Activity's `cleanUpFlutterEngine`
+  cannot cancel them. A true process death (force-stop / OOM) no longer
+  resurrects the keep-alive service; the next app launch cold-starts and runs
   `reconcileColdStart`.
 - **Android minified bridge**: `TunnelHost` reflects a small, explicit set of
   plugin/backend fields. `android/app/proguard-rules.pro` keeps those field

@@ -76,6 +76,22 @@ require_manifest 'orban\.group\.wireguard_flutter\.VpnForegroundService' \
   'plugin foreground service'
 require_manifest 'android:stopWithTask="false"' \
   'stopWithTask=false (cached engine survives a task swipe)'
+
+service_patch='android/patches/wireguard_flutter_plus/VpnForegroundService.kt'
+service_on_create="$(
+  sed -n '/override fun onCreate()/,/override fun onStartCommand/p' "$service_patch"
+)"
+if grep -qF 'return START_NOT_STICKY' "$service_patch" &&
+  grep -qF 'if (intent?.action == ACTION_START)' "$service_patch" &&
+  grep -qF 'setContentIntent(contentIntent)' "$service_patch" &&
+  grep -qF 'getLaunchIntentForPackage(packageName)' "$service_patch" &&
+  grep -qF 'MAIN_ACTIVITY_CLASS' "$service_patch" &&
+  ! grep -qF 'startForeground(' <<< "$service_on_create" &&
+  grep -qF 'prepareWireguardAndroid' android/build.gradle.kts; then
+  ok 'Android WireGuard service is non-sticky and launches the app from its notification'
+else
+  bad 'Android WireGuard service patch is missing its non-sticky/launch contract'
+fi
 # The plugin only receives custom-scheme callbacks through its own
 # CallbackActivity. Check the activity and its scoped URI together; checking
 # for a scheme anywhere in the manifest would also pass when it is registered
