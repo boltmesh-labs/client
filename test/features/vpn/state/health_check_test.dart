@@ -1112,6 +1112,52 @@ void main() {
     },
   );
 
+  test(
+    'external-stop peerless drops the cached dial but keeps the device',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final keys = FakeKeys();
+      var configCalls = 0;
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) {
+            configCalls++;
+            // 1: seed connect. 2: the external-stop corroboration, which finds
+            // the device alive but peerless.
+            if (configCalls == 2) throw peerless(o);
+            return dialJson();
+          }
+          throw StateError('unexpected ${o.method}:${o.path}');
+        }),
+      );
+      final tunnel = FakeTunnel(events);
+      final container = makeContainer(store: store, keys: keys, api: api);
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      ctl.debugHandshakeReader = () async => DateTime.now();
+      await ctl.connect();
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(await store.lastDialJson(), isNotNull);
+      events.clear();
+
+      staleHandshake(ctl);
+      tunnel.stageValue = VpnStage.disconnected;
+      await ctl.checkHealthOnce();
+      await pumpEventQueue();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.idle);
+      expect(state.message, contains('Session expired'));
+      // Device kept for a fresh bind, but the peer is gone so the cold-start
+      // dial must not survive.
+      expect(await store.deviceId(), 'dev-1');
+      expect(await store.lastDialJson(), isNull);
+    },
+  );
+
   /// One corroborated stall cycle: stale handshake plus 2 failed polls
   /// (backend unreachable), then a single health tick. Handshake staleness
   /// needs no multi-tick baselining: one tick drives one escalation rung.

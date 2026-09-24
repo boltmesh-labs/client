@@ -200,6 +200,9 @@ void main() {
     expect(state.message, contains('lapsed'));
     // Device profile is kept so the user can renew and reconnect.
     expect(await store.deviceId(), 'dev-1');
+    // But the cached cold-start dial is dropped: the peer is gone, so an
+    // offline relaunch must not optimistically restore the suspended session.
+    expect(await store.lastDialJson(), isNull);
   });
 
   test('revoked device on poll stops and prompts reprovision', () async {

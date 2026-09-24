@@ -365,6 +365,11 @@ extension ConnectionStage on ConnectionController {
         } catch (e) {
           AppLog.error('external-stop clear device failed', e);
         }
+      } else if (kind == ApiErrorKind.noActivePeer) {
+        // Device kept for a fresh bind, but the cached dial points at the
+        // peer the server just reported gone: drop it so a later offline
+        // cold start can't restore the dead session.
+        await _clearCachedDial();
       }
       _idleAfterDeviceGone(
         message: kind == ApiErrorKind.notFound

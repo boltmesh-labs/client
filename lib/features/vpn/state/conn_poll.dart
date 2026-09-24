@@ -198,6 +198,10 @@ extension ConnectionPoll on ConnectionController {
         _stopPolling();
         _pollsSinceRotate = 0;
         _resetLocalHealth();
+        // The device is kept so the user can renew, but its peer is gone:
+        // drop the cached dial so an offline cold start can't optimistically
+        // restore (or sit verifying) the suspended session.
+        await _clearCachedDial();
         snap = _resetSessionCounters(
           snap.copyWith(
             phase: ConnPhase.idle,

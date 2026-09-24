@@ -591,6 +591,9 @@ void main() {
       // Ghost-kill replaced the reclaim-start: the native kill runs on the
       // owning backend directly, so no new tunnel is ever started here.
       expect(events, isNot(contains('tunnel:start')));
+      // The dead peer's cached dial is dropped so a later offline cold start
+      // cannot resurrect it.
+      expect(await store.lastDialJson(), isNull);
     });
 
     test(

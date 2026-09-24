@@ -574,6 +574,37 @@ void main() {
     expect(events, ['tunnel:stop', 'POST:/vpn-devices/dev-1/disconnect']);
   });
 
+  test(
+    'disconnect 404 wipes the dead identity for a clean reprovision',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final keys = FakeKeys(const []);
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/disconnect')) throw missingDevice(o);
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final tunnel = FakeTunnel(events);
+      final container = makeContainer(store: store, keys: keys, api: api);
+      await seedConnected(container, store, tunnel);
+      events.clear();
+
+      await container.read(connectionProvider.notifier).disconnect();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.idle);
+      expect(state.message, contains('removed'));
+      // The device row is gone server-side: keeping the local identity would
+      // make the very next Connect fail with a 404 before it can reprovision.
+      expect(await store.deviceId(), isNull);
+      expect(await store.privateKey(), isNull);
+      expect(await store.lastDialJson(), isNull);
+    },
+  );
+
   test('disconnect proceeds to idle when the tunnel stop throws', () async {
     final events = <String>[];
     final store = FakeStore();
@@ -691,6 +722,45 @@ void main() {
     await container.read(connectionProvider.notifier).releaseDevice();
 
     // Already revoked server-side: local wipe still runs.
+    expect(await store.deviceId(), isNull);
+    expect(await store.privateKey(), isNull);
+  });
+
+  test('releaseDevice revokes when the identity read blips', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys(const []);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/disconnect')) {
+          return {'disconnected_peers': 1};
+        }
+        if (o.path == '/vpn-devices/dev-1') return null;
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await seedConnected(container, store, tunnel);
+    events.clear();
+
+    // A transient identity-read failure must not skip the hard revoke while
+    // the peer release still goes through: the server row (and its plan
+    // slot) would leak even though the local identity is wiped.
+    var reads = 0;
+    store.deviceIdHook = () async {
+      reads++;
+      if (reads == 1) throw StateError('keychain busy');
+    };
+
+    await container.read(connectionProvider.notifier).releaseDevice();
+
+    expect(events, [
+      'tunnel:stop',
+      'POST:/vpn-devices/dev-1/disconnect',
+      'DELETE:/vpn-devices/dev-1',
+    ]);
     expect(await store.deviceId(), isNull);
     expect(await store.privateKey(), isNull);
   });

@@ -276,6 +276,13 @@ extension ConnectionColdStart on ConnectionController {
               AppLog.error('cold restore clear device failed', e);
             }
             if (sessionEpoch != _sessionEpoch) return;
+          } else {
+            // Peerless: the device is kept for a fresh bind, but the cached
+            // dial points at the peer the server just reported gone — drop
+            // it so the next offline cold start can't optimistically restore
+            // or sit verifying that dead session.
+            await _clearCachedDial();
+            if (sessionEpoch != _sessionEpoch) return;
           }
           _stopPolling();
           _resetLocalHealth();

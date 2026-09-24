@@ -28,6 +28,41 @@ extension ConnectionLifecycle on ConnectionController {
     }
   }
 
+  /// Clears the persisted cold-start dial once the session is known gone.
+  ///
+  /// Best-effort: the in-memory snapshot is authoritative, so a storage
+  /// failure only logs. Without this, a device deliberately kept for a fresh
+  /// bind (`noActivePeer`, suspension) would leave [DeviceStore.lastDialJson]
+  /// pointing at a peer the server already reported gone, so the next offline
+  /// cold start optimistically restores — or sits verifying — a dead session.
+  Future<void> _clearCachedDial() async {
+    try {
+      await _device.clearLastDial();
+    } catch (e) {
+      AppLog.error('clear cached dial failed', e);
+    }
+  }
+
+  /// Reads the device id for an explicit teardown, retrying once on a
+  /// transient secure-storage failure. A single blip must not skip the
+  /// server-side peer release/revoke while the local identity is still wiped:
+  /// that would orphan the server device row and leak its plan slot.
+  Future<String?> _readDeviceIdForTeardown() async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await _device.deviceId();
+      } catch (e) {
+        AppLog.error(
+          attempt == 0
+              ? 'device id read failed, retrying'
+              : 'device id read failed',
+          e,
+        );
+      }
+    }
+    return null;
+  }
+
   /// Tears down a tunnel after an involuntary auth/session transition.
   ///
   /// The auth listener is synchronous, so the actual privileged/storage work
@@ -233,10 +268,16 @@ extension ConnectionLifecycle on ConnectionController {
   /// shared by [disconnect] and [_releaseDeviceOp] so the teardown, revoke
   /// and local wipe run under one lock and a concurrent Connect can never
   /// interleave to bind a device that [_device.clearDevice] then wipes.
-  Future<void> _disconnectBody() async {
+  ///
+  /// Returns the device id it read (or null when unreadable/absent) so
+  /// [_releaseDeviceOp] reuses the same identity for its follow-up revoke
+  /// instead of racing a second read that could cache a transient null and
+  /// silently skip the hard delete.
+  Future<String?> _disconnectBody() async {
     // Bump before the first await so a lock-free Quick Connect discovery
     // that already ran can never bind/dial after this explicit teardown.
     _teardownEpoch++;
+    String? id;
     try {
       // The tunnel stop is authoritative and never throws: run it first so
       // a secure-storage read failure can never leave the tunnel up while
@@ -246,18 +287,8 @@ extension ConnectionLifecycle on ConnectionController {
       // The tunnel is down: the cached dial must never resurrect it, and
       // any pending cold watch is superseded by this explicit teardown.
       _coldRestore.clear();
-      try {
-        await _device.clearLastDial();
-      } catch (e) {
-        AppLog.error('disconnect clear dial failed', e);
-      }
-      String? id;
-      try {
-        id = await _device.deviceId();
-      } catch (e) {
-        AppLog.error('disconnect device read failed', e);
-        id = null;
-      }
+      await _clearCachedDial();
+      id = await _readDeviceIdForTeardown();
       AppLog.info('disconnect start device=${AppLog.redact(id)}');
       if (id != null) {
         // Skip the peer-release POST while a 429 cooldown is active: the
@@ -273,7 +304,7 @@ extension ConnectionLifecycle on ConnectionController {
             'Disconnected locally. Server release pending '
             '(rate limited, ${seconds}s).',
           );
-          return;
+          return id;
         }
         try {
           await _api.disconnect(id);
@@ -282,19 +313,27 @@ extension ConnectionLifecycle on ConnectionController {
           final reason = asVpnError(e)?.message ?? e.toString();
           AppLog.error('disconnect api failed kind=$kind', e);
           _noteRateLimit(asVpnError(e));
+          if (kind == ApiErrorKind.notFound) {
+            // The device row is gone server-side (revoked). Keeping the local
+            // identity would make the very next Connect fail with a 404
+            // before it can reprovision, so wipe it now — the tunnel is
+            // already down and the peer is moot.
+            await _forgetDeviceAndIdle();
+            AppLog.info('disconnect gone device=${AppLog.redact(id)} (wiped)');
+            return id;
+          }
           // Tunnel is down either way: stay usable, flag the pending
           // server-side release (cleared on the next connect).
           _finishLocalDisconnect(
-            kind == ApiErrorKind.notFound
-                ? 'Disconnected'
-                : 'Disconnected locally. Server release pending ($reason)',
+            'Disconnected locally. Server release pending ($reason)',
           );
           AppLog.info('disconnect ok device=${AppLog.redact(id)} (local)');
-          return;
+          return id;
         }
       }
       AppLog.info('disconnect ok device=${AppLog.redact(id)}');
       _finishLocalDisconnect('Disconnected');
+      return id;
     } catch (e) {
       final vpnErr = asVpnError(e);
       AppLog.error(
@@ -308,6 +347,7 @@ extension ConnectionLifecycle on ConnectionController {
         message: vpnErr?.message ?? e.toString(),
         lastStage: null,
       );
+      return id;
     }
   }
 
@@ -336,14 +376,12 @@ extension ConnectionLifecycle on ConnectionController {
     // lock-free so the mutex can be held across the teardown too.
     final release = await _mutex.acquire('release-device');
     try {
-      String? id;
-      try {
-        id = await _device.deviceId();
-      } catch (e) {
-        AppLog.error('release device read failed', e);
-        id = null;
-      }
-      await _disconnectBody();
+      // [_disconnectBody] reads the device identity under this same lock and
+      // returns the id it used. Reuse it for the hard revoke instead of
+      // reading here first: a transient failure on a separate read would
+      // cache null, skip the revoke, and leak the server device row (and its
+      // plan slot) even though disconnect went on to release the peer.
+      final id = await _disconnectBody();
       if (id != null) {
         try {
           await _api.revoke(id);

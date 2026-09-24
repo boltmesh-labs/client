@@ -309,6 +309,9 @@ void main() {
       expect(socket.ops, isNot(contains('up')));
       // The device is kept for a fresh bind on the next Connect.
       expect(await store.deviceId(), 'dev-1');
+      // But the cached dial is dropped: the peer is known gone, so the next
+      // offline cold start must not restore/verify the dead session.
+      expect(await store.lastDialJson(), isNull);
     });
 
     test(
