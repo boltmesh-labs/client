@@ -52,7 +52,10 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 SystemCallArchitectures=native
-ReadWritePaths=/run -/etc/resolv.conf
+# wg-quick writes src_valid_mark when AllowedIPs installs a default route.
+# Keep every other kernel tunable read-only while allowing full-tunnel mode to
+# create the interface's policy-routing table.
+ReadWritePaths=/run -/etc/resolv.conf /proc/sys/net/ipv4/conf/all/src_valid_mark
 UMask=0077
 
 [Install]

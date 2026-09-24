@@ -36,6 +36,26 @@ else
   printf 'skip  systemd-analyze unavailable\n'
 fi
 
+# wg-quick enables policy routing for a full-tunnel AllowedIPs list by writing
+# src_valid_mark. Preserve ProtectKernelTunables for every other kernel setting,
+# but exempt exactly that file; otherwise strict mode cannot establish its
+# default route and wg-quick up aborts.
+read_write_paths="$(sed -n 's/^ReadWritePaths=//p' boltmeshd/deploy/boltmeshd.service)"
+src_valid_mark_writable=0
+proc_sys_fully_writable=0
+for path in $read_write_paths; do
+  case "${path#-}" in
+    /proc/sys/net/ipv4/conf/all/src_valid_mark) src_valid_mark_writable=1 ;;
+    /proc/sys | /proc/sys/*) proc_sys_fully_writable=1 ;;
+  esac
+done
+if grep -qE '^ProtectKernelTunables=yes$' boltmeshd/deploy/boltmeshd.service &&
+  [[ "$src_valid_mark_writable" -eq 1 && "$proc_sys_fully_writable" -eq 0 ]]; then
+  ok 'Linux full-tunnel keeps a narrow src_valid_mark exception'
+else
+  bad 'Linux full-tunnel cannot write wg-quick src_valid_mark safely'
+fi
+
 # The daemon's signal path and the unit-level fallback must both tear down the
 # tunnel, and the service (not the socket) must own the runtime directory that
 # contains the wg-quick config during shutdown. The unit deliberately uses

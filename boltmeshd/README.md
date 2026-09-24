@@ -117,7 +117,9 @@ capabilities). `status` keeps its line lean and carries no `caps`.
   boundary; the Flutter app never elevates itself or changes group membership.
   The daemon runs as root with `NoNewPrivileges`, `ProtectSystem=full`,
   `ProtectHome`, `PrivateTmp`, restricted address families, and no new
-  namespaces.
+  namespaces. Kernel tunables remain read-only except for
+  `/proc/sys/net/ipv4/conf/all/src_valid_mark`, which `wg-quick` must update to
+  create the policy-routing table used by a full-tunnel configuration.
 
 ## Logging
 
