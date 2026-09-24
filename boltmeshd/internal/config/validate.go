@@ -5,7 +5,8 @@
 // compromised client must not be able to turn `up` into arbitrary root code
 // execution. wg-quick runs PreUp/PostUp/PreDown/PostDown as root shell
 // commands and SaveConfig rewrites caller-chosen state, so those directives
-// are rejected outright. Everything else is left for wg-quick to validate.
+// are rejected outright. Only the supported, non-hook directives understood
+// by the daemon are accepted.
 package config
 
 import (
@@ -31,13 +32,36 @@ var forbiddenDirectives = map[string]bool{
 	"saveconfig": true,
 }
 
+// allowedDirectives is intentionally section-specific. It contains the
+// non-hook WireGuard and wg-quick directives supported by the daemon.
+// Rejecting unknown names keeps parser differences from becoming a way to
+// smuggle a privileged directive through validation.
+var allowedDirectives = map[string]map[string]bool{
+	"interface": {
+		"address":    true,
+		"dns":        true,
+		"fwmark":     true,
+		"listenport": true,
+		"mtu":        true,
+		"privatekey": true,
+		"table":      true,
+	},
+	"peer": {
+		"allowedips":          true,
+		"endpoint":            true,
+		"persistentkeepalive": true,
+		"presharedkey":        true,
+		"publickey":           true,
+	},
+}
+
 // ErrTooLarge is returned when the config exceeds [MaxSize].
 var ErrTooLarge = errors.New("config too large")
 
 // Validate checks that text is a structurally sane wg-quick config with at
-// least one interface and one peer, valid key material, and no privileged
-// hook directives. It intentionally does not check addresses/routes/DNS:
-// wg-quick rejects those with its own diagnostics.
+// least one interface and one peer, valid key material, only supported
+// directives, and no privileged hook directives. It intentionally does not
+// check addresses/routes/DNS: wg-quick rejects those with its own diagnostics.
 func Validate(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("config is empty")
@@ -77,11 +101,17 @@ func Validate(text string) error {
 			continue
 		}
 
-		key, value, found := strings.Cut(line, "=")
+		rawKey, value, found := strings.Cut(line, "=")
 		if !found {
 			return fmt.Errorf("line %d: expected key = value", i+1)
 		}
-		key = strings.ToLower(strings.TrimSpace(key))
+		// wg-quick removes comments before matching a directive name, but
+		// keeps the original value for hooks. Do not allow that parser detail
+		// to turn an unknown key such as "postup#" into an allowed one.
+		if strings.ContainsRune(rawKey, '#') {
+			return fmt.Errorf("line %d: comments are not allowed before '='", i+1)
+		}
+		key := strings.ToLower(strings.TrimSpace(rawKey))
 		value = strings.TrimSpace(value)
 
 		if section == "" {
@@ -89,6 +119,9 @@ func Validate(text string) error {
 		}
 		if forbiddenDirectives[key] {
 			return fmt.Errorf("directive %q is not allowed", key)
+		}
+		if !allowedDirectives[section][key] {
+			return fmt.Errorf("line %d: directive %q is not supported", i+1, key)
 		}
 
 		switch {

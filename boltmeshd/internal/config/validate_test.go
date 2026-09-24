@@ -36,10 +36,45 @@ func TestValidateRejectsEmpty(t *testing.T) {
 }
 
 func TestValidateRejectsPrivilegedHooks(t *testing.T) {
+	directives := []string{"PreUp", "PostUp", "PreDown", "PostDown", "SaveConfig"}
+	for _, directive := range directives {
+		value := "id"
+		if directive == "SaveConfig" {
+			value = "true"
+		}
+		// wg-quick strips comments before matching the key, while executable
+		// hook values are taken from the original line. Cover both comment-
+		// obfuscation forms.
+		lines := []string{
+			directive + " = " + value,
+			directive + "#=" + value,
+			directive + " #ignored = " + value,
+		}
+		for _, line := range lines {
+			t.Run(line, func(t *testing.T) {
+				text := strings.Replace(validConfig, "Address = 10.8.0.5/32",
+					"Address = 10.8.0.5/32\n"+line, 1)
+				if err := Validate(text); err == nil {
+					t.Fatalf("Validate with %q = nil, want error", line)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateRejectsUnknownDirective(t *testing.T) {
 	text := strings.Replace(validConfig, "Address = 10.8.0.5/32",
-		"Address = 10.8.0.5/32\nPostUp = touch /root/pwned", 1)
+		"Address = 10.8.0.5/32\nUnknown = value", 1)
 	if err := Validate(text); err == nil {
-		t.Fatal("Validate with PostUp = nil, want error")
+		t.Fatal("Validate with unknown directive = nil, want error")
+	}
+}
+
+func TestValidateRejectsCommentBeforeEquals(t *testing.T) {
+	text := strings.Replace(validConfig, "Address = 10.8.0.5/32",
+		"Address# = 10.8.0.5/32", 1)
+	if err := Validate(text); err == nil {
+		t.Fatal("Validate with comment before '=' = nil, want error")
 	}
 }
 
