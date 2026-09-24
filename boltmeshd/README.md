@@ -64,7 +64,8 @@ backstop is 45 seconds. A client may use a shorter cancellation budget (the
 stop path uses 3 seconds); closing its socket or named pipe cancels the request
 context. The transport also has a 45-second idle read deadline, a 5-second
 response write deadline, and a 32-connection active limit; excess connections
-are closed immediately. Linux commands run in their own process group with a
+are closed immediately. If the per-request budget expires, its connection is
+closed rather than reused. Linux commands run in their own process group with a
 bounded wait for output pipes, so cancellation cannot leave a `wg-quick`
 descendant holding the privileged operation. A bounded retry waits for the
 manager's lifecycle gate rather than issuing a concurrent teardown.

@@ -260,7 +260,7 @@ func TestUpRemovesConfigWhenWgQuickUpFails(t *testing.T) {
 // Down must clean up a config orphaned by an unclean exit even when the
 // interface is already gone (idempotent teardown).
 func TestDownRemovesStaleConfigWhenLinkAbsent(t *testing.T) {
-	m := newTestManager(t, false, nil, errors.New("no device"))
+	m := newTestManager(t, false, nil, os.ErrNotExist)
 	if err := os.WriteFile(m.configPath(), []byte(validConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestDownRemovesStaleConfigWhenLinkAbsent(t *testing.T) {
 }
 
 func TestDownIsIdempotentWhenAbsent(t *testing.T) {
-	m := newTestManager(t, false, nil, errors.New("no device"))
+	m := newTestManager(t, false, nil, os.ErrNotExist)
 	calls, run := recordRuns()
 	m.run = run
 
@@ -296,7 +296,7 @@ func TestDownIsIdempotentWhenAbsent(t *testing.T) {
 }
 
 func TestDownUsesResolvectlWhenResolvconfIsUnavailable(t *testing.T) {
-	m := newTestManager(t, false, nil, errors.New("no device"))
+	m := newTestManager(t, false, nil, os.ErrNotExist)
 	m.lookup = func(name string) (string, error) {
 		if name == resolvconfBinary {
 			return "", errors.New("resolvconf is not installed")
@@ -318,7 +318,7 @@ func TestDownUsesResolvectlWhenResolvconfIsUnavailable(t *testing.T) {
 }
 
 func TestDownFallsBackToLinkDelete(t *testing.T) {
-	m := newTestManager(t, true, nil, errors.New("no device"))
+	m := newTestManager(t, true, nil, os.ErrNotExist)
 	calls := &[]runCall{}
 	m.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		*calls = append(*calls, runCall{name: name, args: args})
@@ -340,7 +340,7 @@ func TestDownFallsBackToLinkDelete(t *testing.T) {
 }
 
 func TestDownKeepsConfigWhenResolverCleanupFails(t *testing.T) {
-	m := newTestManager(t, false, nil, errors.New("no device"))
+	m := newTestManager(t, false, nil, os.ErrNotExist)
 	if err := os.WriteFile(m.configPath(), []byte(validConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,10 @@ func TestDownKeepsConfigWhenResolverCleanupFails(t *testing.T) {
 func TestStatusAggregatesPeers(t *testing.T) {
 	m := newTestManager(t, true, deviceWithPeers(t), nil)
 
-	status := m.Status()
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v", err)
+	}
 	if !status.Up || status.Stage != protocol.StageConnected {
 		t.Fatalf("Status() = %+v, want connected", status)
 	}
@@ -377,12 +380,61 @@ func TestStatusAggregatesPeers(t *testing.T) {
 	}
 }
 
-func TestStatusReportsConnectingWhileBusy(t *testing.T) {
-	m := newTestManager(t, false, nil, errors.New("no device"))
+func TestStatusReportsDisconnectedWhenDeviceIsAbsent(t *testing.T) {
+	m := newTestManager(t, false, nil, os.ErrNotExist)
+
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v, want absent device", err)
+	}
+	if status.Up || status.Stage != protocol.StageDisconnected {
+		t.Fatalf("Status() = %+v, want disconnected", status)
+	}
+}
+
+func TestStatusReturnsDeviceReadError(t *testing.T) {
+	want := errors.New("netlink read failed")
+	m := newTestManager(t, false, nil, want)
+
+	status, err := m.Status(context.Background())
+	if status != nil || !errors.Is(err, want) {
+		t.Fatalf("Status() = (%+v, %v), want device read error", status, err)
+	}
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Status() error = %v, want internal", err)
+	}
+}
+
+func TestBusyStatusPrecedesDeviceState(t *testing.T) {
+	m := newTestManager(t, true, deviceWithPeers(t), nil)
+	m.device = func(string) (*wgtypes.Device, error) {
+		t.Fatal("Status queried the device while up was in flight")
+		return nil, nil
+	}
 	m.busy.Store(true)
 
-	if got := m.Status().Stage; got != protocol.StageConnecting {
-		t.Fatalf("Stage = %q, want connecting", got)
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v", err)
+	}
+	if status.Up || status.Stage != protocol.StageConnecting {
+		t.Fatalf("Status() = %+v, want connecting without an Up flag", status)
+	}
+}
+
+func TestStatusHonorsCanceledContext(t *testing.T) {
+	m := newTestManager(t, true, deviceWithPeers(t), nil)
+	m.device = func(string) (*wgtypes.Device, error) {
+		t.Fatal("Status queried the device after cancellation")
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	status, err := m.Status(ctx)
+	if status != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Status() = (%+v, %v), want context cancellation", status, err)
 	}
 }
 

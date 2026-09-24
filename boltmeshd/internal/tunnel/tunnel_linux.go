@@ -181,7 +181,7 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 		}
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("wg-quick up: %w", err)}
 	}
-	return m.Status(), nil
+	return m.readDeviceStatus(ctx)
 }
 
 // Down tears the tunnel down. It is idempotent: true means no tunnel is
@@ -205,20 +205,45 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 	if err := m.down(ctx); err != nil {
 		return nil, err
 	}
-	return m.Status(), nil
+	return m.readDeviceStatus(ctx)
 }
 
-// Status reports the OS view. Reads never fail the request: an unreadable or
-// absent device resolves to the disconnected stage, which the client treats
-// as "unknown", never as proof of death.
-func (m *Manager) Status() *protocol.Status {
+// Status reports the OS view. An in-flight up takes precedence over the
+// device so callers never observe the old or partially configured tunnel as
+// connected. A missing device is disconnected, but any other read failure is
+// returned so the client treats it as unknown rather than as proof of death.
+func (m *Manager) Status(ctx context.Context) (*protocol.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
+	}
+	if m.busy.Load() {
+		return &protocol.Status{
+			Interface: m.iface,
+			Stage:     protocol.StageConnecting,
+		}, nil
+	}
+	return m.readDeviceStatus(ctx)
+}
+
+// readDeviceStatus bypasses the in-flight marker for Up and Down, whose
+// lifecycle mutation is complete before they obtain their response status.
+func (m *Manager) readDeviceStatus(ctx context.Context) (*protocol.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
+	}
 	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
 	dev, err := m.device(m.iface)
 	if err != nil {
-		if m.busy.Load() {
-			st.Stage = protocol.StageConnecting
+		if errors.Is(err, os.ErrNotExist) {
+			return st, nil
 		}
-		return st
+		return nil, &protocol.OpError{
+			Code: protocol.CodeInternal,
+			Err:  fmt.Errorf("query device %s: %w", m.iface, err),
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
 	}
 
 	st.Up = true
@@ -239,7 +264,14 @@ func (m *Manager) Status() *protocol.Status {
 		})
 	}
 	applyPeers(st, peers)
-	return st
+	return st, nil
+}
+
+func statusReadError(err error) error {
+	return &protocol.OpError{
+		Code: protocol.CodeInternal,
+		Err:  fmt.Errorf("read tunnel status: %w", err),
+	}
 }
 
 func (m *Manager) down(ctx context.Context) error {

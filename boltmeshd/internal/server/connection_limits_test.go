@@ -23,7 +23,9 @@ func (limitTestManager) Down(context.Context) (*protocol.Status, error) {
 	return &protocol.Status{}, nil
 }
 
-func (limitTestManager) Status() *protocol.Status { return &protocol.Status{} }
+func (limitTestManager) Status(context.Context) (*protocol.Status, error) {
+	return &protocol.Status{}, nil
+}
 
 type boundedTestListener struct {
 	conns    chan net.Conn

@@ -143,7 +143,7 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 		_ = os.Remove(m.configPath())
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("start tunnel service: %w", err)}
 	}
-	return m.Status(), nil
+	return m.readServiceStatus(ctx)
 }
 
 // Down tears the tunnel down. It is idempotent: true means no tunnel is
@@ -164,7 +164,7 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("stop tunnel service: %w", err)}
 	}
 	_ = os.Remove(m.configPath())
-	return m.Status(), nil
+	return m.readServiceStatus(ctx)
 }
 
 // Uninstall removes all state owned by the Windows tunnel. Callers must first
@@ -198,19 +198,37 @@ func removeConfigFile(path string) error {
 	return nil
 }
 
-// Status reports the OS view. Reads never fail the request: an unreadable or
-// absent service resolves to the disconnected stage, which the client treats
-// as "unknown", never as proof of death. A running service with unreadable
-// counters still reports up, so a wedged device read cannot masquerade as a
-// dead tunnel.
-func (m *Manager) Status() *protocol.Status {
+// Status reports the OS view. An in-flight up takes precedence over SCM and
+// device state so callers never observe an old or partially configured service
+// as connected. A service that is not installed is disconnected, but any other
+// stage-read failure is returned so the client treats it as unknown rather
+// than as proof of death.
+func (m *Manager) Status(ctx context.Context) (*protocol.Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
+	}
+	if m.busy.Load() {
+		return &protocol.Status{
+			Interface: m.iface,
+			Stage:     protocol.StageConnecting,
+		}, nil
+	}
+	return m.readServiceStatus(ctx)
+}
+
+// readServiceStatus bypasses the in-flight marker for Up and Down, whose
+// lifecycle mutation is complete before they obtain their response status.
+func (m *Manager) readServiceStatus(ctx context.Context) (*protocol.Status, error) {
 	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
-	stage, err := m.service.stage(context.Background())
+	stage, err := m.service.stage(ctx)
 	if err != nil {
-		if m.busy.Load() {
-			st.Stage = protocol.StageConnecting
+		return nil, &protocol.OpError{
+			Code: protocol.CodeInternal,
+			Err:  fmt.Errorf("read tunnel service: %w", err),
 		}
-		return st
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
 	}
 	switch stage {
 	case protocol.StageConnected:
@@ -218,21 +236,31 @@ func (m *Manager) Status() *protocol.Status {
 		st.Stage = protocol.StageConnected
 	case protocol.StageConnecting:
 		st.Stage = protocol.StageConnecting
-		return st
+		return st, nil
 	default:
-		if m.busy.Load() {
-			st.Stage = protocol.StageConnecting
-		}
-		return st
+		return st, nil
 	}
 
-	peers, err := m.device.read(context.Background(), m.iface)
+	peers, err := m.device.read(ctx, m.iface)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, statusReadError(ctxErr)
+		}
 		// Up, but handshake/counters unknown: keep reporting up.
-		return st
+		return st, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, statusReadError(err)
 	}
 	applyPeers(st, peers)
-	return st
+	return st, nil
+}
+
+func statusReadError(err error) error {
+	return &protocol.OpError{
+		Code: protocol.CodeInternal,
+		Err:  fmt.Errorf("read tunnel status: %w", err),
+	}
 }
 
 func (m *Manager) configPath() string {

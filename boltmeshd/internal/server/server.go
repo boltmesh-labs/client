@@ -28,8 +28,8 @@ const maxRequestLine = 128 * 1024
 // operation, including bounded failure cleanup. It is longer than the Linux
 // command budget and shorter than HelperClient.defaultCallTimeout, so the
 // daemon normally produces a response before the client's transport backstop.
-// Shorter client budgets (notably the three-second stop budget) cancel the
-// connection, which in turn cancels the request context.
+// The bounded request context is tied to the transport: expiration or a
+// shorter client budget closes the connection and cancels the operation.
 const requestTimeout = 40 * time.Second
 
 // connectionIdleTimeout prevents a peer that opens a socket and never sends
@@ -52,7 +52,7 @@ const maxConcurrentConnections = 32
 type Manager interface {
 	Up(ctx context.Context, wgQuickConfig string) (*protocol.Status, error)
 	Down(ctx context.Context) (*protocol.Status, error)
-	Status() *protocol.Status
+	Status(ctx context.Context) (*protocol.Status, error)
 }
 
 // Server serves [Manager] over one or more connections.
@@ -222,7 +222,22 @@ func (s *Server) serveRequest(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	resp := s.dispatch(ctx, req)
+	// The request budget belongs to the connection lifecycle, not just the
+	// manager call. If the deadline expires (or the parent is canceled), the
+	// callback closes the transport and prevents the handler from continuing
+	// with a reusable connection.
+	requestCtx, requestCancel := context.WithTimeout(ctx, requestTimeout)
+	stopRequestClose := context.AfterFunc(requestCtx, cancel)
+	resp := s.dispatch(requestCtx, req)
+	// Stop the close callback before canceling the child on the normal path;
+	// otherwise canceling the completed request would close a healthy
+	// connection before its response is written.
+	stopRequestClose()
+	requestErr := requestCtx.Err()
+	requestCancel()
+	if requestErr != nil {
+		return requestErr
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -237,7 +252,9 @@ func (s *Server) serveRequest(
 	return conn.SetReadDeadline(time.Time{})
 }
 
-func (s *Server) dispatch(parent context.Context, req *protocol.Request) protocol.Response {
+// dispatch executes one request using the bounded context prepared by
+// serveRequest.
+func (s *Server) dispatch(ctx context.Context, req *protocol.Request) protocol.Response {
 	// Never echo an ID we would reject: a malformed or oversized ID is not
 	// correlation data, and reflecting it is needless attacker-controlled
 	// output.
@@ -254,16 +271,18 @@ func (s *Server) dispatch(parent context.Context, req *protocol.Request) protoco
 		return protocol.Fail(id, protocol.CodeBadRequest, err.Error())
 	}
 
-	ctx, cancel := context.WithTimeout(parent, requestTimeout)
-	defer cancel()
-
 	switch req.Op {
-	case protocol.OpPing:
-		// `ping` is the negotiation entry point: it carries the daemon's
-		// capability tokens alongside the status.
-		return protocol.OKCapabilities(id, s.manager.Status())
-	case protocol.OpStatus:
-		return protocol.OK(id, s.manager.Status())
+	case protocol.OpPing, protocol.OpStatus:
+		status, err := s.manager.Status(ctx)
+		if err != nil {
+			return s.failure(id, req.Op, err)
+		}
+		if req.Op == protocol.OpPing {
+			// `ping` is the negotiation entry point: it carries the daemon's
+			// capability tokens alongside the status.
+			return protocol.OKCapabilities(id, status)
+		}
+		return protocol.OK(id, status)
 	case protocol.OpUp:
 		status, err := s.manager.Up(ctx, req.Config)
 		if err != nil {

@@ -169,7 +169,8 @@ func (s *winService) stop(ctx context.Context) error {
 	if err != nil {
 		switch {
 		case isServiceMissing(err), isServiceNotActive(err):
-			// No such service: nothing is running.
+			// The service is absent or already stopped, so there is nothing
+			// to stop.
 			return nil
 		case isServiceMarkedForDelete(err):
 			return waitForServiceGone(ctx, manager, s.name)
@@ -376,24 +377,42 @@ func waitForProcessExit(ctx context.Context, processID uint32) error {
 	}
 }
 
-// stage reports the OS stage for the tunnel service. A missing service is
-// disconnected, not an error.
-func (s *winService) stage(_ context.Context) (string, error) {
+// stage reports the OS stage for the tunnel service. A missing or inactive
+// service is disconnected, not an error.
+func (s *winService) stage(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	manager, err := mgr.Connect()
 	if err != nil {
 		return "", fmt.Errorf("connect to service manager: %w", err)
 	}
 	defer func() { _ = manager.Disconnect() }()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	handle, err := manager.OpenService(s.name)
 	if err != nil {
-		return protocol.StageDisconnected, nil
+		if isServiceMissing(err) || isServiceNotActive(err) {
+			return protocol.StageDisconnected, nil
+		}
+		return "", fmt.Errorf("open service %s: %w", s.name, err)
 	}
 	defer func() { _ = handle.Close() }()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	status, err := handle.Query()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		return "", fmt.Errorf("query service %s: %w", s.name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	switch status.State {
 	case svc.Running:

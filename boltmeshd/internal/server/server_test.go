@@ -21,11 +21,12 @@ import (
 )
 
 type fakeManager struct {
-	mu       sync.Mutex
-	upConfig string
-	status   protocol.Status
-	upErr    error
-	downErr  error
+	mu        sync.Mutex
+	upConfig  string
+	status    protocol.Status
+	statusErr error
+	upErr     error
+	downErr   error
 }
 
 func (f *fakeManager) Up(_ context.Context, wgQuickConfig string) (*protocol.Status, error) {
@@ -45,7 +46,12 @@ func (f *fakeManager) Down(context.Context) (*protocol.Status, error) {
 	return &f.status, nil
 }
 
-func (f *fakeManager) Status() *protocol.Status { return &f.status }
+func (f *fakeManager) Status(context.Context) (*protocol.Status, error) {
+	if f.statusErr != nil {
+		return nil, f.statusErr
+	}
+	return &f.status, nil
+}
 
 type cancelOnContextManager struct {
 	started  chan struct{}
@@ -64,8 +70,8 @@ func (m *cancelOnContextManager) Down(ctx context.Context) (*protocol.Status, er
 	return nil, ctx.Err()
 }
 
-func (m *cancelOnContextManager) Status() *protocol.Status {
-	return &protocol.Status{Interface: "boltmesh0", Stage: protocol.StageDisconnected}
+func (m *cancelOnContextManager) Status(context.Context) (*protocol.Status, error) {
+	return &protocol.Status{Interface: "boltmesh0", Stage: protocol.StageDisconnected}, nil
 }
 
 type testClient struct {
@@ -148,6 +154,21 @@ func TestPingReturnsStatus(t *testing.T) {
 	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpPing})
 	if !resp.OK || resp.Status == nil || resp.Status.Interface != "boltmesh0" {
 		t.Fatalf("ping response = %+v", resp)
+	}
+}
+
+func TestStatusReadFailureIsNotReportedAsDisconnected(t *testing.T) {
+	want := &protocol.OpError{Code: protocol.CodeInternal, Err: errors.New("SCM read failed")}
+	c := newClient(t, &fakeManager{statusErr: want})
+
+	for _, op := range []string{protocol.OpPing, protocol.OpStatus} {
+		resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: op})
+		if resp.OK || resp.Status != nil || resp.Error == nil {
+			t.Fatalf("%s response = %+v, want error without status", op, resp)
+		}
+		if resp.Error.Code != protocol.CodeInternal {
+			t.Fatalf("%s error code = %q, want internal", op, resp.Error.Code)
+		}
 	}
 }
 

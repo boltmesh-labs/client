@@ -90,18 +90,19 @@ func TestPeersFromConfigRejectsTruncated(t *testing.T) {
 }
 
 type fakeService struct {
-	mu        sync.Mutex
-	started   bool
-	starts    int
-	stops     int
-	removes   int
-	exe       string
-	args      []string
-	stageVal  string
-	stageErr  error
-	startErr  error
-	stopErr   error
-	removeErr error
+	mu         sync.Mutex
+	started    bool
+	starts     int
+	stops      int
+	removes    int
+	stageCalls int
+	exe        string
+	args       []string
+	stageVal   string
+	stageErr   error
+	startErr   error
+	stopErr    error
+	removeErr  error
 }
 
 func (f *fakeService) start(_ context.Context, exe string, args []string) error {
@@ -145,6 +146,7 @@ func (f *fakeService) remove(context.Context) error {
 func (f *fakeService) stage(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stageCalls++
 	if f.stageErr != nil {
 		return "", f.stageErr
 	}
@@ -432,9 +434,55 @@ func TestStatusReportsConnecting(t *testing.T) {
 	m, svc, _ := newTestManager(t)
 	svc.stageVal = protocol.StageConnecting
 
-	status := m.Status()
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v", err)
+	}
 	if status.Up || status.Stage != protocol.StageConnecting {
 		t.Fatalf("Status() = %+v, want connecting", status)
+	}
+}
+
+func TestStatusReportsDisconnectedWhenServiceIsNotInstalled(t *testing.T) {
+	m, _, _ := newTestManager(t)
+
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v, want absent service", err)
+	}
+	if status.Up || status.Stage != protocol.StageDisconnected {
+		t.Fatalf("Status() = %+v, want disconnected", status)
+	}
+}
+
+func TestBusyStatusPrecedesRunningService(t *testing.T) {
+	m, svc, _ := newTestManager(t)
+	svc.stageVal = protocol.StageConnected
+	m.busy.Store(true)
+
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v", err)
+	}
+	if status.Up || status.Stage != protocol.StageConnecting {
+		t.Fatalf("Status() = %+v, want connecting without an Up flag", status)
+	}
+	if svc.stageCalls != 0 {
+		t.Fatalf("SCM queried %d times while up was in flight", svc.stageCalls)
+	}
+}
+
+func TestStatusHonorsCanceledContext(t *testing.T) {
+	m, svc, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	status, err := m.Status(ctx)
+	if status != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Status() = (%+v, %v), want context cancellation", status, err)
+	}
+	if svc.stageCalls != 0 {
+		t.Fatalf("SCM queried %d times after cancellation", svc.stageCalls)
 	}
 }
 
@@ -443,7 +491,10 @@ func TestStatusUpSurvivesDeviceReadFailure(t *testing.T) {
 	svc.stageVal = protocol.StageConnected
 	dev.err = errors.New("no device")
 
-	status := m.Status()
+	status, err := m.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() = %v", err)
+	}
 	if !status.Up || status.Stage != protocol.StageConnected {
 		t.Fatalf("Status() = %+v, want connected despite read failure", status)
 	}
@@ -452,13 +503,18 @@ func TestStatusUpSurvivesDeviceReadFailure(t *testing.T) {
 	}
 }
 
-func TestStatusDisconnectedWhenServiceQueryFails(t *testing.T) {
+func TestStatusReturnsServiceReadError(t *testing.T) {
+	want := errors.New("scm down")
 	m, svc, _ := newTestManager(t)
-	svc.stageErr = errors.New("scm down")
+	svc.stageErr = want
 
-	status := m.Status()
-	if status.Up || status.Stage != protocol.StageDisconnected {
-		t.Fatalf("Status() = %+v, want disconnected", status)
+	status, err := m.Status(context.Background())
+	if status != nil || !errors.Is(err, want) {
+		t.Fatalf("Status() = (%+v, %v), want SCM read error", status, err)
+	}
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Status() error = %v, want internal", err)
 	}
 }
 

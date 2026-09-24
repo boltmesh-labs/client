@@ -84,7 +84,10 @@ func wireguardDLLPath() (string, error) {
 	return filepath.Join(dir, "wireguard.dll"), nil
 }
 
-func (r *wireGuardReader) read(_ context.Context, iface string) ([]peer, error) {
+func (r *wireGuardReader) read(ctx context.Context, iface string) ([]peer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dllPath, err := r.dllPath()
 	if err != nil {
 		return nil, err
