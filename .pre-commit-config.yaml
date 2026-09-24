@@ -8,6 +8,21 @@ repos:
       - id: check-added-large-files
         exclude: "^assets/"
       - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [--fix=auto]
+      - id: check-executables-have-shebangs
+      - id: detect-private-key
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
 
   - repo: local
     hooks:
@@ -44,6 +59,22 @@ repos:
         files: ^boltmeshd/
         pass_filenames: false
 
+      # --- Go Tests / Module Metadata (boltmeshd) ---
+      - id: go-test-boltmeshd
+        name: go test (boltmeshd)
+        entry: make -C boltmeshd test
+        language: system
+        types: [go]
+        files: ^boltmeshd/
+        pass_filenames: false
+
+      - id: go-mod-tidy-boltmeshd
+        name: go mod tidy check (boltmeshd)
+        entry: make -C boltmeshd mod-tidy-check
+        language: system
+        files: ^boltmeshd/
+        pass_filenames: false
+
       # --- Generated code (l10n + build_runner) ---
       - id: check-generated
         name: check generated code
@@ -51,6 +82,14 @@ repos:
         language: system
         pass_filenames: false
         files: ^(lib/.*\.dart$|l10n\.yaml$|.*\.arb$|pubspec\.(yaml|lock)$|tool/check_generated\.sh$)
+
+      # --- Flutter dependency metadata ---
+      - id: flutter-lockfile
+        name: Flutter lockfile check
+        entry: flutter pub get --enforce-lockfile
+        language: system
+        files: ^pubspec\.(yaml|lock)$
+        pass_filenames: false
 
       # --- Dart Format ---
       - id: dart-format

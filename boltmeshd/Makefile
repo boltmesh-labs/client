@@ -14,7 +14,7 @@ LDFLAGS := -s -w \
     -X main.GitCommit=$(GIT_COMMIT) \
     -X main.BuildTime=$(BUILD_TIME)
 
-.PHONY: all build build-amd64 build-arm64 build-windows build-windows-amd64 build-windows-arm64 checksums clean test vet format lint lint-windows
+.PHONY: all build build-amd64 build-arm64 build-windows build-windows-amd64 build-windows-arm64 checksums clean test vet format lint lint-windows mod-tidy-check
 
 all: clean format lint vet test build checksums
 
@@ -68,6 +68,9 @@ lint:
 
 lint-windows:
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 golangci-lint run ./...
+
+mod-tidy-check:
+	go mod tidy -diff
 
 clean:
 	rm -rf $(BUILD_DIR)
