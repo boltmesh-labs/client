@@ -74,7 +74,7 @@ Map<String, dynamic> _$RegionToJson(_Region instance) => <String, dynamic>{
 _DeviceStatus _$DeviceStatusFromJson(Map<String, dynamic> json) =>
     _DeviceStatus(
       deviceId: json['device_id'] as String,
-      status: json['status'] as String? ?? 'active',
+      status: json['status'] as String,
       suspendedReason: json['suspended_reason'] as String?,
       tier: json['tier'] as String?,
       maxDevices: (json['max_devices'] as num?)?.toInt(),

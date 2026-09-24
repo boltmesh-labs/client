@@ -241,6 +241,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Device cleared. Next connect reprovisions.';
 
   @override
+  String get settingsDeviceReleaseFailed =>
+      'Device cleared locally, but the server could not remove it. The device slot may still be in use.';
+
+  @override
   String get settingsForgetButton => 'Forget device';
 
   @override
@@ -261,6 +265,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsAllowLanSaved =>
       'Network setting saved. Applies on next connect.';
+
+  @override
+  String get settingsAllowLanFailed =>
+      'Network setting saved, but the tunnel restart failed. It will apply on the next connection.';
 
   @override
   String get settingsAllowLanLoading => 'Loading…';

@@ -1088,11 +1088,11 @@ return $default(_that.deviceId,_that.status,_that.suspendedReason,_that.tier,_th
 @JsonSerializable()
 
 class _DeviceStatus extends DeviceStatus {
-  const _DeviceStatus({@JsonKey(name: 'device_id') required this.deviceId, this.status = 'active', @JsonKey(name: 'suspended_reason') this.suspendedReason, this.tier, @JsonKey(name: 'max_devices') this.maxDevices, @JsonKey(name: 'active_devices') this.activeDevices = 0, @JsonKey(name: 'subscription_expires_at', fromJson: _parseExpiry) this.subscriptionExpiresAt}): super._();
+  const _DeviceStatus({@JsonKey(name: 'device_id') required this.deviceId, required this.status, @JsonKey(name: 'suspended_reason') this.suspendedReason, this.tier, @JsonKey(name: 'max_devices') this.maxDevices, @JsonKey(name: 'active_devices') this.activeDevices = 0, @JsonKey(name: 'subscription_expires_at', fromJson: _parseExpiry) this.subscriptionExpiresAt}): super._();
   factory _DeviceStatus.fromJson(Map<String, dynamic> json) => _$DeviceStatusFromJson(json);
 
 @override@JsonKey(name: 'device_id') final  String deviceId;
-@override@JsonKey() final  String status;
+@override final  String status;
 @override@JsonKey(name: 'suspended_reason') final  String? suspendedReason;
 @override final  String? tier;
 @override@JsonKey(name: 'max_devices') final  int? maxDevices;

@@ -197,15 +197,15 @@ extension ConnectionLifecycle on ConnectionController {
   /// tunnel on the cached dial params so the new AllowedIPs take effect at
   /// once. The restart is offline (no API call), mirroring [_autoHeal]. When
   /// idle/error the preference simply applies to the next connect.
-  Future<void> _setAllowLocalOp(bool value) async {
+  Future<bool> _setAllowLocalOp(bool value) async {
     await _device.setAllowLocal(value);
     _invalidateAllowLocal();
-    if (snap.phase != ConnPhase.connected || snap.dial == null) return;
+    if (snap.phase != ConnPhase.connected || snap.dial == null) return true;
     final release = await _mutex.acquire('lan-toggle');
     final sessionEpoch = _sessionEpoch;
     try {
       final dial = snap.dial;
-      if (snap.phase != ConnPhase.connected || dial == null) return;
+      if (snap.phase != ConnPhase.connected || dial == null) return true;
       AppLog.info('lan-toggle restart allowLocal=$value');
       snap = snap.copyWith(
         phase: ConnPhase.working,
@@ -215,16 +215,18 @@ extension ConnectionLifecycle on ConnectionController {
       // and the phase above is already `working` (same pattern as
       // [_autoHeal]). Never run two live tunnels (Windows/Wintun wedge).
       await _stopTunnel('lan-toggle');
-      if (sessionEpoch != _sessionEpoch) return;
+      if (sessionEpoch != _sessionEpoch) return true;
       await _startWith(dial, sessionEpoch: sessionEpoch);
+      return true;
     } catch (e) {
-      if (sessionEpoch != _sessionEpoch) return;
+      if (sessionEpoch != _sessionEpoch) return true;
       final vpnErr = asVpnError(e);
       AppLog.error('lan-toggle restart failed', vpnErr?.message ?? e);
       snap = snap.copyWith(
         phase: ConnPhase.error,
         message: vpnErr?.message ?? e.toString(),
       );
+      return false;
     } finally {
       release();
     }
@@ -352,10 +354,22 @@ extension ConnectionLifecycle on ConnectionController {
   }
 
   /// Forget-device: releases the server-side device (disconnect + revoke),
-  /// wipes the local identity, then resets the UI.
+  /// wipes the local identity, then resets the UI. A revoke failure is
+  /// surfaced only after the local reset, so the UI can report the incomplete
+  /// server-side cleanup without leaving a stale connected snapshot.
   Future<void> _forgetDeviceOp() async {
-    await _releaseDeviceOp();
+    Object? failure;
+    StackTrace? failureStack;
+    try {
+      await _releaseDeviceOp();
+    } catch (e, stack) {
+      failure = e;
+      failureStack = stack;
+    }
     reset();
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStack ?? StackTrace.current);
+    }
   }
 
   /// Server-side device release + local wipe shared by [forgetDevice] and
@@ -367,8 +381,9 @@ extension ConnectionLifecycle on ConnectionController {
   /// only disconnected would burn a fresh slot on every re-login.
   ///
   /// Revoke 404 means already revoked — treated as success. Any other revoke
-  /// failure is logged but never blocks the local wipe: the tunnel is already
-  /// down and the UI must not trap the user.
+  /// failure is reported after the local wipe: the tunnel is already down and
+  /// the UI must not trap the user, but the caller must not claim that the
+  /// server-side device was removed.
   Future<void> _releaseDeviceOp() async {
     // One lock for the whole release: the teardown, revoke and local wipe
     // must not be split by a concurrent Connect, which could otherwise bind
@@ -382,22 +397,37 @@ extension ConnectionLifecycle on ConnectionController {
       // cache null, skip the revoke, and leak the server device row (and its
       // plan slot) even though disconnect went on to release the peer.
       final id = await _disconnectBody();
+      Object? revokeFailure;
+      StackTrace? revokeStack;
       if (id != null) {
         try {
           await _api.revoke(id);
-        } on DioException catch (e) {
+        } on DioException catch (e, stack) {
           if (e.response?.statusCode == 404) {
             AppLog.info(
               'release revoke already gone device=${AppLog.redact(id)}',
             );
           } else {
             AppLog.error('release revoke failed', e);
+            revokeFailure = e;
+            revokeStack = stack;
           }
-        } catch (e) {
+        } catch (e, stack) {
           AppLog.error('release revoke failed', e);
+          revokeFailure = e;
+          revokeStack = stack;
         }
       }
+      // Always wipe locally, even when revoke failed. The caller can report
+      // the incomplete server-side release without stranding a live tunnel or
+      // leaving the old identity available to the next login.
       await _wipeDevice();
+      if (revokeFailure != null) {
+        Error.throwWithStackTrace(
+          revokeFailure,
+          revokeStack ?? StackTrace.current,
+        );
+      }
     } finally {
       release();
     }

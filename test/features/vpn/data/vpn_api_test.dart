@@ -164,15 +164,45 @@ void main() {
     expect(seen.single.method, 'DELETE');
   });
 
+  test('total deadline cancels a request that never settles', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (_, _) {}));
+    final api = VpnApi(dio, deadline: const Duration(milliseconds: 10));
+
+    await expectLater(
+      api.status('dev-1'),
+      throwsA(
+        isA<DioException>().having(
+          (e) => e.type,
+          'type',
+          DioExceptionType.receiveTimeout,
+        ),
+      ),
+    );
+  });
+
   test('cancelToken is attached to cancellable requests', () async {
     final seen = <RequestOptions>[];
     final api = VpnApi(
-      fakeDio(
-        (o) => o.path.endsWith('/vpn-regions') ? <dynamic>[] : dialJson(),
-        seen: seen,
-      ),
+      fakeDio((o) {
+        if (o.path.endsWith('/vpn-regions')) return <dynamic>[];
+        if (o.path.endsWith('/status')) {
+          return {'device_id': 'dev-1', 'status': 'active'};
+        }
+        if (o.method == 'DELETE' || o.path.endsWith('/disconnect')) {
+          return null;
+        }
+        return dialJson();
+      }, seen: seen),
     );
     final token = CancelToken();
+    await api.provision(
+      name: 'Phone',
+      platform: 'android',
+      publicKey: 'PUB',
+      idempotencyKey: 'idem-1',
+      cancelToken: token,
+    );
     await api.config('dev-1', cancelToken: token);
     await api.connect(deviceId: 'dev-1', publicKey: 'PUB', cancelToken: token);
     await api.switchServer(
@@ -186,8 +216,11 @@ void main() {
       publicKey: 'PUB',
       cancelToken: token,
     );
+    await api.status('dev-1', cancelToken: token);
+    await api.disconnect('dev-1', cancelToken: token);
+    await api.revoke('dev-1', cancelToken: token);
     await api.regions(cancelToken: token);
-    expect(seen, hasLength(5));
+    expect(seen, hasLength(9));
     expect(seen.every((o) => identical(o.cancelToken, token)), isTrue);
   });
 }

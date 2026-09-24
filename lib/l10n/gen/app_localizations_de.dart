@@ -244,6 +244,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Gerät entfernt. Beim nächsten Verbinden wird neu provisioniert.';
 
   @override
+  String get settingsDeviceReleaseFailed =>
+      'Gerät lokal entfernt, aber der Server konnte es nicht löschen. Der Geräteplatz kann weiterhin belegt sein.';
+
+  @override
   String get settingsForgetButton => 'Gerät vergessen';
 
   @override
@@ -264,6 +268,10 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get settingsAllowLanSaved =>
       'Netzwerkeinstellung gespeichert. Gilt ab der nächsten Verbindung.';
+
+  @override
+  String get settingsAllowLanFailed =>
+      'Netzwerkeinstellung gespeichert, aber der Tunnel-Neustart ist fehlgeschlagen. Sie wird bei der nächsten Verbindung übernommen.';
 
   @override
   String get settingsAllowLanLoading => 'Wird geladen …';

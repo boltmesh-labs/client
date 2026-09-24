@@ -53,11 +53,15 @@ class LanSwitchTile extends ConsumerWidget {
           // Capture the messenger before the await: the tile may be gone by
           // the time the restart resolves (Settings tab rebuilds).
           final messenger = ScaffoldMessenger.of(context);
-          await ref.read(connectionProvider.notifier).setAllowLocal(v);
+          final applied = await ref
+              .read(connectionProvider.notifier)
+              .setAllowLocal(v);
           messenger.showSnackBar(
             SnackBar(
               content: Text(
-                connected
+                !applied
+                    ? l10n.settingsAllowLanFailed
+                    : connected
                     ? l10n.settingsAllowLanApplied
                     : l10n.settingsAllowLanSaved,
               ),

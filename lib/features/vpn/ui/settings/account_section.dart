@@ -34,11 +34,16 @@ class AccountSection extends ConsumerWidget {
               ? null
               : () async {
                   // A failed device release must never trap the user in the
-                  // signed-in screen: log it and finish the logout anyway.
+                  // signed-in screen: log it, warn before the auth gate
+                  // unmounts this screen, and finish the logout anyway.
+                  final messenger = ScaffoldMessenger.of(context);
                   try {
                     await ref.read(connectionProvider.notifier).releaseDevice();
                   } catch (e) {
                     AppLog.error('logout device release failed', e);
+                    messenger.showSnackBar(
+                      SnackBar(content: Text(l10n.settingsDeviceReleaseFailed)),
+                    );
                   }
                   await ref.read(authProvider.notifier).logout();
                 },

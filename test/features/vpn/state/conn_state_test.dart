@@ -20,6 +20,7 @@ const _dial = DialParams(
 
 const _status = DeviceStatus(
   deviceId: 'dev-1',
+  status: 'active',
   tier: 'Pro',
   maxDevices: 5,
   activeDevices: 1,

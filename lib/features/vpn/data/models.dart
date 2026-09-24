@@ -86,7 +86,7 @@ abstract class DeviceStatus with _$DeviceStatus {
 
   const factory DeviceStatus({
     @JsonKey(name: 'device_id') required String deviceId,
-    @Default('active') String status,
+    required String status,
     @JsonKey(name: 'suspended_reason') String? suspendedReason,
     String? tier,
     @JsonKey(name: 'max_devices') int? maxDevices,

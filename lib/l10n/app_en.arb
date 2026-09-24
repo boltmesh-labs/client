@@ -326,6 +326,10 @@
   "@settingsDeviceCleared": {
     "description": "Snack after the device identity is cleared."
   },
+  "settingsDeviceReleaseFailed": "Device cleared locally, but the server could not remove it. The device slot may still be in use.",
+  "@settingsDeviceReleaseFailed": {
+    "description": "Warning when local device cleanup succeeded but server revocation failed."
+  },
   "settingsForgetButton": "Forget device",
   "@settingsForgetButton": {
     "description": "Button opening the forget-device dialog."
@@ -349,6 +353,10 @@
   "settingsAllowLanSaved": "Network setting saved. Applies on next connect.",
   "@settingsAllowLanSaved": {
     "description": "Snack after the LAN toggle is flipped while disconnected."
+  },
+  "settingsAllowLanFailed": "Network setting saved, but the tunnel restart failed. It will apply on the next connection.",
+  "@settingsAllowLanFailed": {
+    "description": "Warning when the LAN preference was saved but a live tunnel restart failed."
   },
   "settingsAllowLanLoading": "Loading…",
   "@settingsAllowLanLoading": {

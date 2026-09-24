@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/log.dart';
 import '../../../../l10n/gen/app_localizations.dart';
 import '../../state/vpn_providers.dart';
 
@@ -14,6 +15,7 @@ class ForgetDeviceButton extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     return OutlinedButton(
       onPressed: () async {
+        final messenger = ScaffoldMessenger.of(context);
         final forget = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -32,10 +34,16 @@ class ForgetDeviceButton extends ConsumerWidget {
           ),
         );
         if (forget != true) return;
-        await ref.read(connectionProvider.notifier).forgetDevice();
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(l10n.settingsDeviceCleared)));
+        final clearedMessage = l10n.settingsDeviceCleared;
+        final failedMessage = l10n.settingsDeviceReleaseFailed;
+        try {
+          await ref.read(connectionProvider.notifier).forgetDevice();
+        } catch (e) {
+          AppLog.error('forget device failed', e);
+          messenger.showSnackBar(SnackBar(content: Text(failedMessage)));
+          return;
+        }
+        messenger.showSnackBar(SnackBar(content: Text(clearedMessage)));
       },
       child: Text(l10n.settingsForgetButton),
     );

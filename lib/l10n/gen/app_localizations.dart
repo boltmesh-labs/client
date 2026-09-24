@@ -464,6 +464,12 @@ abstract class AppLocalizations {
   /// **'Device cleared. Next connect reprovisions.'**
   String get settingsDeviceCleared;
 
+  /// Warning when local device cleanup succeeded but server revocation failed.
+  ///
+  /// In en, this message translates to:
+  /// **'Device cleared locally, but the server could not remove it. The device slot may still be in use.'**
+  String get settingsDeviceReleaseFailed;
+
   /// Button opening the forget-device dialog.
   ///
   /// In en, this message translates to:
@@ -499,6 +505,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Network setting saved. Applies on next connect.'**
   String get settingsAllowLanSaved;
+
+  /// Warning when the LAN preference was saved but a live tunnel restart failed.
+  ///
+  /// In en, this message translates to:
+  /// **'Network setting saved, but the tunnel restart failed. It will apply on the next connection.'**
+  String get settingsAllowLanFailed;
 
   /// Subtitle of the LAN toggle while its saved value is loading.
   ///

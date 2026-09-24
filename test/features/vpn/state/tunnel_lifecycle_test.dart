@@ -218,6 +218,23 @@ void main() {
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
     });
 
+    test('reports a failed connected tunnel restart', () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final container = await seedWithStore(events, store);
+      final tunnel = FakeTunnel(events);
+      await seedConnected(container, store, tunnel);
+      tunnel.onStart = () async => throw StateError('restart failed');
+      events.clear();
+
+      expect(
+        await container.read(connectionProvider.notifier).setAllowLocal(false),
+        isFalse,
+      );
+      expect(await store.allowLocal(), isFalse);
+      expect(container.read(connectionProvider).phase, ConnPhase.error);
+    });
+
     test('toggling while idle only persists', () async {
       final events = <String>[];
       final store = FakeStore();
@@ -724,6 +741,42 @@ void main() {
     // Already revoked server-side: local wipe still runs.
     expect(await store.deviceId(), isNull);
     expect(await store.privateKey(), isNull);
+  });
+
+  test('forgetDevice reports revoke failure after local cleanup', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys(const []);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/disconnect')) {
+          return {'disconnected_peers': 1};
+        }
+        if (o.path == '/vpn-devices/dev-1') {
+          throw DioException(
+            requestOptions: o,
+            type: DioExceptionType.badResponse,
+            response: Response(requestOptions: o, statusCode: 500),
+          );
+        }
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await seedConnected(container, store, tunnel);
+    events.clear();
+
+    await expectLater(
+      container.read(connectionProvider.notifier).forgetDevice(),
+      throwsA(isA<DioException>()),
+    );
+
+    expect(await store.deviceId(), isNull);
+    expect(container.read(connectionProvider).phase, ConnPhase.idle);
+    expect(container.read(connectionProvider).message, 'Ready');
+    expect(events, contains('DELETE:/vpn-devices/dev-1'));
   });
 
   test('releaseDevice revokes when the identity read blips', () async {

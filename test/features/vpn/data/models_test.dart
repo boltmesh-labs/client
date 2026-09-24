@@ -111,8 +111,18 @@ void main() {
       expect(st.subscriptionExpiresAt?.year, 2026);
     });
 
-    test('defaults missing fields to active with empty snapshot', () {
-      final st = DeviceStatus.fromJson({'device_id': 'dev-1'});
+    test('requires status and does not default it to active', () {
+      expect(
+        () => DeviceStatus.fromJson({'device_id': 'dev-1'}),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('defaults optional fields with an explicit active status', () {
+      final st = DeviceStatus.fromJson({
+        'device_id': 'dev-1',
+        'status': 'active',
+      });
       expect(st.isSuspended, isFalse);
       expect(st.tier, isNull);
       expect(st.activeDevices, 0);

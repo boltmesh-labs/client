@@ -103,7 +103,7 @@ class PreviewConnectionController extends ConnectionController {
   Future<void> forgetDevice() async {}
 
   @override
-  Future<void> setAllowLocal(bool value) async {}
+  Future<bool> setAllowLocal(bool value) async => true;
 
   @override
   void reset() {}

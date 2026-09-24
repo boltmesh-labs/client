@@ -364,7 +364,9 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> reconcileColdStart() => _reconcileColdStartOp();
 
   /// Persists the split-tunnel preference and restarts a live tunnel.
-  Future<void> setAllowLocal(bool value) => _setAllowLocalOp(value);
+  /// Returns false when the preference was saved but applying it to a live
+  /// tunnel failed.
+  Future<bool> setAllowLocal(bool value) => _setAllowLocalOp(value);
 
   /// Drops local connection state (e.g. after "Forget device").
   void reset() => _resetOp();

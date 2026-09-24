@@ -21,6 +21,7 @@ Widget homeConnectedPreview() {
       regionId: 'r-fra',
       deviceStatus: DeviceStatus(
         deviceId: 'dev-preview',
+        status: 'active',
         tier: 'Pro',
         maxDevices: 5,
         activeDevices: 1,
