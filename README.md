@@ -508,9 +508,10 @@ one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
 The Windows named-pipe transport is covered by a Flutter-free C++ test
 (`windows/runner/tests/helper_pipe_io_test.cpp`, built as
 `helper_pipe_io_tests` and run by the `validate-windows` job);
-`tool/verify_native.sh` also cross-compiles that test with mingw-w64 on Linux
-(and runs it under wine when wine is installed), so a Windows-only C++ break
-fails the `validate-native` job too. Android is
+`tool/verify_native.sh` also cross-compiles that test with mingw-w64 on Linux,
+so a Windows-only C++ break fails the `validate-native` job too. It is not
+executed on Linux — the test drives overlapped named-pipe I/O, which Wine
+emulates incompletely. Android is
 additionally checked by `./gradlew :app:lintDebug` and the minified-release
 `MinifiedTunnelBridgeTest` plus API 30 `WireGuardConnectSmokeTest`
 instrumentation tests in `validate-android`. The Android CI matrix runs the

@@ -4,8 +4,9 @@
 # background tunnel depends on, and the Windows helper channel wiring.
 #
 # Runs on Linux (CI's validate-native job). The Windows named-pipe transport is
-# cross-compiled here with mingw-w64 (and run under wine when available); the
-# full GUI build still runs in the validate-windows job.
+# cross-compiled here with mingw-w64 but not executed (it drives overlapped
+# named-pipe I/O, which Wine does not emulate faithfully); the validate-windows
+# job builds and runs it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -360,30 +361,23 @@ else
   bad "Windows helper transport can send a request to a pre-created pipe"
 fi
 
-# --- Windows: cross-compile (and when possible run) the C++ transport test --
+# --- Windows: cross-compile the C++ transport test -------------------------
 # The named-pipe transport is Windows-only C++ that only the Flutter-gated
 # validate-windows job otherwise compiles. Cross-compile the standalone,
 # Flutter-free test with mingw-w64 so a Windows-only C++ break is caught here
-# too; run it under wine when available for behavioural coverage.
+# too. It is not executed here: the test drives overlapped named-pipe I/O,
+# which Wine emulates incompletely (the process can hang), so behavioural
+# coverage stays on Windows.
 if command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
   runner_build="$(mktemp -d)"
-  runner_exe="$runner_build/helper_pipe_io_tests.exe"
   # -Wall/-Wextra/-Werror mirrors windows/CMakeLists.txt /W4 /WX, so a warning
   # the Windows build would reject fails the Linux job as well.
   if x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -Werror -DNOMINMAX \
     -DBOLTMESH_HELPER_PIPE_TEST -I windows/runner \
     windows/runner/tests/helper_pipe_io_test.cpp \
     windows/runner/helper_pipe_io.cpp \
-    -o "$runner_exe" -lkernel32 -ladvapi32; then
-    wine_bin="$(command -v wine || command -v wine64 || true)"
-    if [[ -z "$wine_bin" ]]; then
-      ok 'Windows runner C++ test cross-compiles with mingw-w64 (wine unavailable, not run)'
-    elif WINEDEBUG=-all WINEPREFIX="$runner_build/wineprefix" \
-      timeout 300 "$wine_bin" "$runner_exe" >/dev/null 2>&1; then
-      ok 'Windows runner C++ test cross-compiles and passes under wine'
-    else
-      bad 'Windows runner C++ test fails under wine'
-    fi
+    -o "$runner_build/helper_pipe_io_tests.exe" -lkernel32 -ladvapi32; then
+    ok 'Windows runner C++ test cross-compiles with mingw-w64'
   else
     bad 'Windows runner C++ test does not cross-compile with mingw-w64'
   fi

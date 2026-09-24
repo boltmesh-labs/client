@@ -27,7 +27,7 @@ bash tool/verify_native.sh
 - Run one test with `flutter test test/features/vpn/data/wg_conf_test.dart`; test paths mirror `lib/`.
 - For a local backend, run `podman-compose up -d` from the `infra` repository, then use `flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1`. The default API is production HTTPS; release builds reject `http://`.
 - Android validation is `flutter build apk --debug` followed by `(cd android && ./gradlew :app:lintDebug)`; the build must run first so Gradle has `android/local.properties`.
-- Windows native validation (`flutter build windows --debug` and the named-pipe C++ test) must run on Windows; `tool/verify_native.sh` additionally cross-compiles that C++ test with mingw-w64 on Linux (and runs it under wine when present), and the helper’s Windows-tagged Go tests run only on the Windows CI runner.
+- Windows native validation (`flutter build windows --debug` and the named-pipe C++ test) must run on Windows; `tool/verify_native.sh` additionally cross-compiles that C++ test with mingw-w64 on Linux (compile-only — Wine does not emulate its overlapped named-pipe I/O faithfully), and the helper’s Windows-tagged Go tests run only on the Windows CI runner.
 
 ### `boltmeshd` (run from `boltmeshd/`)
 
