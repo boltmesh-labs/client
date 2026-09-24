@@ -19,6 +19,12 @@ dependencies:
   # boltmeshd enrollment uses account-management tools and loginctl.
   - passwd
   - systemd
+  # wg-quick needs ip for every tunnel and nftables for full-tunnel firewall
+  # setup. The generated config always carries DNS; resolvconf is also the
+  # virtual capability provided by Debian's systemd-resolved package.
+  - iproute2
+  - nftables
+  - resolvconf
   - wireguard-tools
 icon: linux/assets/boltmesh.png
 generic_name: VPN Client

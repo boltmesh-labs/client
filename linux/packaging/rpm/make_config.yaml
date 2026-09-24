@@ -17,6 +17,12 @@ requires:
   # boltmeshd enrollment uses account-management tools and loginctl.
   - shadow-utils
   - systemd
+  # wg-quick needs ip for every tunnel and nftables for full-tunnel firewall
+  # setup. The generated config always carries DNS; Fedora's systemd-resolved
+  # package supplies the resolvconf/resolvectl integration wg-quick invokes.
+  - iproute
+  - nftables
+  - systemd-resolved
   - wireguard-tools
 generic_name: VPN Client
 keywords:
@@ -39,6 +45,19 @@ postinstall_scripts:
       exit "$postinstall_status"
     fi
     set -e
+  # RPM passes 1 for an initial install and 2 for an upgrade. The helper and
+  # its units are installed by this script rather than owned by the RPM, so RPM
+  # cannot stop the old process for us. Quiesce both units before overwriting
+  # the helper, and refuse the upgrade if a process still owns the old binary.
+  - |
+    if [ "${1:-1}" -gt 1 ]; then
+      systemctl stop boltmeshd.service boltmeshd.socket
+      main_pid="$(systemctl show --property=MainPID --value boltmeshd.service)"
+      if [ "$main_pid" != 0 ]; then
+        printf 'boltmesh: failed to stop the privileged helper during upgrade\n' >&2
+        exit 1
+      fi
+    fi
   - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd /usr/libexec/boltmesh/boltmeshd
   - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
   - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket

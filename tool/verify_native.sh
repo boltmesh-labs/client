@@ -97,6 +97,49 @@ for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/m
   fi
 done
 
+# wg-quick always configures DNS here, and strict full-tunnel mode also
+# installs firewall rules. Those tools are only recommendations (or undeclared)
+# in the base packages, so make the complete command surface a hard dependency.
+prerequisites_ok=1
+deb_config=linux/packaging/deb/make_config.yaml
+rpm_config=linux/packaging/rpm/make_config.yaml
+for dependency in iproute2 nftables resolvconf; do
+  grep -qE "^  - ${dependency}$" "$deb_config" || prerequisites_ok=0
+done
+for dependency in iproute nftables systemd-resolved; do
+  grep -qE "^  - ${dependency}$" "$rpm_config" || prerequisites_ok=0
+done
+if [[ "$prerequisites_ok" -eq 1 ]]; then
+  ok 'Linux packages install the complete wg-quick command set'
+else
+  bad 'Linux package dependencies omit a wg-quick runtime command'
+fi
+
+# Fastforge puts these scripts in RPM's %post. Because the helper and units
+# are not package-owned, an upgrade must stop the old service before replacing
+# its binary, verify no process remains, and only then install the new payload.
+rpm_postinstall_section="$(
+  sed -n '/^postinstall_scripts:/,/^postuninstall_scripts:/p' "$rpm_config"
+)"
+rpm_upgrade_guard="if [ \"\${1:-1}\" -gt 1 ]; then"
+rpm_upgrade_stop='systemctl stop boltmeshd.service boltmeshd.socket'
+rpm_upgrade_pid="main_pid=\"\$(systemctl show --property=MainPID --value boltmeshd.service)\""
+rpm_upgrade_pid_guard="if [ \"\$main_pid\" != 0 ]; then"
+rpm_upgrade_guard_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_guard" | cut -d: -f1)"
+rpm_upgrade_stop_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_stop" | cut -d: -f1)"
+rpm_upgrade_pid_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_pid" | cut -d: -f1)"
+rpm_helper_install_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF '  - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd' | cut -d: -f1)"
+if [[ -n "$rpm_upgrade_guard_line" && -n "$rpm_upgrade_stop_line" &&
+  -n "$rpm_upgrade_pid_line" && -n "$rpm_helper_install_line" &&
+  "$rpm_upgrade_guard_line" -lt "$rpm_upgrade_stop_line" &&
+  "$rpm_upgrade_stop_line" -lt "$rpm_upgrade_pid_line" &&
+  "$rpm_upgrade_pid_line" -lt "$rpm_helper_install_line" ]] &&
+  printf '%s\n' "$rpm_postinstall_section" | grep -qF "$rpm_upgrade_pid_guard"; then
+  ok 'RPM upgrades stop and verify the old privileged helper before replacement'
+else
+  bad 'RPM upgrade can replace the helper binary while the old process is active'
+fi
+
 # The package must not infer authorization solely from SUDO_USER or discard a
 # failed group update.  The staged command handles polkit metadata, logind
 # discovery, and an explicit fallback for root-shell/headless installs.
