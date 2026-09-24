@@ -75,25 +75,21 @@ in `test/support/fakes.dart`.
 
 ## Platform notes (after `flutter create`)
 
-- **Android**: supports **API 24 (Android 7.0 Nougat) and newer**, and
-  builds against **compile/target SDK 36 (Android 16)**. The floor is pinned
-  in `android/app/build.gradle.kts` (`minSdk = 24`: Flutter 3.47's default,
-  above `wireguard_flutter_plus`'s own `minSdkVersion 21`) so the documented
-  minimum cannot drift with the Flutter SDK.
-  `wireguard_flutter_plus` needs the `VpnService` permission
-  (`android/app/src/main/AndroidManifest.xml`):
-  `<uses-permission android:name="android.permission.INTERNET" />`,
-  plus the `VpnService` `BIND_VPN_SERVICE` service entry from the
-  package README. Accept the system VPN consent dialog on first connect.
+- **Android**: supports **API 30 (Android 11) and newer**, and builds against
+  **compile/target SDK 36 (Android 16)**. The floor is pinned in
+  `android/app/build.gradle.kts` (`minSdk = 30`) so the documented minimum
+  cannot drift with the Flutter SDK. `wireguard_flutter_plus` needs the
+  `VpnService` permission (`android/app/src/main/AndroidManifest.xml`):
+  `<uses-permission android:name="android.permission.INTERNET" />`, plus the
+  `VpnService` `BIND_VPN_SERVICE` service entry from the package README.
+  Accept the system VPN consent dialog on first connect.
 - **Android foreground service**: the plugin's
   `VpnForegroundService` keeps the tunnel's foreground notification alive
   while connected. Behavior is API-level dependent:
 
   | API | Android | Foreground-service behavior |
   | --- | --- | --- |
-  | 24 | 7.0 | Minimum supported. `VpnService` runs; no typed foreground service exists yet. |
-  | 28 | 9 | `FOREGROUND_SERVICE` permission required to start the keep-alive service (normal permission, declared in the manifest). |
-  | 29 | 10 | `foregroundServiceType="connectedDevice"` supported; the plugin's service declares it. |
+  | 30 | 11 | Minimum supported. `VpnService` runs; the `FOREGROUND_SERVICE` permission and typed `connectedDevice` service are available. |
   | 33 | 13 | `POST_NOTIFICATIONS` is a runtime permission: without the grant the notification is hidden, but the service keeps running. |
   | 34 | 14 | Typed foreground services are mandatory: `FOREGROUND_SERVICE_CONNECTED_DEVICE` (declared) plus the `connectedDevice` type, or `startForeground` throws. |
 
@@ -474,7 +470,7 @@ bash tool/check_generated.sh
 # Native-platform contracts (systemd units + staged Linux payload, the
 # Android manifest the background tunnel needs, the Windows helper channel):
 bash tool/verify_native.sh
-# Minified-release Android bridge smoke test (with an emulator running):
+# Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
 ```
 
@@ -490,7 +486,9 @@ The Windows named-pipe transport is covered by a Flutter-free C++ test
 (`windows/runner/tests/helper_pipe_io_test.cpp`, built as
 `helper_pipe_io_tests` and run by the `validate-windows` job); Android is
 additionally checked by `./gradlew :app:lintDebug` and the minified-release
-`MinifiedTunnelBridgeTest` instrumentation test in `validate-android`.
+`MinifiedTunnelBridgeTest` plus API 30 `WireGuardConnectSmokeTest`
+instrumentation tests in `validate-android`. The Android CI matrix runs the
+release smoke tests on API 30 and 35.
 
 Test paths mirror `lib/` (e.g. `flutter test
 test/features/vpn/data/wg_conf_test.dart`). Shared doubles live in

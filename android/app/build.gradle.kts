@@ -48,12 +48,12 @@ android {
 
     defaultConfig {
         applicationId = "com.boltmesh.boltmesh"
-        // Pinned to the documented Android floor (API 24 / Android 7.0): the
-        // Flutter 3.47 default, and above wireguard_flutter_plus's own
-        // minSdkVersion 21. Pinning keeps the README's stated minimum from
-        // silently drifting when the Flutter SDK bumps its default; revisit
-        // together with the foreground-service contract in README.md.
-        minSdk = 24
+        // Android 11 is the documented floor. It already provides the
+        // java.time APIs used by WireGuard's config parser. Pinning keeps
+        // the README's stated minimum from silently drifting when the
+        // Flutter SDK bumps its default; revisit together with the
+        // foreground-service contract in README.md.
+        minSdk = 30
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)

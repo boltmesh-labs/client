@@ -109,8 +109,14 @@ jobs:
         run: go test ./... -count=1
 
   validate-android:
-    name: "Validate Android build"
+    name: "Validate Android build (API ${{ matrix.api-level }})"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Exercise the API 30 connect path and retain the minified bridge
+        # coverage on a current API.
+        api-level: [30, 35]
     steps:
       - uses: actions/checkout@v7
 
@@ -153,13 +159,13 @@ jobs:
         working-directory: android
         run: ./gradlew :app:lintDebug
 
-      # Reflection names are easy to break in a dependency update and are not
-      # observable by a debug-only build. Run the instrumentation test against
-      # the minified release APK on an emulator.
-      - name: Run minified tunnel bridge smoke test
+      # Reflection names and the API 30 Config.parse path are easy to break
+      # in a dependency update and are not observable by a debug-only build.
+      # Run the instrumentation tests against the minified release APK.
+      - name: Run Android release smoke tests (API ${{ matrix.api-level }})
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: ${{ matrix.api-level }}
           arch: x86_64
           disable-animations: true
           script: |
