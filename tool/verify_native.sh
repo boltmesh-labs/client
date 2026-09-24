@@ -443,6 +443,20 @@ else
   bad "windows/packaging/exe/boltmesh.iss can install and launch a bundle with a failed helper"
 fi
 
+# The helper binary owns the service and tunnel teardown, so an uninstall must
+# not complete when the helper is missing and a privileged service or the
+# private-key config is still present. It probes for them with sc.exe and aborts
+# (fail closed) instead of silently skipping cleanup.
+if grep -qF 'function ServiceExists' "$inno_iss" &&
+  grep -qF "ServiceExists('boltmeshd')" "$inno_iss" &&
+  grep -qF "ServiceExists('boltmesh0')" "$inno_iss" &&
+  grep -qF '{commonappdata}\BoltMesh\boltmesh0.conf' "$inno_iss" &&
+  grep -qF 'Reinstall BoltMesh' "$inno_iss"; then
+  ok "Windows uninstaller fails closed when the helper is missing"
+else
+  bad "windows/packaging/exe/boltmesh.iss can silently leave services behind"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "native platform contract checks failed" >&2
   exit 1

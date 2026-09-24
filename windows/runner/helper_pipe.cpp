@@ -168,6 +168,15 @@ void RegisterHelperPipe(flutter::FlutterEngine* engine) {
           return;
         }
 
+        // Bound the request here as well as in the transport so the oversized
+        // string is never copied to a worker or written. The daemon rejects a
+        // line over the cap anyway; doing it first keeps the cost on the
+        // caller's side of the channel.
+        if (request.size() + 1 > io::kMaxRequestBytes) {
+          result->Error("bad_request", "exchange request is too large");
+          return;
+        }
+
         auto exchange = std::make_shared<PendingExchange>();
         exchange->request = std::move(request);
         exchange->timeout_ms = timeout_ms;

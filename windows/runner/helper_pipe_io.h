@@ -24,6 +24,12 @@ inline constexpr unsigned long kConnectWaitMs = 2000;
 // Hard cap on one response line, matching the daemon's request cap.
 inline constexpr std::size_t kMaxResponseBytes = 128 * 1024;
 
+// Hard cap on one request line including the framing newline, matching the
+// daemon's maxRequestLine. It is enforced before the request is copied to the
+// worker or written, so a hostile Dart caller cannot force an unbounded native
+// allocation or a long write that the daemon would discard anyway.
+inline constexpr std::size_t kMaxRequestBytes = 128 * 1024;
+
 // ExchangePipe sends one request line (request + '\n') over the named pipe and
 // returns the first response line with its trailing newline stripped. It
 // returns false when the pipe is unreachable, the I/O fails, or the complete

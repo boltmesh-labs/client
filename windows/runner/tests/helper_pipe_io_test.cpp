@@ -145,9 +145,15 @@ void TestTimeoutWhenServerNeverReplies() {
   Sleep(50);
 
   std::string response;
+  const ULONGLONG start = GetTickCount64();
   const bool ok = boltmesh::io::ExchangePipeUnverified(
       args.pipe_name.c_str(), "{}", &response, 200, 2000);
+  const ULONGLONG elapsed = GetTickCount64() - start;
   Check(!ok, "ExchangePipe returns false when the server never answers");
+  // The cancellation drain must stay inside the requested 200 ms budget; the
+  // old fixed 1 s drain let the exchange run ~1.2 s. Allow ample scheduling
+  // slack but well under that.
+  Check(elapsed < 700, "timeout is not extended by the cancellation drain");
   WaitForServer(thread, "no-reply server thread joined");
 }
 
@@ -195,6 +201,68 @@ void TestRejectsServerThatIsNotTheService() {
   WaitForServer(thread, "impostor server thread joined");
 }
 
+// A request line is capped before it is written. A body one byte over what the
+// daemon accepts (the cap includes the framing newline) must be rejected
+// without connecting, so there is no server here.
+void TestRejectsOversizedRequest() {
+  std::string response;
+  const std::string request(boltmesh::io::kMaxRequestBytes, 'x');
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      UniquePipeName(L"oversized-request").c_str(), request, &response, 200,
+      100);
+  Check(!ok, "ExchangePipe rejects a request over the cap");
+}
+
+// A request whose framed length is exactly the cap is still valid.
+void TestAcceptsRequestAtCap() {
+  ServerArgs args;
+  args.pipe_name = UniquePipeName(L"request-at-cap");
+  args.reply = R"({"v":1,"id":"1","ok":true})";
+  HANDLE thread = StartServer(&args);
+  Sleep(50);
+
+  std::string response;
+  const std::string request(boltmesh::io::kMaxRequestBytes - 1, 'x');
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), request, &response, 10000, 2000);
+  Check(ok, "ExchangePipe accepts a request at the cap");
+  Check(args.request == request, "at-cap request arrives intact");
+  WaitForServer(thread, "request-at-cap server thread joined");
+}
+
+// A response line exactly at the cap is accepted.
+void TestAcceptsResponseAtCap() {
+  ServerArgs args;
+  args.pipe_name = UniquePipeName(L"response-at-cap");
+  args.reply = std::string(boltmesh::io::kMaxResponseBytes, 'x');
+  HANDLE thread = StartServer(&args);
+  Sleep(50);
+
+  std::string response;
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), "{}", &response, 10000, 2000);
+  Check(ok, "ExchangePipe accepts a response line at the cap");
+  Check(response == args.reply, "at-cap response line is returned intact");
+  WaitForServer(thread, "response-at-cap server thread joined");
+}
+
+// One byte past the cap must be rejected: the old loop read a whole 4096-byte
+// chunk once the response already reached the cap, accepting up to 4095 extra
+// bytes.
+void TestRejectsOverlongResponse() {
+  ServerArgs args;
+  args.pipe_name = UniquePipeName(L"overlong-response");
+  args.reply = std::string(boltmesh::io::kMaxResponseBytes + 1, 'x');
+  HANDLE thread = StartServer(&args);
+  Sleep(50);
+
+  std::string response;
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), "{}", &response, 10000, 2000);
+  Check(!ok, "ExchangePipe rejects a response line over the cap");
+  WaitForServer(thread, "overlong-response server thread joined");
+}
+
 }  // namespace
 
 int main() {
@@ -203,6 +271,10 @@ int main() {
   TestUnreachablePipe();
   TestWaitsForPipeToAppear();
   TestRejectsServerThatIsNotTheService();
+  TestRejectsOversizedRequest();
+  TestAcceptsRequestAtCap();
+  TestAcceptsResponseAtCap();
+  TestRejectsOverlongResponse();
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

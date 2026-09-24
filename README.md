@@ -277,7 +277,11 @@ bundle, so the installer ships the helper next to `boltmesh.exe` (and the
 plugin-bundled `wireguard_svc.exe`/`wireguard.dll`), then
 `windows/packaging/exe/boltmesh.iss` installs and starts the helper service;
 uninstall quiesces the daemon, removes the tunnel service and private-key
-config, and then removes the helper service. The GUI no longer requests
+config, and then removes the helper service. If the helper binary is missing
+(a damaged or partially removed install), the uninstaller fails closed: it
+probes for the `boltmeshd`/`boltmesh0` services and the private-key config and
+aborts when any survives, instead of completing with privileged state left
+behind. The GUI no longer requests
 elevation: the app
 CMake drops the plugin's `requireAdministrator` link flag, and the privileged
 work lives in the helper. The installer itself is per-machine into

@@ -104,15 +104,18 @@ void RetireOverlapped(OverlappedOp* op) {
   }
 }
 
-// WaitOverlapped waits for one overlapped operation. When it does not complete
-// within timeout_ms it requests cancellation and waits one bounded drain
-// interval. true means the operation completed and `*op` is still caller-owned.
-// false means it failed; when the kernel might still be using it, ownership has
-// been retired and `*op` is left null so the caller cannot free it.
+// WaitOverlapped waits for one overlapped operation until the caller's
+// deadline. When it does not complete by then it requests cancellation and
+// waits a bounded drain, itself clamped to the remaining budget, so a stalled
+// provider cannot extend the exchange past the deadline. true means the
+// operation completed and `*op` is still caller-owned. false means it failed;
+// when the kernel might still be using it, ownership has been retired and `*op`
+// is left null so the caller cannot free it.
 bool WaitOverlapped(HANDLE pipe, std::unique_ptr<OverlappedOp>* op,
-                    unsigned long timeout_ms, DWORD* transferred) {
+                    TickCount deadline, DWORD* transferred) {
   OverlappedOp* current = op->get();
-  if (WaitForSingleObject(current->event, timeout_ms) == WAIT_OBJECT_0) {
+  if (WaitForSingleObject(current->event, RemainingMs(deadline)) ==
+      WAIT_OBJECT_0) {
     return GetOverlappedResult(pipe, &current->overlapped, transferred, FALSE) !=
            0;
   }
@@ -121,9 +124,11 @@ bool WaitOverlapped(HANDLE pipe, std::unique_ptr<OverlappedOp>* op,
   // let us free anything.
   CancelIoEx(pipe, &current->overlapped);
   // The completion event is the only proof the kernel has stopped touching our
-  // memory. A fixed drain bound on its own is not a completion guarantee, so if
-  // it expires without the event we hand the operation to a reaper.
-  if (WaitForSingleObject(current->event, kDrainTimeoutMs) == WAIT_OBJECT_0) {
+  // memory. The drain is clamped to the remaining budget (and to
+  // kDrainTimeoutMs) so the exchange cannot outlive the deadline; if it expires
+  // without the event we hand the operation to a reaper instead.
+  const unsigned long drain = std::min(RemainingMs(deadline), kDrainTimeoutMs);
+  if (WaitForSingleObject(current->event, drain) == WAIT_OBJECT_0) {
     return false;
   }
   RetireOverlapped(op->release());
@@ -133,8 +138,7 @@ bool WaitOverlapped(HANDLE pipe, std::unique_ptr<OverlappedOp>* op,
 bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
   size_t offset = 0;
   while (offset < data.size()) {
-    const unsigned long remaining = RemainingMs(deadline);
-    if (remaining == 0) return false;
+    if (RemainingMs(deadline) == 0) return false;
     const size_t left = data.size() - offset;
     const DWORD chunk =
         static_cast<DWORD>(left < 64 * 1024 ? left : 64 * 1024);
@@ -150,9 +154,9 @@ bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
     DWORD written = 0;
     bool ok = false;
     if (started) {
-      ok = WaitOverlapped(pipe, &op, remaining, &written);
+      ok = WaitOverlapped(pipe, &op, deadline, &written);
     } else if (GetLastError() == ERROR_IO_PENDING) {
-      ok = WaitOverlapped(pipe, &op, remaining, &written);
+      ok = WaitOverlapped(pipe, &op, deadline, &written);
     }
     // If WaitOverlapped retired the operation, `op` is null and the reaper owns
     // it; a failed start never issued an IRP, so destroying it is safe.
@@ -163,37 +167,45 @@ bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
 }
 
 // ReadLine reads until the first '\n' or the response cap, whichever comes
-// first. The trailing newline is stripped.
+// first. The trailing newline is stripped. A line that reaches the cap without
+// a newline, or whose newline lies beyond it, is rejected rather than buffered,
+// so the returned line never exceeds kMaxResponseBytes.
 bool ReadLine(HANDLE pipe, std::string* out, TickCount deadline) {
   out->clear();
-  while (out->size() <= kMaxResponseBytes) {
-    const unsigned long remaining = RemainingMs(deadline);
-    if (remaining == 0) return false;
+  for (;;) {
+    if (RemainingMs(deadline) == 0) return false;
+
+    // Read at most the bytes still allowed plus one. The extra byte lets a
+    // line exactly at the cap be told apart from an overlong one without
+    // buffering the overlong bytes: a newline in that byte terminates a
+    // cap-length line, any other byte proves the line is too long.
+    const size_t allowed = kMaxResponseBytes + 1 - out->size();
+    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(allowed, 4096));
 
     auto op = std::make_unique<OverlappedOp>();
     if (!op->valid()) return false;
-    op->buffer.resize(4096);
+    op->buffer.resize(chunk);
 
     const BOOL started =
-        ReadFile(pipe, op->buffer.data(), static_cast<DWORD>(op->buffer.size()),
-                 nullptr, &op->overlapped);
+        ReadFile(pipe, op->buffer.data(), chunk, nullptr, &op->overlapped);
     DWORD read = 0;
     bool ok = false;
     if (started) {
-      ok = WaitOverlapped(pipe, &op, remaining, &read);
+      ok = WaitOverlapped(pipe, &op, deadline, &read);
     } else if (GetLastError() == ERROR_IO_PENDING) {
-      ok = WaitOverlapped(pipe, &op, remaining, &read);
+      ok = WaitOverlapped(pipe, &op, deadline, &read);
     }
     if (!ok || read == 0) return false;
 
     out->append(op->buffer.data(), read);
     const size_t newline = out->find('\n');
     if (newline != std::string::npos) {
+      if (newline > kMaxResponseBytes) return false;
       out->resize(newline);
       return true;
     }
+    if (out->size() > kMaxResponseBytes) return false;
   }
-  return false;
 }
 
 // ServerProcessId returns the process id of the connected pipe's server end, or
@@ -291,6 +303,11 @@ HANDLE OpenPipe(const wchar_t* pipe_name, unsigned long connect_wait_ms) {
 bool ExchangePipeImpl(const wchar_t* pipe_name, const std::string& request,
                       std::string* response, unsigned long timeout_ms,
                       unsigned long connect_wait_ms, bool authenticate_peer) {
+  // Reject an oversized request before connecting or writing: the daemon caps
+  // a request line at kMaxRequestBytes including the framing newline, so a
+  // larger one can only burn a native copy and transport time to be discarded.
+  if (request.size() + 1 > kMaxRequestBytes) return false;
+
   const TickCount deadline = DeadlineAfter(timeout_ms);
   HANDLE pipe = OpenPipe(pipe_name, std::min(RemainingMs(deadline),
                                              connect_wait_ms));

@@ -190,23 +190,58 @@ begin
   end;
 end;
 
+; Reports whether a Windows service is registered. `sc query` exits 0 when the
+; service exists and 1060 (ERROR_SERVICE_DOES_NOT_EXIST) when it does not. Any
+; other outcome, including a failed launch, is reported as still present so an
+; undetermined state fails closed rather than silently skipping cleanup.
+function ServiceExists(ServiceName: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  if Exec(ExpandConstant('{sys}\sc.exe'), 'query "' + ServiceName + '"', '',
+          SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Result := ResultCode <> 1060
+  else
+    Result := True;
+end;
+
+; Run cleanup from an uninstall event rather than [UninstallRun] so a failed
+; cleanup aborts before installed files are removed. The privileged helper owns
+; the service and tunnel teardown, so it is the only complete cleanup. When its
+; binary is missing (a damaged, manually deleted, or partially removed
+; installation) the uninstall must not silently complete while a service or the
+; private-key config survives: probe for them and abort with remediation.
+;
+; The service names are the daemon's defaults (boltmeshd and the boltmesh0
+; tunnel interface) and the config lives under ProgramData; the installer never
+; overrides -interface or -config-dir, so these are exactly the names in play.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   CleanupError: String;
   HelperPath: String;
   ResultCode: Integer;
 begin
-  if (CurUninstallStep <> usUninstall) or not FileExists(ExpandConstant('{app}\boltmeshd.exe')) then
+  if CurUninstallStep <> usUninstall then
   begin
     Exit;
   end;
 
   HelperPath := ExpandConstant('{app}\boltmeshd.exe');
   CleanupError := '';
-  if not Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    CleanupError := 'The BoltMesh helper could not be started for uninstall.'
-  else if ResultCode <> 0 then
-    CleanupError := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+  if FileExists(HelperPath) then
+  begin
+    if not Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      CleanupError := 'The BoltMesh helper could not be started for uninstall.'
+    else if ResultCode <> 0 then
+      CleanupError := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+  end
+  else if ServiceExists('boltmeshd') or ServiceExists('boltmesh0') or
+          FileExists(ExpandConstant('{commonappdata}\BoltMesh\boltmesh0.conf')) then
+  begin
+    CleanupError := 'The BoltMesh helper is missing, so its service and VPN ' +
+      'configuration could not be removed automatically. Reinstall BoltMesh, ' +
+      'then uninstall again.';
+  end;
 
   if CleanupError <> '' then
   begin
