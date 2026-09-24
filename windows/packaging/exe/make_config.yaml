@@ -17,6 +17,12 @@ publisher_name: BoltMesh
 publisher: BoltMesh
 publisher_url: https://boltmesh.mooo.com
 display_name: BoltMesh
+# Pin the app exe explicitly: the packager otherwise picks the first .exe it
+# enumerates from the bundle, which also contains boltmeshd.exe and the
+# plugin-bundled wireguard_svc.exe. That name drives the Start Menu/desktop
+# shortcuts and the post-install launch, so enumeration order could otherwise
+# make the installer launch the helper or service instead of the GUI.
+executable_name: boltmesh.exe
 create_desktop_icon: true
 # The privileged helper and tunnel services load their binaries from {app} as
 # LocalSystem, so the destination must stay inside a protected system

@@ -405,6 +405,17 @@ else
   bad "windows/packaging/exe/make_config.yaml is not pinned to x64compatible"
 fi
 
+# The installer names the app exe in its shortcuts and post-install launch.
+# Without an explicit executable_name the packager picks the first .exe it
+# enumerates from the bundle, which also contains boltmeshd.exe and the
+# plugin-bundled wireguard_svc.exe, so enumeration order could launch the
+# helper or service instead of the GUI.
+if grep -qE '^[[:space:]]*executable_name:[[:space:]]*boltmesh\.exe[[:space:]]*$' "$inno_config"; then
+  ok "Windows installer pins the app executable name"
+else
+  bad "windows/packaging/exe/make_config.yaml does not pin executable_name: boltmesh.exe"
+fi
+
 # The LocalSystem helper and tunnel services load their binaries from {app}, so
 # a user-writable install directory is a SYSTEM code-execution path. The
 # directory page must stay hidden and the [Code] guard must reject a /DIR
