@@ -15,6 +15,7 @@ _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   wgPort: (json['wg_port'] as num).toInt(),
   wgDns: json['wg_dns'] as String,
   wgPublicKey: json['wg_public_key'] as String,
+  clientPublicKey: json['client_public_key'] as String?,
 );
 
 Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
@@ -27,6 +28,7 @@ Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
       'wg_port': instance.wgPort,
       'wg_dns': instance.wgDns,
       'wg_public_key': instance.wgPublicKey,
+      'client_public_key': instance.clientPublicKey,
     };
 
 _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>

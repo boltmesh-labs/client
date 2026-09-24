@@ -63,9 +63,12 @@ extension ConnectionConnect on ConnectionController {
     }
     try {
       AppLog.info('connect config device=${AppLog.redact(id)}');
-      final dial = await _api.config(id);
+      final reconciled = await _configReconciled(
+        id,
+        sessionEpoch: expectedSession,
+      );
       if (!sessionCurrent()) return;
-      await _startWith(dial, sessionEpoch: expectedSession);
+      await _startWith(reconciled.dial, sessionEpoch: expectedSession);
       return;
     } on DioException catch (e) {
       // Only peerless (config after disconnect/GC) falls through to a
@@ -186,8 +189,12 @@ extension ConnectionConnect on ConnectionController {
         if (sessionEpoch != _sessionEpoch) return;
         if (id != null) {
           try {
-            final dial = await _api.config(id);
+            final reconciled = await _configReconciled(
+              id,
+              sessionEpoch: sessionEpoch,
+            );
             if (sessionEpoch != _sessionEpoch) return;
+            final dial = reconciled.dial;
             await _startWith(dial, sessionEpoch: sessionEpoch);
             if (sessionEpoch != _sessionEpoch) return;
             await _pinCanonicalTarget(
@@ -276,11 +283,14 @@ extension ConnectionConnect on ConnectionController {
   }
 
   /// Server truth for the Auto path: the device's live dial, or null when
-  /// it holds no active peer (`DEVICE_NO_ACTIVE_PEER`). Every other failure
-  /// propagates to the caller.
+  /// it holds no active peer (`DEVICE_NO_ACTIVE_PEER`). The dial is
+  /// reconciled with the local keypair first (see [_configReconciled]), so a
+  /// divergent identity is repaired before the peer is reused. Every other
+  /// failure propagates to the caller.
   Future<DialParams?> _probeActiveDial(String id) async {
     try {
-      return await _api.config(id);
+      final reconciled = await _configReconciled(id);
+      return reconciled.dial;
     } on DioException catch (e) {
       if (asVpnError(e)?.kind == ApiErrorKind.noActivePeer) return null;
       rethrow;

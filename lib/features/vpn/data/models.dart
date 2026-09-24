@@ -30,6 +30,11 @@ abstract class DialParams with _$DialParams {
     @JsonKey(name: 'wg_port') required int wgPort,
     @JsonKey(name: 'wg_dns') required String wgDns,
     @JsonKey(name: 'wg_public_key') required String wgPublicKey,
+    // The server's active peer public key for this device (`GET …/config` and
+    // every bind response report it). Null on backends that predate the field;
+    // when present the controller verifies the stored keypair matches before
+    // starting a tunnel, repairing a divergence a lost bind response can leave.
+    @JsonKey(name: 'client_public_key') String? clientPublicKey,
   }) = _DialParams;
 
   factory DialParams.fromJson(Map<String, Object?> json) =>

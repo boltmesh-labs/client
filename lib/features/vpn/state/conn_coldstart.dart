@@ -247,9 +247,15 @@ extension ConnectionColdStart on ConnectionController {
         );
       }
       DialParams dial;
+      var rebound = false;
       try {
-        dial = await _api.config(id);
+        final reconciled = await _configReconciled(
+          id,
+          sessionEpoch: sessionEpoch,
+        );
         if (sessionEpoch != _sessionEpoch) return;
+        dial = reconciled.dial;
+        rebound = reconciled.rebound;
       } on DioException catch (e) {
         final kind = asVpnError(e)?.kind;
         if (kind == ApiErrorKind.notFound ||
@@ -299,20 +305,22 @@ extension ConnectionColdStart on ConnectionController {
       // An unpinned (Auto) state stays unpinned here: the restored dial
       // labels the session while the pin remains empty, so later connects
       // re-pick fresh instead of sticking to the restored server.
-      if (downRead) {
-        // Down-read confirm (`GET …/config` ok): the peer exists server-side
-        // but the OS read said gone. Always bounce (stop, then start on the
-        // server-confirmed dial): after a process/engine death this process
+      if (downRead || rebound) {
+        // Down-read confirm (`GET …/config` ok) or a key rebind: the peer
+        // exists server-side but any surviving OS tunnel runs a stale key.
+        // Always bounce (stop, then start on the server-confirmed dial):
+        // after a process/engine death this process
         // never owns the surviving TUN (fresh backend reports
         // `Running tunnels: []`), so adopting it leaves a handle-less ghost
         // that later disconnects can't kill (it keeps handshaking after
         // `Device closed`). A new `establish()` replaces whatever the OS
         // read lied about and gives this backend ownership, so the normal
         // machinery verifies from there. Only corroborated-dead evidence
-        // tears down to idle instead.
-        final alive = await _coldRestoreAlive(dial);
+        // tears down to idle instead; a rebind never does (the peer is
+        // confirmed, only its key changed).
+        final alive = rebound ? null : await _coldRestoreAlive(dial);
         if (sessionEpoch != _sessionEpoch) return;
-        if (alive == false) {
+        if (!rebound && alive == false) {
           AppLog.info(
             'cold restore down-read corroborated dead -> ghost-kill + idle',
           );
@@ -336,14 +344,18 @@ extension ConnectionColdStart on ConnectionController {
           return;
         }
         AppLog.info(
-          'cold restore down-read -> bounce on the server-confirmed dial '
-          '(alive=${alive == true ? 'likely' : 'unknown'})',
+          rebound
+              ? 'cold restore rebound -> bounce on the fresh key'
+              : 'cold restore down-read -> bounce on the server-confirmed dial '
+                    '(alive=${alive == true ? 'likely' : 'unknown'})',
         );
         snap = snap.copyWith(
           phase: ConnPhase.working,
           message: 'Restoring connection…',
         );
-        await _stopTunnel('cold-restore-bounce');
+        await _stopTunnel(
+          rebound ? 'cold-restore-rebind' : 'cold-restore-bounce',
+        );
         if (sessionEpoch != _sessionEpoch) return;
         try {
           await _startWith(dial, sessionEpoch: sessionEpoch);

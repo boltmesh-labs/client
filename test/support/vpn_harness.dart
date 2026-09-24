@@ -21,6 +21,7 @@ Map<String, dynamic> dialJson({
   int wgPort = 51820,
   String wgDns = '10.8.0.1',
   String wgPublicKey = 'SRV',
+  String? clientPublicKey,
 }) => {
   'id': deviceId,
   'assigned_ip': assignedIp,
@@ -30,6 +31,9 @@ Map<String, dynamic> dialJson({
   'wg_port': wgPort,
   'wg_dns': wgDns,
   'wg_public_key': wgPublicKey,
+  // Omitted when null: existing suites assert the pre-field behavior. A suite
+  // exercising key reconciliation supplies the server-side peer key.
+  'client_public_key': ?clientPublicKey,
 };
 
 /// [dialJson] for the same server after a reboot rotated its WireGuard key.

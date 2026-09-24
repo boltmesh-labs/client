@@ -123,6 +123,22 @@ extension ConnectionTunnel on ConnectionController {
     final priv = await _device.privateKey();
     if (!sessionCurrent()) return;
     if (priv == null) throw StateError('Missing private key. Reprovision.');
+    // Server-reported active peer key (when the backend supplies it) must
+    // match the keypair the conf is built from: a mismatch means a stale local
+    // identity would start a tunnel the server can never handshake. The
+    // network paths reconcile via [_configReconciled] first, so this is the
+    // last-line guard for any path that skipped it.
+    final serverClientKey = dial.clientPublicKey;
+    if (serverClientKey != null && serverClientKey.isNotEmpty) {
+      final localPub = await _device.publicKey();
+      if (!sessionCurrent()) return;
+      if (localPub != serverClientKey) {
+        throw StateError(
+          'Local WireGuard key no longer matches the server active peer. '
+          'Reconnect to repair the identity.',
+        );
+      }
+    }
     final allowLocal = await _device.allowLocal();
     if (!sessionCurrent()) return;
     final conf = buildWgQuickConfig(

@@ -367,7 +367,11 @@ rest of the pipeline (which files, when, verify) is unchanged.
   persisted `Idempotency-Key` UUID. Private key stays in secure storage.
 - Connect: `GET /vpn-devices/{id}/config` (bound) else fresh keypair +
   `POST .../connect` (neither target = global auto-pick). 409
-  already-connected → re-read `config`.
+  already-connected → re-read `config`. `config` and every bind response
+  echo the active peer's `client_public_key`; when it differs from the stored
+  keypair (a lost bind response, or a rolled-back store), the client rotates
+  in place to a fresh key before dialing instead of starting a tunnel the
+  server can never handshake.
 - Switch: fresh keypair + `POST .../switch` with **exactly one** of
   `region_id`/`server_id`. Auto = lowest-`active_peers` region from
   `GET /vpn-regions` (cached 60s), then switch with its `region_id`.

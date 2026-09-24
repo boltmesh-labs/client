@@ -44,6 +44,11 @@ extension ConnectionSwitch on ConnectionController {
     // uncertain (a timed-out POST may still have bound the key). Declared
     // outside `try` so the `catch` recovery can read it.
     var ambiguous = false;
+    // True once `POST …/switch` returned a dial: the server has already
+    // committed the fresh key, so a later failure (e.g. the tunnel restart)
+    // must keep the new store identity instead of rolling back to the old
+    // key, which the server no longer accepts.
+    var serverCommitted = false;
     // True once the fallback path stopped the tunnel: the UI must not
     // claim to still be connected on the old server when no tunnel runs.
     var tunnelDown = false;
@@ -133,12 +138,17 @@ extension ConnectionSwitch on ConnectionController {
           'Switch request failed. Check your connection and retry.',
         );
       }
+      // The POST was accepted: the server's active peer is now the fresh key.
+      // Any failure from here keeps that identity.
+      serverCommitted = true;
       // The tunnel may still be up (in-tunnel success): never run two live
       // tunnels (Windows/Wintun route wedge). Skipped when the fallback path
-      // already stopped it.
+      // already stopped it. Track the stop so a failed restart below surfaces
+      // `error` instead of claiming the old target is still connected.
       if (!tunnelDown) {
         await _stopTunnel('switch-restart');
         if (sessionEpoch != _sessionEpoch) return;
+        tunnelDown = true;
       }
       // Only now does the new key become the stored identity: it matches the
       // freshly bound server-side peer.
@@ -180,8 +190,15 @@ extension ConnectionSwitch on ConnectionController {
             if (sessionEpoch != _sessionEpoch) return;
             tunnelDown = true;
           }
-          final dial = await _api.config(id);
+          final reconciled = await _configReconciled(
+            id,
+            sessionEpoch: sessionEpoch,
+          );
           if (sessionEpoch != _sessionEpoch) return;
+          final dial = reconciled.dial;
+          // Server truth is now the stored identity (a mismatch above would
+          // have rotated and persisted): a later failure must not roll back.
+          serverCommitted = true;
           await _startWith(dial, sessionEpoch: sessionEpoch);
           if (sessionEpoch != _sessionEpoch) return;
           // A one-shot Auto move recovers onto the live dial without
@@ -236,6 +253,9 @@ extension ConnectionSwitch on ConnectionController {
             sessionEpoch: sessionEpoch,
           );
           if (sessionEpoch != _sessionEpoch) return;
+          // [_bindFreshPeer] persisted the freshly bound key: the server holds
+          // it now, so a failed restart must not roll back to the old pair.
+          serverCommitted = true;
           await _startWith(fresh, sessionEpoch: sessionEpoch);
           if (sessionEpoch != _sessionEpoch) return;
           return;
@@ -246,14 +266,17 @@ extension ConnectionSwitch on ConnectionController {
           // Fall through to the failure surfacing below.
         }
       }
-      // On a clean failure the POST never bound the ephemeral key and the
-      // old pair still matches the server-side peer.
-      await _restoreKeypair(
-        oldPriv: oldPriv,
-        oldPub: oldPub,
-        label: 'switch',
-        sessionEpoch: sessionEpoch,
-      );
+      // Only a failure before the POST returned may roll the store back: the
+      // server's active peer then still holds the old key. Once it committed
+      // the fresh key, restoring the old pair would diverge permanently.
+      if (!serverCommitted) {
+        await _restoreKeypair(
+          oldPriv: oldPriv,
+          oldPub: oldPub,
+          label: 'switch',
+          sessionEpoch: sessionEpoch,
+        );
+      }
       // A double transport failure leaves the server-side outcome uncertain,
       // so say so: a Connect reconciles via config/connect. The fallback path
       // stops the tunnel before the direct POST, so a failure there means no
@@ -320,6 +343,9 @@ extension ConnectionSwitch on ConnectionController {
     // True once a transport failure leaves the server-side outcome
     // uncertain (a timed-out POST may still have bound the key).
     var ambiguous = false;
+    // True once `POST …/rotate-keys` returned: the server holds the fresh
+    // key, so a later failure must keep it instead of restoring the old pair.
+    var serverCommitted = false;
     // See switchServer: a failure after the fallback stop leaves no tunnel
     // running and must surface `error`.
     var tunnelDown = false;
@@ -386,10 +412,14 @@ extension ConnectionSwitch on ConnectionController {
           'Rotate request failed. Check your connection and retry.',
         );
       }
+      // The POST was accepted: the server's active peer now holds the fresh
+      // key. Any failure from here keeps that identity.
+      serverCommitted = true;
       if (sessionEpoch != _sessionEpoch) return;
       if (!tunnelDown) {
         await _stopTunnel('rotate-restart');
         if (sessionEpoch != _sessionEpoch) return;
+        tunnelDown = true;
       }
       await _device.setKeypair(
         privateKey: kp.privateKey,
@@ -408,12 +438,16 @@ extension ConnectionSwitch on ConnectionController {
         vpnErr?.message ?? e,
       );
       _noteRateLimit(vpnErr);
-      await _restoreKeypair(
-        oldPriv: oldPriv,
-        oldPub: oldPub,
-        label: 'rotate',
-        sessionEpoch: sessionEpoch,
-      );
+      // Only a failure before the POST returned may roll the store back; a
+      // committed rotation already moved the server-side peer.
+      if (!serverCommitted) {
+        await _restoreKeypair(
+          oldPriv: oldPriv,
+          oldPub: oldPub,
+          label: 'rotate',
+          sessionEpoch: sessionEpoch,
+        );
+      }
       // A failure after the fallback stop leaves no tunnel running: it must
       // surface `error` even for background rotations, otherwise the UI stays
       // `connected` with the old dial while nothing runs. Only a failure with
