@@ -18,6 +18,10 @@ publisher: BoltMesh
 publisher_url: https://boltmesh.mooo.com
 display_name: BoltMesh
 create_desktop_icon: true
+# The privileged helper and tunnel services load their binaries from {app} as
+# LocalSystem, so the destination must stay inside a protected system
+# directory. boltmesh.iss disables the directory page and rejects a /DIR
+# override outside this protected tree.
 install_dir_name: "{autopf64}\\BoltMesh"
 setup_icon_file: windows\runner\resources\app_icon.ico
 # The installer needs elevation to write Program Files and install the

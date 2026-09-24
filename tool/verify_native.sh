@@ -378,6 +378,19 @@ else
   bad "windows/packaging/exe/make_config.yaml is not pinned to x64compatible"
 fi
 
+# The LocalSystem helper and tunnel services load their binaries from {app}, so
+# a user-writable install directory is a SYSTEM code-execution path. The
+# directory page must stay hidden and the [Code] guard must reject a /DIR
+# override that lands outside the protected Program Files tree.
+inno_iss='windows/packaging/exe/boltmesh.iss'
+if grep -qE '^[[:space:]]*DisableDirPage=yes[[:space:]]*$' "$inno_iss" &&
+  grep -qF "ExpandConstant('{autopf64}')" "$inno_iss" &&
+  grep -qF 'not InstallDirIsProtected' "$inno_iss"; then
+  ok "Windows installer pins the protected Program Files directory"
+else
+  bad "windows/packaging/exe/boltmesh.iss allows a user-writable install directory"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "native platform contract checks failed" >&2
   exit 1

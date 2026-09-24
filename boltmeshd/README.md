@@ -230,6 +230,11 @@ printf '{"v":1,"id":"1","op":"ping"}\n' | socat - UNIX-CONNECT:/run/boltmesh/bol
 The installer places `boltmeshd.exe` in `%ProgramFiles%\BoltMesh` next to the
 plugin-bundled `wireguard_svc.exe` and `wireguard.dll`, then runs:
 
+The destination is fixed: the installer disables the directory page and aborts
+setup if a `/DIR` override lands outside the protected Program Files tree, so
+the LocalSystem service binaries cannot be redirected to a user-writable
+directory.
+
 ```powershell
 boltmeshd.exe -install     # create + start the boltmeshd service (LocalSystem)
 ```

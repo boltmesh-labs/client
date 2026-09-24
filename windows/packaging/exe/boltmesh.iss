@@ -19,6 +19,11 @@ AppPublisherURL={{PUBLISHER_URL}}
 AppSupportURL={{PUBLISHER_URL}}
 AppUpdatesURL={{PUBLISHER_URL}}
 DefaultDirName={{INSTALL_DIR_NAME}}
+; The privileged helper and tunnel services load their binaries from {app} as
+; LocalSystem, so the destination must stay in a protected system directory.
+; Hide the directory page; [Code] additionally rejects a /DIR override that
+; escapes the protected Program Files tree.
+DisableDirPage=yes
 DisableProgramGroupPage=yes
 OutputDir=.
 OutputBaseFilename={{OUTPUT_BASE_FILENAME}}
@@ -76,6 +81,25 @@ Filename: "{app}\{{EXECUTABLE_NAME}}"; Description: "{cm:LaunchProgram,{{DISPLAY
 Filename: "{app}\boltmeshd.exe"; Parameters: "-install"; StatusMsg: "Installing the BoltMesh helper service..."; Flags: runhidden waituntilterminated
 
 [Code]
+; The privileged helper and tunnel services run as LocalSystem and load their
+; binaries from {app}. DisableDirPage hides the directory page, but the /DIR
+; command line can still override DefaultDirName, so verify the destination is
+; inside the protected Program Files tree before any service is registered.
+; Reject '..' as well so a non-canonical path cannot escape after expansion.
+function InstallDirIsProtected(): Boolean;
+var
+  AppDir: String;
+  ProtectedRoot: String;
+  Prefix: String;
+begin
+  AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+  ProtectedRoot := RemoveBackslashUnlessRoot(ExpandConstant('{autopf64}'));
+  Prefix := ProtectedRoot + '\';
+  Result := (Pos('..', AppDir) = 0) and
+    ((CompareText(AppDir, ProtectedRoot) = 0) or
+      (CompareText(Copy(AppDir, 1, Length(Prefix)), Prefix) = 0));
+end;
+
 ; Run cleanup from an uninstall event rather than [UninstallRun] so a
 ; non-zero helper exit aborts before installed files are removed.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -84,6 +108,12 @@ var
   HelperPath: String;
 begin
   Result := '';
+  if not InstallDirIsProtected() then
+  begin
+    Result := 'BoltMesh must be installed under Program Files. The selected ' +
+      'directory is not protected, and the privileged helper would run from it.';
+    Exit;
+  end;
   // An upgrade replaces boltmeshd.exe while the old service may still hold
   // it open; remove the service first so the copy cannot fail. The helper
   // waits for both service registrations to disappear, and a failed cleanup

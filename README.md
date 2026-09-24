@@ -281,7 +281,10 @@ config, and then removes the helper service. The GUI no longer requests
 elevation: the app
 CMake drops the plugin's `requireAdministrator` link flag, and the privileged
 work lives in the helper. The installer itself is per-machine into
-`%ProgramFiles%\BoltMesh` and still runs elevated. Config:
+`%ProgramFiles%\BoltMesh` and still runs elevated; the destination is fixed
+(the directory page is disabled and a `/DIR` override outside the protected
+Program Files tree aborts setup), so the LocalSystem helper and tunnel services
+cannot load their binaries from a user-writable directory. Config:
 `windows/packaging/exe/make_config.yaml`.
 `fastforge release --name=production` also lists the Linux jobs but skips
 those unsupported on the host, so the same command works from either OS.
