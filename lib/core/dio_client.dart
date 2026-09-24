@@ -27,14 +27,19 @@ List<String> configuredTlsPins([String raw = Env.tlsPinSpkiSha256]) => raw
 
 /// Installs SPKI pin validation on [dio] when pins are configured.
 ///
-/// No-op with no pins or on web (no per-request certificate hook). When pins
-/// ARE configured but the adapter cannot validate certificates, this throws
-/// [StateError] rather than silently leaving the client unpinned. `dart:io`
-/// stays out of this library (it breaks web builds) via the conditional
-/// import of `tls_pinning_io.dart`.
+/// No-op with no pins. When pins ARE configured but the adapter cannot
+/// validate certificates, including on web, this throws [StateError] rather
+/// than silently leaving the client unpinned. `dart:io` stays out of this
+/// library (it breaks web builds) via the conditional import of
+/// `tls_pinning_io.dart`.
 void configureTlsPinning(Dio dio, {List<String>? pins}) {
   final list = pins ?? configuredTlsPins();
-  if (list.isEmpty || kIsWeb) return;
+  if (list.isEmpty) return;
+  if (kIsWeb) {
+    throw StateError(
+      'TLS pins are configured but certificate validation is unavailable on web.',
+    );
+  }
   if (!tls_pinning.installSpkiPinning(dio, list)) {
     throw StateError(
       'TLS pins are configured but this Dio adapter does not support '
@@ -158,7 +163,7 @@ DateTime? _parseHttpDate(String value) {
       // Two-digit year (RFC 850): 00-69 -> 2000s, 70-99 -> 1900s.
       year += year < 70 ? 2000 : 1900;
     }
-    return DateTime.utc(
+    return _validatedHttpDate(
       year,
       month,
       int.parse(match.group(1)!),
@@ -173,7 +178,7 @@ DateTime? _parseHttpDate(String value) {
   if (asctime == null) return null;
   final month = _httpDateMonths[asctime.group(1)!.toLowerCase()];
   if (month == null) return null;
-  return DateTime.utc(
+  return _validatedHttpDate(
     int.parse(asctime.group(6)!),
     month,
     int.parse(asctime.group(2)!),
@@ -181,6 +186,26 @@ DateTime? _parseHttpDate(String value) {
     int.parse(asctime.group(4)!),
     int.parse(asctime.group(5)!),
   );
+}
+
+DateTime? _validatedHttpDate(
+  int year,
+  int month,
+  int day,
+  int hour,
+  int minute,
+  int second,
+) {
+  final date = DateTime.utc(year, month, day, hour, minute, second);
+  if (date.year != year ||
+      date.month != month ||
+      date.day != day ||
+      date.hour != hour ||
+      date.minute != minute ||
+      date.second != second) {
+    return null;
+  }
+  return date;
 }
 
 /// Elapsed wall time for a request carrying the `requestStartedAtMs` extra
@@ -218,9 +243,35 @@ Dio baseDio() {
 /// options — used by clients that are not the shared `/v1` session client
 /// (e.g. the `/health` probe, which targets the app root and needs short
 /// timeouts). Keeping pinning here means no backend call can silently skip it.
-Dio pinnedDio(BaseOptions options) {
+Dio pinnedDio(BaseOptions options, {bool releaseMode = kReleaseMode}) {
+  final baseUrl = options.baseUrl;
+  if (isInsecureReleaseBuild(baseUrl, releaseMode: releaseMode)) {
+    throw StateError('API_BASE_URL must use https:// in release builds.');
+  }
   final dio = Dio(options);
   configureTlsPinning(dio);
+  dio.interceptors.add(
+    InterceptorsWrapper(
+      onRequest: (requestOptions, handler) {
+        if (isInsecureReleaseBuild(
+          requestOptions.uri.toString(),
+          releaseMode: releaseMode,
+        )) {
+          handler.reject(
+            DioException(
+              requestOptions: requestOptions,
+              type: DioExceptionType.connectionError,
+              error: StateError(
+                'API_BASE_URL must use https:// in release builds.',
+              ),
+            ),
+          );
+          return;
+        }
+        handler.next(requestOptions);
+      },
+    ),
+  );
   return dio;
 }
 

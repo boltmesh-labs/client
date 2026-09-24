@@ -3,6 +3,7 @@
 enum ApiErrorKind {
   unauthorized,
   forbiddenNoSubscription,
+  forbidden,
   deviceLimit,
   notFound,
   noActivePeer,
@@ -92,10 +93,29 @@ bool looksLikeHtmlBody(String body) {
           kind: ApiErrorKind.deviceLimit,
           message: 'Device limit reached for your plan. Remove a device to continue.',
         );
-      } else {
+      } else if (code == 'ACCOUNT_INACTIVE' ||
+          lower.contains('account is inactive')) {
+        result = (
+          kind: ApiErrorKind.forbidden,
+          message:
+              'This account is inactive. Contact support to restore access.',
+        );
+      } else if (code == 'DEVICE_INACTIVE' ||
+          lower.contains('device is inactive')) {
+        result = (
+          kind: ApiErrorKind.forbidden,
+          message: 'This device is inactive and cannot connect.',
+        );
+      } else if (code == 'SUBSCRIPTION_REQUIRED' ||
+          lower.contains('subscription')) {
         result = (
           kind: ApiErrorKind.forbiddenNoSubscription,
           message: 'No active subscription. Renew to connect.',
+        );
+      } else {
+        result = (
+          kind: ApiErrorKind.forbidden,
+          message: d.isEmpty ? 'Access denied.' : d,
         );
       }
     case 404:

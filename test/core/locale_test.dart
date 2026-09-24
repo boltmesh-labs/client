@@ -13,6 +13,14 @@ void main() {
     );
   });
 
+  test('exact regional match wins over another same-language variant', () {
+    const regional = [Locale('en', 'US'), Locale('en', 'GB')];
+    expect(
+      resolveAppLocale(const Locale('en', 'GB'), regional),
+      const Locale('en', 'GB'),
+    );
+  });
+
   test('unknown and missing locales fall back to English', () {
     expect(resolveAppLocale(const Locale('fr'), supported), const Locale('en'));
     expect(resolveAppLocale(null, supported), const Locale('en'));

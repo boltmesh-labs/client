@@ -8,6 +8,12 @@ import 'package:flutter/widgets.dart';
 Locale resolveAppLocale(Locale? locale, Iterable<Locale> supported) {
   if (locale == null) return const Locale('en');
   for (final s in supported) {
+    if (s.languageCode == locale.languageCode &&
+        s.countryCode == locale.countryCode) {
+      return s;
+    }
+  }
+  for (final s in supported) {
     if (s.languageCode == locale.languageCode) return s;
   }
   return const Locale('en');

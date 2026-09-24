@@ -104,6 +104,16 @@ void main() {
       );
       expect(validate(null, 'example.com', 443) as bool, isFalse);
     });
+
+    test('pinnedDio rejects cleartext base URLs in release mode', () {
+      expect(
+        () => pinnedDio(
+          BaseOptions(baseUrl: 'http://localhost:8000/health'),
+          releaseMode: true,
+        ),
+        throwsStateError,
+      );
+    });
   });
 
   group('resolveProviderBundleId', () {

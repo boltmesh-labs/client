@@ -45,6 +45,7 @@ BackendIssue? classifyBackendIssue(ApiException? error) {
     case ApiErrorKind.forbiddenNoSubscription:
     case ApiErrorKind.deviceLimit:
       return BackendIssue.subscriptionInactive;
+    case ApiErrorKind.forbidden:
     case ApiErrorKind.unknown:
     case ApiErrorKind.noCapacity:
     case ApiErrorKind.rateLimited:

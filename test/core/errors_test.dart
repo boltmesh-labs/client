@@ -53,7 +53,7 @@ void main() {
     expect(kindFor(503, 'no servers'), ApiErrorKind.noCapacity);
   });
 
-  test('403 device limit distinguished from lapsed subscription', () {
+  test('403 device limit distinguished from other forbidden errors', () {
     expect(kindFor(403, 'device limit reached'), ApiErrorKind.deviceLimit);
     expect(kindFor(403, '', 'DEVICE_LIMIT_EXCEEDED'), ApiErrorKind.deviceLimit);
     expect(
@@ -63,6 +63,11 @@ void main() {
     expect(
       kindFor(403, 'subscription expired'),
       ApiErrorKind.forbiddenNoSubscription,
+    );
+    expect(kindFor(403, '', 'ACCOUNT_INACTIVE'), ApiErrorKind.forbidden);
+    expect(
+      friendlyMessage(403, '', 'DEVICE_INACTIVE'),
+      contains('device is inactive'),
     );
   });
 
@@ -164,6 +169,7 @@ void main() {
     expect(parseRetryAfterHeader(''), isNull);
     expect(parseRetryAfterHeader(null), isNull);
     expect(parseRetryAfterHeader('nonsense'), isNull);
+    expect(parseRetryAfterHeader('Wed, 31 Feb 2027 08:49:37 GMT'), isNull);
   });
 
   test('parseRetryAfterHeader reads HTTP-date forms', () {

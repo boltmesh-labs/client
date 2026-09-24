@@ -26,17 +26,19 @@ class ControlPlaneProbe {
   Future<bool?> check({Duration timeout = const Duration(seconds: 5)}) async {
     if (Env.isLoopbackApi) return null;
     try {
+      final healthEndpoint = healthUrl(Env.apiBaseUrl);
       final dio = _clients.putIfAbsent(
         timeout,
         () => pinnedDio(
           BaseOptions(
+            baseUrl: healthEndpoint,
             connectTimeout: timeout,
             receiveTimeout: timeout,
             sendTimeout: timeout,
           ),
         ),
       );
-      final response = await dio.get<dynamic>(healthUrl(Env.apiBaseUrl));
+      final response = await dio.get<dynamic>('');
       AppLog.info('control probe ok status=${response.statusCode}');
       return true;
     } on DioException catch (e) {

@@ -166,6 +166,27 @@ void main() {
     });
   });
 
+  group('IP validation and classification', () {
+    test('rejects malformed IPv6 forms', () {
+      expect(isValidIpV6('1:2:3:4:5:6:7:'), isFalse);
+      expect(isValidIpV6(':::'), isFalse);
+      expect(isValidIpV6('192.0.2.1::'), isFalse);
+    });
+
+    test('classifies private and loopback IPv6 by value', () {
+      expect(isPrivateUnicastIp('FC00:0:0:0:0:0:0:1'), isTrue);
+      expect(isPrivateUnicastIp('FE80:0:0:0:0:0:0:1'), isTrue);
+      expect(isLoopbackIp('0:0:0:0:0:0:0:1'), isTrue);
+      expect(isPrivateUnicastIp('fc:not-an-address'), isFalse);
+    });
+
+    test('rejects invalid loopback and prefix tokens', () {
+      expect(isLoopbackIp('127.example'), isFalse);
+      expect(bareIp('10.0.0.1/not-a-prefix'), isNull);
+      expect(bareIp('10.0.0.1/33'), isNull);
+    });
+  });
+
   group('isPrivateUnicastIp', () {
     test('rfc1918 ranges', () {
       expect(isPrivateUnicastIp('10.0.0.1'), isTrue);
