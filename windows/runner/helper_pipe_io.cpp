@@ -14,6 +14,7 @@
 
 #include <process.h>
 #include <windows.h>
+#include <winsvc.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -27,6 +28,14 @@ namespace {
 
 using TickCount = ULONGLONG;
 constexpr unsigned long kDrainTimeoutMs = 1000;
+
+// The Windows service the privileged helper registers as (see
+// boltmeshd/cmd/boltmeshd/main_windows.go). Binding the pipe's server process
+// to this service is how the unprivileged client tells the real boltmeshd from
+// a local process that pre-created the pipe name: the SCM reports the actual
+// process id of the running service, and registering or repointing a service
+// requires administrator rights.
+constexpr wchar_t kHelperServiceName[] = L"boltmeshd";
 
 TickCount DeadlineAfter(unsigned long timeout_ms) {
   return GetTickCount64() + timeout_ms;
@@ -183,6 +192,56 @@ bool ReadLine(HANDLE pipe, std::string* out, TickCount deadline) {
   return false;
 }
 
+// ServerProcessId returns the process id of the connected pipe's server end, or
+// false when the query fails.
+bool ServerProcessId(HANDLE pipe, DWORD* pid) {
+  ULONG server = 0;
+  if (!GetNamedPipeServerProcessId(pipe, &server) || server == 0) return false;
+  *pid = static_cast<DWORD>(server);
+  return true;
+}
+
+// ServiceProcessId returns the process id the service control manager reports
+// for a running service. It returns false when the service is missing, stopped,
+// or not queryable by this caller.
+bool ServiceProcessId(const wchar_t* service_name, DWORD* pid) {
+  SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (manager == nullptr) return false;
+  SC_HANDLE service =
+      OpenServiceW(manager, service_name, SERVICE_QUERY_STATUS);
+  if (service == nullptr) {
+    CloseServiceHandle(manager);
+    return false;
+  }
+  SERVICE_STATUS_PROCESS status{};
+  DWORD needed = 0;
+  const BOOL queried =
+      QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
+                           reinterpret_cast<LPBYTE>(&status),
+                           static_cast<DWORD>(sizeof(status)), &needed);
+  CloseServiceHandle(service);
+  CloseServiceHandle(manager);
+  if (!queried || status.dwProcessId == 0) return false;
+  *pid = status.dwProcessId;
+  return true;
+}
+
+// VerifyPipeServer authenticates the connected pipe's server: it must be the
+// process the SCM started for the privileged boltmeshd service. A local process
+// that squatted the predictable pipe name is rejected here, before the request
+// (which may carry the WireGuard private key) is written.
+//
+// The check is a process-id comparison rather than a token image/path query
+// because a standard user cannot open a LocalSystem process to read either; the
+// SCM, which only an administrator can repoint, is the trust anchor instead.
+bool VerifyPipeServer(HANDLE pipe) {
+  DWORD server_pid = 0;
+  if (!ServerProcessId(pipe, &server_pid)) return false;
+  DWORD service_pid = 0;
+  if (!ServiceProcessId(kHelperServiceName, &service_pid)) return false;
+  return server_pid == service_pid;
+}
+
 HANDLE OpenPipe(const wchar_t* pipe_name, unsigned long connect_wait_ms) {
   const DWORD access = GENERIC_READ | GENERIC_WRITE;
   HANDLE pipe = CreateFileW(pipe_name, access, 0, nullptr, OPEN_EXISTING,
@@ -194,21 +253,51 @@ HANDLE OpenPipe(const wchar_t* pipe_name, unsigned long connect_wait_ms) {
                      FILE_FLAG_OVERLAPPED, nullptr);
 }
 
-}  // namespace
-
-bool ExchangePipe(const wchar_t* pipe_name, const std::string& request,
-                  std::string* response, unsigned long timeout_ms,
-                  unsigned long connect_wait_ms) {
+// ExchangePipeImpl is the shared transport. authenticate_peer is true for the
+// public entry point; only the standalone test passes false.
+bool ExchangePipeImpl(const wchar_t* pipe_name, const std::string& request,
+                      std::string* response, unsigned long timeout_ms,
+                      unsigned long connect_wait_ms, bool authenticate_peer) {
   const TickCount deadline = DeadlineAfter(timeout_ms);
   HANDLE pipe = OpenPipe(pipe_name, std::min(RemainingMs(deadline),
                                              connect_wait_ms));
   if (pipe == INVALID_HANDLE_VALUE) return false;
+
+  // Authenticate before writing: the request for `up` carries the WireGuard
+  // private key, so a rejected impostor must never receive a byte.
+  if (authenticate_peer && !VerifyPipeServer(pipe)) {
+    CloseHandle(pipe);
+    return false;
+  }
 
   const bool ok = WriteAll(pipe, request + "\n", deadline) &&
                   ReadLine(pipe, response, deadline);
   CloseHandle(pipe);
   return ok;
 }
+
+}  // namespace
+
+bool ExchangePipe(const wchar_t* pipe_name, const std::string& request,
+                  std::string* response, unsigned long timeout_ms,
+                  unsigned long connect_wait_ms) {
+  return ExchangePipeImpl(pipe_name, request, response, timeout_ms,
+                          connect_wait_ms, true);
+}
+
+#ifdef BOLTMESH_HELPER_PIPE_TEST
+// Test-only entry point: the framing path without peer authentication. The
+// standalone test cannot run a server as the boltmeshd service, so it drives
+// this to cover the transport. It is compiled only into the test binary (see
+// windows/runner/CMakeLists.txt); the app never links it.
+bool ExchangePipeUnverified(const wchar_t* pipe_name,
+                            const std::string& request, std::string* response,
+                            unsigned long timeout_ms,
+                            unsigned long connect_wait_ms) {
+  return ExchangePipeImpl(pipe_name, request, response, timeout_ms,
+                          connect_wait_ms, false);
+}
+#endif
 
 }  // namespace io
 }  // namespace boltmesh

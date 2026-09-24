@@ -105,7 +105,12 @@ capabilities). `status` keeps its line lean and carries no `caps`.
   `wireguard_svc.exe` installed beside it), never taken from the client. A
   client that could name the service binary would turn a LocalSystem service
   into arbitrary code execution. The named pipe is ACL'd to SYSTEM,
-  Administrators and Interactive Users. During elevated installation the
+  Administrators and Interactive Users. Because the pipe name is globally
+  predictable, the client authenticates the server before sending anything: it
+  requires the connected pipe's server process to be the process the service
+  control manager reports for the `boltmeshd` service. An unprivileged process
+  that pre-created the pipe name therefore cannot receive a request (which may
+  carry the WireGuard private key). During elevated installation the
   machine-wide config and log directories are verified, made SYSTEM-owned, and
   given a protected SYSTEM + Administrators DACL; reparse points are rejected.
   Config and log files are replaced through fresh exclusive temporary files

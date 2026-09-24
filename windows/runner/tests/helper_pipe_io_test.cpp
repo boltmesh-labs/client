@@ -1,8 +1,9 @@
 // Standalone test for the named-pipe transport in helper_pipe_io.cpp.
 //
 // It links no Flutter libraries: it stands up a local pipe server with the
-// Win32 API and drives ExchangePipe against it, so the framing, newline
-// handling and timeout behaviour are covered on the Windows CI runner even
+// Win32 API and drives the transport against it, so the framing, newline
+// handling, timeout behaviour, and the rejection of a server that is not the
+// privileged boltmeshd service are covered on the Windows CI runner even
 // though the full runner needs Flutter (and hence a GUI toolchain) to build.
 #include "../helper_pipe_io.h"
 
@@ -12,6 +13,20 @@
 
 #include <cstdio>
 #include <string>
+
+namespace boltmesh {
+namespace io {
+// Defined in helper_pipe_io.cpp only when BOLTMESH_HELPER_PIPE_TEST is set (see
+// windows/runner/CMakeLists.txt). The framing tests drive the transport without
+// peer authentication because a test cannot run a server as the boltmeshd
+// service; TestRejectsServerThatIsNotTheService exercises the authenticating
+// ExchangePipe against a local, unprivileged server.
+bool ExchangePipeUnverified(const wchar_t* pipe_name,
+                            const std::string& request, std::string* response,
+                            unsigned long timeout_ms,
+                            unsigned long connect_wait_ms);
+}  // namespace io
+}  // namespace boltmesh
 
 namespace {
 
@@ -109,8 +124,8 @@ void TestRoundTrip() {
 
   std::string response;
   const std::string request = R"({"v":1,"id":"1","op":"ping"})";
-  const bool ok = boltmesh::io::ExchangePipe(args.pipe_name.c_str(), request,
-                                             &response, 3000, 2000);
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), request, &response, 3000, 2000);
   Check(ok, "ExchangePipe returns true for a served request");
   Check(response == args.reply, "response line is returned verbatim");
   Check(args.request == request, "server received the request line");
@@ -124,8 +139,8 @@ void TestTimeoutWhenServerNeverReplies() {
   Sleep(50);
 
   std::string response;
-  const bool ok = boltmesh::io::ExchangePipe(args.pipe_name.c_str(), "{}",
-                                             &response, 200, 2000);
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), "{}", &response, 200, 2000);
   Check(!ok, "ExchangePipe returns false when the server never answers");
   WaitForServer(thread, "no-reply server thread joined");
 }
@@ -137,12 +152,32 @@ void TestUnreachablePipe() {
   Check(!ok, "ExchangePipe returns false for an absent pipe");
 }
 
+// A local process that pre-created the pipe name must be rejected before the
+// request is written: this server is not the boltmeshd service process.
+void TestRejectsServerThatIsNotTheService() {
+  ServerArgs args;
+  args.pipe_name = UniquePipeName(L"impostor");
+  args.reply = R"({"v":1,"id":"1","ok":true})";
+  HANDLE thread = StartServer(&args);
+  Sleep(50);
+
+  std::string response;
+  const std::string request = R"({"v":1,"id":"1","op":"up","config":"secret"})";
+  const bool ok =
+      boltmesh::io::ExchangePipe(args.pipe_name.c_str(), request, &response,
+                                 3000, 2000);
+  Check(!ok, "ExchangePipe rejects a server that is not the boltmeshd service");
+  Check(args.request.empty(), "no request reaches a rejected server");
+  WaitForServer(thread, "impostor server thread joined");
+}
+
 }  // namespace
 
 int main() {
   TestRoundTrip();
   TestTimeoutWhenServerNeverReplies();
   TestUnreachablePipe();
+  TestRejectsServerThatIsNotTheService();
 
   if (g_failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

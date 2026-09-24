@@ -348,6 +348,16 @@ if grep -qF 'helper_pipe_io.cpp' windows/runner/CMakeLists.txt; then
 else
   bad "helper_pipe_io.cpp is not built by windows/runner/CMakeLists.txt"
 fi
+# The pipe name is globally predictable, so the transport must authenticate the
+# server as the SCM-reported boltmeshd service process before it sends a
+# request (which may carry the WireGuard private key).
+if grep -qF 'GetNamedPipeServerProcessId' windows/runner/helper_pipe_io.cpp &&
+  grep -qF 'QueryServiceStatusEx' windows/runner/helper_pipe_io.cpp &&
+  grep -qF 'kHelperServiceName' windows/runner/helper_pipe_io.cpp; then
+  ok "Windows helper transport authenticates the boltmeshd service process"
+else
+  bad "Windows helper transport can send a request to a pre-created pipe"
+fi
 
 # --- Windows: the app ships x64-only --------------------------------------
 # The wireguard_flutter_plus plugin bundles amd64 tunnel/wireguard DLLs only,

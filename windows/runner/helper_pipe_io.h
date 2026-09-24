@@ -29,6 +29,12 @@ inline constexpr std::size_t kMaxResponseBytes = 128 * 1024;
 // returns false when the pipe is unreachable, the I/O fails, or the complete
 // exchange exceeds the timeout.
 //
+// The connected peer is authenticated first: it must be the process the service
+// control manager started for the privileged boltmeshd service. A local process
+// that pre-created the predictable pipe name is rejected before the request
+// (which may carry the WireGuard private key) is written. A standard user
+// cannot register or repoint that service, so it cannot forge the identity.
+//
 // This is kept free of Flutter so the framing and correlation logic can be
 // exercised by a standalone test binary (tests/helper_pipe_io_test.cpp).
 bool ExchangePipe(const wchar_t* pipe_name, const std::string& request,

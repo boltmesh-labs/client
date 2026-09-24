@@ -133,7 +133,11 @@ in `test/support/fakes.dart`.
   The plugin still bundles Wintun, `wireguard_svc.exe` and `wireguard.dll`,
   but the GUI no longer calls it and no longer requests elevation: the daemon
   creates/starts the `boltmesh0` tunnel service and answers stage, handshake,
-  peer and counters over the named pipe `\\.\pipe\boltmesh\boltmeshd`. OAuth
+  peer and counters over the named pipe `\\.\pipe\boltmesh\boltmeshd`. The GUI
+  authenticates the server before sending a request: the connected pipe's
+  server process must be the process the SCM reports for the `boltmeshd`
+  service, so an unprivileged process that pre-created the pipe name cannot
+  receive the WireGuard config. OAuth
   opens the system browser and returns to an ephemeral loopback listener
   (`http://127.0.0.1:{port}/callback`). Never test a full-tunnel against a
   `localhost`-forwarded API (`API_BASE_URL=http://localhost:8000/v1` over a

@@ -38,6 +38,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# OpenSCManagerW/QueryServiceStatusEx (peer authentication in helper_pipe_io.cpp).
+target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
@@ -53,5 +55,8 @@ add_executable(helper_pipe_io_tests
   "helper_pipe_io.h"
 )
 apply_standard_settings(helper_pipe_io_tests)
-target_compile_definitions(helper_pipe_io_tests PRIVATE "NOMINMAX")
-target_link_libraries(helper_pipe_io_tests PRIVATE "kernel32.lib")
+# Defines the test-only unauthenticated entry point in helper_pipe_io.cpp. The
+# app target deliberately does not get it, so the shipped binary exposes only
+# the authenticating ExchangePipe.
+target_compile_definitions(helper_pipe_io_tests PRIVATE "NOMINMAX" "BOLTMESH_HELPER_PIPE_TEST")
+target_link_libraries(helper_pipe_io_tests PRIVATE "kernel32.lib" "advapi32.lib")
