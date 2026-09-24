@@ -48,8 +48,12 @@ add_dependencies(${BINARY_NAME} flutter_assemble)
 # Standalone test for the boltmeshd named-pipe transport. It links no Flutter
 # libraries, so it can be built and run on the Windows CI runner (see the
 # validate-windows job) even though the app itself needs a GUI toolchain.
-# It is not installed into the bundle.
-add_executable(helper_pipe_io_tests
+#
+# EXCLUDE_FROM_ALL is load-bearing: Flutter builds the INSTALL target, and the
+# fastforge exe packager copies the entire runner output directory into the
+# installer's [Files] wildcard. As an ALL target this test exe would be built
+# next to boltmesh.exe and shipped. The validate-windows job builds it by name.
+add_executable(helper_pipe_io_tests EXCLUDE_FROM_ALL
   "tests/helper_pipe_io_test.cpp"
   "helper_pipe_io.cpp"
   "helper_pipe_io.h"

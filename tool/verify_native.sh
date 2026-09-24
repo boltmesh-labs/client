@@ -350,6 +350,16 @@ if grep -qF 'helper_pipe_io.cpp' windows/runner/CMakeLists.txt; then
 else
   bad "helper_pipe_io.cpp is not built by windows/runner/CMakeLists.txt"
 fi
+# The Flutter-free test must be EXCLUDE_FROM_ALL. Flutter builds the INSTALL
+# target and the fastforge exe packager copies the whole runner output directory
+# into the installer's [Files] wildcard, so an ALL target would be built next to
+# boltmesh.exe and shipped. The validate-windows job builds it by name instead.
+if grep -qF 'add_executable(helper_pipe_io_tests EXCLUDE_FROM_ALL' \
+  windows/runner/CMakeLists.txt; then
+  ok "Windows helper test is excluded from the packaged bundle"
+else
+  bad "helper_pipe_io_tests is an ALL target and would ship in the Windows installer"
+fi
 # The pipe name is globally predictable, so the transport must authenticate the
 # server as the SCM-reported boltmeshd service process before it sends a
 # request (which may carry the WireGuard private key).
@@ -414,6 +424,18 @@ if grep -qE '^[[:space:]]*executable_name:[[:space:]]*boltmesh\.exe[[:space:]]*$
   ok "Windows installer pins the app executable name"
 else
   bad "windows/packaging/exe/make_config.yaml does not pin executable_name: boltmesh.exe"
+fi
+
+# The pre-packing hook must sign the whole staged bundle, not just the app and
+# helper: the bundle also carries the plugin-bundled wireguard_svc.exe that the
+# LocalSystem boltmeshd helper launches, so it must not ship unsigned. sign.ps1
+# recurses a directory for *.exe, so passing the bundle directory covers every
+# executable the installer places in {app}.
+distribute_options='distribute_options.yaml'
+if grep -qF "sign.ps1 -Path \"\$BUILD_OUTPUT_DIRECTORY\"" "$distribute_options"; then
+  ok "Windows pre-packing hook signs every bundled executable"
+else
+  bad "Windows pre-packing hook leaves a bundled executable unsigned"
 fi
 
 # The LocalSystem helper and tunnel services load their binaries from {app}, so

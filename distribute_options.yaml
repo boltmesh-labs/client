@@ -24,10 +24,11 @@ releases:
       # host OS and skips the rest, so the same release name works on both the
       # Linux and Windows CI runners. Config: windows/packaging/exe/.
       #
-      # The hooks stage the boltmeshd helper into the bundle, then sign the app
-      # exe and the helper (between the build and Inno packing), and the
-      # installer (after packing); they no-op with a warning when no
-      # WINDOWS_CERTIFICATE_PATH is set, so unsigned local builds still work.
+      # The hooks stage the boltmeshd helper into the bundle, then sign every
+      # bundled executable (app, helper, plugin-bundled wireguard_svc.exe)
+      # between the build and Inno packing, and the installer after packing;
+      # they no-op with a warning when no WINDOWS_CERTIFICATE_PATH is set, so
+      # unsigned local builds still work.
       - name: windows-exe
         package:
           platform: windows
@@ -36,5 +37,5 @@ releases:
             dart-define:
               API_BASE_URL: https://api.boltmesh.mooo.com/v1
           hooks:
-            pre: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/stage_boltmeshd.ps1 -BuildDir "$BUILD_OUTPUT_DIRECTORY" && powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$BUILD_OUTPUT_DIRECTORY/boltmesh.exe" "$BUILD_OUTPUT_DIRECTORY/boltmeshd.exe"'
+            pre: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/stage_boltmeshd.ps1 -BuildDir "$BUILD_OUTPUT_DIRECTORY" && powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$BUILD_OUTPUT_DIRECTORY"'
             post: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$OUTPUT_DIRECTORY"'

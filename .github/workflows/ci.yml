@@ -82,8 +82,13 @@ jobs:
       - name: Build Windows runner (debug)
         run: flutter build windows --debug
 
-      # Compiles and runs the Flutter-free named-pipe transport test. Runs the
-      # freshly built exe from wherever the generator placed it.
+      # Compiles and runs the Flutter-free named-pipe transport test. The test
+      # target is EXCLUDE_FROM_ALL so it never lands in the app bundle (Flutter
+      # builds INSTALL, fastforge copies the whole runner directory into the
+      # installer), so it must be built explicitly here.
+      - name: Build Windows helper pipe tests
+        run: cmake --build build/windows/x64 --config Debug --target helper_pipe_io_tests
+
       - name: Run Windows helper pipe tests
         shell: pwsh
         run: |

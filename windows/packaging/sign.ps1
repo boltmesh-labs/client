@@ -1,10 +1,16 @@
 <#
 .SYNOPSIS
-    Authenticode-signs BoltMesh Windows artifacts (app exe, installer).
+    Authenticode-signs BoltMesh Windows artifacts (bundled executables,
+    installer).
 
 .DESCRIPTION
-    Called by the `windows-exe` fastforge job (`hooks.pre` signs the freshly
-    built app exe, `hooks.post` signs the installer) and usable by hand.
+    Called by the `windows-exe` fastforge job (`hooks.pre` signs every
+    executable in the freshly built bundle, `hooks.post` signs the installer)
+    and usable by hand.
+
+    Signing the whole pre-pack bundle covers the app, the boltmeshd helper, and
+    the plugin-bundled wireguard_svc.exe that the privileged helper launches,
+    so nothing the LocalSystem services run is left unsigned.
 
     Configuration comes from the environment (or the matching parameters):
 

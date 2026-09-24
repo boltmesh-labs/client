@@ -277,11 +277,14 @@ bundle, so the installer ships the helper next to `boltmesh.exe` (and the
 plugin-bundled `wireguard_svc.exe`/`wireguard.dll`), then
 `windows/packaging/exe/boltmesh.iss` installs and starts the helper service;
 uninstall quiesces the daemon, removes the tunnel service and private-key
-config, and then removes the helper service. If the helper binary is missing
-(a damaged or partially removed install), the uninstaller fails closed: it
-probes for the `boltmeshd`/`boltmesh0` services and the private-key config and
-aborts when any survives, instead of completing with privileged state left
-behind. The GUI no longer requests
+config, and then removes the helper service. The Flutter-free
+`helper_pipe_io_tests` target is `EXCLUDE_FROM_ALL` so it is never built into
+that bundle (fastforge copies the runner output directory verbatim into the
+installer); the `validate-windows` job builds it by name. If the helper binary
+is missing (a damaged or partially removed install), the uninstaller fails
+closed: it probes for the `boltmeshd`/`boltmesh0` services and the private-key
+config and aborts when any survives, instead of completing with privileged
+state left behind. The GUI no longer requests
 elevation: the app
 CMake drops the plugin's `requireAdministrator` link flag, and the privileged
 work lives in the helper. The installer itself is per-machine into
@@ -302,11 +305,13 @@ target remains a standalone artifact and is not part of this package.
 ### Code signing (Authenticode)
 
 `windows/packaging/sign.ps1` runs as the `windows-exe` job's pre/post hooks:
-it signs `boltmesh.exe` and `boltmeshd.exe` between the Flutter build and
-Inno packing, then the installer after packing, timestamped via RFC 3161
-(default `http://timestamp.digicert.com`, override
-`WINDOWS_TIMESTAMP_URL`). Signing the app exe and the helper as well as the
-setup exe means the signature covers everything the installer later launches.
+it signs every executable in the freshly built bundle (the app, the
+`boltmeshd` helper, and the plugin-bundled `wireguard_svc.exe`) between the
+Flutter build and Inno packing, then signs the installer after packing,
+timestamped via RFC 3161 (default `http://timestamp.digicert.com`, override
+`WINDOWS_TIMESTAMP_URL`). Signing every bundled executable as well as the setup
+exe means the signature covers everything the installer later launches — the
+LocalSystem helper runs `wireguard_svc.exe` from `{app}`, so it is signed too.
 
 CI reads a base64 `.pfx` from two repo secrets (Settings → Secrets and
 variables → Actions):
@@ -510,8 +515,10 @@ one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
 (`async.elapse`), never real sleeps, so the suite is deterministic and fast.
 
 The Windows named-pipe transport is covered by a Flutter-free C++ test
-(`windows/runner/tests/helper_pipe_io_test.cpp`, built as
-`helper_pipe_io_tests` and run by the `validate-windows` job);
+(`windows/runner/tests/helper_pipe_io_test.cpp`, built as the
+`EXCLUDE_FROM_ALL` `helper_pipe_io_tests` target and run by the
+`validate-windows` job, which builds it by name so it never enters the
+installer bundle);
 `tool/verify_native.sh` also cross-compiles that test with mingw-w64 on Linux,
 so a Windows-only C++ break fails the `validate-native` job too. It is not
 executed on Linux — the test drives overlapped named-pipe I/O, which Wine
