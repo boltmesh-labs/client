@@ -89,7 +89,7 @@ func main() {
 	fs.StringVar(&opts.logFile, "log-file", getEnv("BOLTMESHD_LOG_FILE", defaultLogFile()), "Persistent JSON-lines failure log (empty disables file logging)")
 	fs.BoolVar(&opts.console, "console", false, "Run in the foreground instead of as a service (Windows)")
 	fs.BoolVar(&opts.install, "install", false, "Install and start the boltmeshd service, then exit (Windows)")
-	fs.BoolVar(&opts.uninstall, "uninstall", false, "Stop and remove the boltmeshd service, then exit (Windows)")
+	fs.BoolVar(&opts.uninstall, "uninstall", false, "Stop and remove the BoltMesh helper and tunnel services, then exit (Windows)")
 	fs.BoolVar(&opts.showVersion, "version", false, "Print version and exit")
 	_ = fs.Parse(os.Args[1:])
 

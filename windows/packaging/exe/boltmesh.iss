@@ -5,7 +5,8 @@
 ; stopped and removed on uninstall. The Flutter bundle already contains
 ; boltmeshd.exe (staged by windows/packaging/stage_boltmeshd.ps1) next to the
 ; plugin's wireguard_svc.exe / wireguard.dll, so the [Files] wildcard ships
-; them all and the helper finds its backend beside itself.
+; them all and the helper finds its backend beside itself. The helper's
+; uninstall path also tears down the on-demand tunnel service and its config.
 ;
 ; Wired in through windows/packaging/exe/make_config.yaml (`script_template`).
 
@@ -74,11 +75,9 @@ Filename: "{app}\{{EXECUTABLE_NAME}}"; Description: "{cm:LaunchProgram,{{DISPLAY
 ; Install and start the privileged helper so the GUI never has to elevate.
 Filename: "{app}\boltmeshd.exe"; Parameters: "-install"; StatusMsg: "Installing the BoltMesh helper service..."; Flags: runhidden waituntilterminated
 
-[UninstallRun]
-; Stop and remove the helper service before its files are deleted.
-Filename: "{app}\boltmeshd.exe"; Parameters: "-uninstall"; Flags: runhidden waituntilterminated
-
 [Code]
+; Run cleanup from an uninstall event rather than [UninstallRun] so a
+; non-zero helper exit aborts before installed files are removed.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
@@ -86,10 +85,46 @@ var
 begin
   Result := '';
   // An upgrade replaces boltmeshd.exe while the old service may still hold
-  // it open; remove the service first so the copy cannot fail.
+  // it open; remove the service first so the copy cannot fail. The helper
+  // waits for both service registrations to disappear, and a failed cleanup
+  // must abort rather than let the installer replace a live helper.
   HelperPath := ExpandConstant('{app}\boltmeshd.exe');
   if FileExists(HelperPath) then
   begin
-    Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    if not Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      Result := 'The BoltMesh helper could not be started for uninstall.';
+    end
+    else if ResultCode <> 0 then
+    begin
+      Result := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+    end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  CleanupError: String;
+  HelperPath: String;
+  ResultCode: Integer;
+begin
+  if (CurUninstallStep <> usUninstall) or not FileExists(ExpandConstant('{app}\boltmeshd.exe')) then
+  begin
+    Exit;
+  end;
+
+  HelperPath := ExpandConstant('{app}\boltmeshd.exe');
+  CleanupError := '';
+  if not Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    CleanupError := 'The BoltMesh helper could not be started for uninstall.'
+  else if ResultCode <> 0 then
+    CleanupError := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+
+  if CleanupError <> '' then
+  begin
+    Log(CleanupError);
+    if not UninstallSilent then
+      MsgBox(CleanupError, mbError, MB_OK);
+    Abort;
   end;
 end;

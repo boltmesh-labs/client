@@ -90,16 +90,18 @@ func TestPeersFromConfigRejectsTruncated(t *testing.T) {
 }
 
 type fakeService struct {
-	mu       sync.Mutex
-	started  bool
-	starts   int
-	stops    int
-	exe      string
-	args     []string
-	stageVal string
-	stageErr error
-	startErr error
-	stopErr  error
+	mu        sync.Mutex
+	started   bool
+	starts    int
+	stops     int
+	removes   int
+	exe       string
+	args      []string
+	stageVal  string
+	stageErr  error
+	startErr  error
+	stopErr   error
+	removeErr error
 }
 
 func (f *fakeService) start(_ context.Context, exe string, args []string) error {
@@ -121,6 +123,19 @@ func (f *fakeService) stop(context.Context) error {
 	f.stops++
 	if f.stopErr != nil {
 		return f.stopErr
+	}
+	f.started = false
+	f.stageVal = protocol.StageDisconnected
+	return nil
+}
+
+func (f *fakeService) remove(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+	f.removes++
+	if f.removeErr != nil {
+		return f.removeErr
 	}
 	f.started = false
 	f.stageVal = protocol.StageDisconnected
@@ -377,6 +392,39 @@ func TestDownIsIdempotent(t *testing.T) {
 	}
 	if svc.stops != 1 {
 		t.Fatalf("stops = %d, want 1", svc.stops)
+	}
+}
+
+func TestUninstallStopsRemovesConfigAndService(t *testing.T) {
+	m, svc, _ := newTestManager(t)
+	if err := os.WriteFile(m.configPath(), []byte("private-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Uninstall(context.Background()); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	if svc.stops != 1 || svc.removes != 1 {
+		t.Fatalf("service calls: stops=%d removes=%d, want one of each", svc.stops, svc.removes)
+	}
+	if _, err := os.Stat(m.configPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("config still exists after Uninstall: %v", err)
+	}
+}
+
+func TestUninstallLeavesConfigWhenServiceRemovalFails(t *testing.T) {
+	m, svc, _ := newTestManager(t)
+	if err := os.WriteFile(m.configPath(), []byte("private-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("service still stopping")
+	svc.removeErr = want
+
+	if err := m.Uninstall(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Uninstall() = %v, want %v", err, want)
+	}
+	if _, err := os.Stat(m.configPath()); err != nil {
+		t.Fatalf("config was removed despite failed service cleanup: %v", err)
 	}
 }
 

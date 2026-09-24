@@ -252,8 +252,10 @@ The Windows package is an Inno Setup `.exe`, not MSIX. The pre-packing hook
 `windows/packaging/stage_boltmeshd.ps1` builds `boltmeshd.exe` into the
 bundle, so the installer ships the helper next to `boltmesh.exe` (and the
 plugin-bundled `wireguard_svc.exe`/`wireguard.dll`), then
-`windows/packaging/exe/boltmesh.iss` installs and starts the helper service
-and removes it on uninstall. The GUI no longer requests elevation: the app
+`windows/packaging/exe/boltmesh.iss` installs and starts the helper service;
+uninstall quiesces the daemon, removes the tunnel service and private-key
+config, and then removes the helper service. The GUI no longer requests
+elevation: the app
 CMake drops the plugin's `requireAdministrator` link flag, and the privileged
 work lives in the helper. The installer itself is per-machine into
 `%ProgramFiles%\BoltMesh` and still runs elevated. Config:

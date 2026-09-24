@@ -186,13 +186,17 @@ boltmeshd.exe -install     # create + start the boltmeshd service (LocalSystem)
 and on uninstall:
 
 ```powershell
-boltmeshd.exe -uninstall   # stop + delete the service
+boltmeshd.exe -uninstall   # stop + delete the tunnel and helper services
 ```
 
-The `boltmeshd` service is auto-start. Installation also configures the
-Service Control Manager to restart the helper after 5, 15, and 60 seconds if it
-fails; the recovery count resets after 24 hours of healthy service. The GUI
-needs no elevation: it talks to the named pipe and the daemon creates/starts the
+Uninstall first quiesces the daemon so it cannot recreate the tunnel, then
+stops and removes the `boltmesh0` service and its persisted configuration
+(including the private key). It waits for the daemon to reach `SERVICE_STOPPED`
+and for both service registrations to disappear before it returns. The
+`boltmeshd` service is auto-start. Installation also configures the Service
+Control Manager to restart the helper after 5, 15, and 60 seconds if it fails;
+the recovery count resets after 24 hours of healthy service. The GUI needs no
+elevation: it talks to the named pipe and the daemon creates/starts the
 `boltmesh0` tunnel service on demand. `-console` runs the daemon in the
 foreground for development.
 

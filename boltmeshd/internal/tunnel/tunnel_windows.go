@@ -48,6 +48,9 @@ type tunnelService interface {
 	// stop stops the tunnel service, leaving it registered for reuse.
 	// Idempotent: a missing or already-stopped service is success.
 	stop(ctx context.Context) error
+	// remove stops and deletes the tunnel service, waiting until its
+	// registration has disappeared from the Service Control Manager.
+	remove(ctx context.Context) error
 	// stage reports the OS-level tunnel stage (protocol.Stage*).
 	stage(ctx context.Context) (string, error)
 }
@@ -163,6 +166,37 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 	}
 	_ = os.Remove(m.configPath())
 	return m.Status(), nil
+}
+
+// Uninstall removes all state owned by the Windows tunnel. Callers must first
+// quiesce the daemon so it cannot recreate the service or config. The tunnel
+// must be stopped before its config is deleted, and the service registration
+// must be gone before this method returns. That ordering is important during
+// an upgrade: the old WireGuard process may still hold the config file open,
+// and a service marked for deletion may otherwise outlive the helper
+// executable.
+func (m *Manager) Uninstall(ctx context.Context) error {
+	// remove is deliberately one destructive operation: it stops the service,
+	// waits for the service process to release the config, deletes the
+	// registration, and waits until that registration is gone. Only then is it
+	// safe to remove the private-key file.
+	if err := m.service.remove(ctx); err != nil {
+		return fmt.Errorf("remove tunnel service: %w", err)
+	}
+	if err := removeConfigFile(m.configPath()); err != nil {
+		return fmt.Errorf("remove tunnel config: %w", err)
+	}
+	return nil
+}
+
+func removeConfigFile(path string) error {
+	if err := rejectReparseFile(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Status reports the OS view. Reads never fail the request: an unreadable or
