@@ -490,7 +490,8 @@ flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
 # Native-platform contracts (systemd units + staged Linux payload, the
-# Android manifest the background tunnel needs, the Windows helper channel):
+# Android manifest the background tunnel needs, the Windows helper channel and
+# a mingw-w64 cross-compile of the Windows runner C++ test):
 bash tool/verify_native.sh
 # Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
@@ -506,7 +507,10 @@ one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
 
 The Windows named-pipe transport is covered by a Flutter-free C++ test
 (`windows/runner/tests/helper_pipe_io_test.cpp`, built as
-`helper_pipe_io_tests` and run by the `validate-windows` job); Android is
+`helper_pipe_io_tests` and run by the `validate-windows` job);
+`tool/verify_native.sh` also cross-compiles that test with mingw-w64 on Linux
+(and runs it under wine when wine is installed), so a Windows-only C++ break
+fails the `validate-native` job too. Android is
 additionally checked by `./gradlew :app:lintDebug` and the minified-release
 `MinifiedTunnelBridgeTest` plus API 30 `WireGuardConnectSmokeTest`
 instrumentation tests in `validate-android`. The Android CI matrix runs the

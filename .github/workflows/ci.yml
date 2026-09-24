@@ -185,6 +185,14 @@ jobs:
           cache: true
           cache-dependency-path: boltmeshd/go.sum
 
+      # Cross-builds the Windows-only runner C++ (the Flutter-free named-pipe
+      # test) so a Windows-specific break is caught here, not only on the
+      # Flutter-gated validate-windows job.
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64
+
       # systemd units + staged Linux payload, the Android manifest contract,
       # and the Windows helper channel wiring.
       - name: Verify native platform contracts
