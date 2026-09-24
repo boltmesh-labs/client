@@ -41,6 +41,12 @@ const connectionIdleTimeout = requestTimeout + 5*time.Second
 // handler after the privileged operation has completed.
 const responseWriteTimeout = 5 * time.Second
 
+// maxConcurrentConnections bounds the resources retained by peers that open a
+// connection and then stop making progress. A local client only needs a few
+// concurrent exchanges; excess connections are closed as soon as they are
+// accepted rather than queued behind the limit.
+const maxConcurrentConnections = 32
+
 // Manager is the tunnel surface the server serves. *tunnel.Manager satisfies
 // it; tests substitute a fake.
 type Manager interface {
@@ -60,7 +66,9 @@ func New(manager Manager, log *slog.Logger) *Server {
 	return &Server{manager: manager, log: log}
 }
 
-// Serve accepts connections until ctx is canceled or the listener fails.
+// Serve accepts connections until ctx is canceled or the listener fails. It
+// keeps at most maxConcurrentConnections active; excess connections are
+// closed rather than queued.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	// Cancel must unblock Accept: closing the listener is what makes a
@@ -69,6 +77,10 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// before Serve returns.
 	stop := context.AfterFunc(serveCtx, func() { _ = ln.Close() })
 	var handlers sync.WaitGroup
+	// A connection is assigned a slot before its handler is started. This
+	// keeps both the handler and the request-reading goroutine bounded; an
+	// idle peer cannot consume one goroutine per accepted socket indefinitely.
+	slots := make(chan struct{}, maxConcurrentConnections)
 	defer func() {
 		cancel()
 		stop()
@@ -84,11 +96,21 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
+		select {
+		case slots <- struct{}{}:
+		default:
+			// Do not wait for a slot: a peer that opens more connections
+			// than the limit is rejected without retaining its file
+			// descriptor or named-pipe instance.
+			_ = conn.Close()
+			continue
+		}
 		handlers.Add(1)
-		go func() {
+		go func(conn net.Conn) {
 			defer handlers.Done()
+			defer func() { <-slots }()
 			s.handle(serveCtx, conn)
-		}()
+		}(conn)
 	}
 }
 
@@ -106,9 +128,13 @@ func (s *Server) handle(parent context.Context, conn net.Conn) {
 	writer := bufio.NewWriter(conn)
 
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout))
+		if err := conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout)); err != nil {
+			return
+		}
 		line, tooLarge, err := readLine(reader)
-		_ = conn.SetReadDeadline(time.Time{})
+		if errReset := conn.SetReadDeadline(time.Time{}); errReset != nil {
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -143,40 +169,72 @@ func (s *Server) handle(parent context.Context, conn net.Conn) {
 			}
 			continue
 		}
-		// Peek at the next byte while the operation runs. A read EOF is the
-		// transport's cancellation signal; waiting for the next request in a
-		// separate goroutine lets a closed client cancel ctx even though the
-		// normal read loop is busy dispatching this request.
-		_ = conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout))
-		peekDone := make(chan error, 1)
-		go func() {
-			_, err := reader.Peek(1)
-			if errors.Is(err, bufio.ErrBufferFull) {
-				// The next request is already buffered; this is not a
-				// disconnect. The normal read loop can consume it after the
-				// current response.
-				err = nil
-			} else if err != nil {
-				cancel()
-			}
-			peekDone <- err
-		}()
-
-		if ctx.Err() != nil {
+		if err := s.serveRequest(ctx, cancel, conn, reader, writer, &req); err != nil {
 			return
 		}
-		resp := s.dispatch(ctx, &req)
-		if ctx.Err() != nil {
-			return
-		}
-		if err := writeBoundedResponse(conn, writer, resp); err != nil {
-			return
-		}
-		if err := <-peekDone; err != nil {
-			return
-		}
-		_ = conn.SetReadDeadline(time.Time{})
 	}
+}
+
+// serveRequest dispatches one parsed request while watching the transport for
+// an early client disconnect. The watcher is joined before this method
+// returns so a closed connection cannot leave a read-ahead goroutine behind.
+func (s *Server) serveRequest(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	conn net.Conn,
+	reader *bufio.Reader,
+	writer *bufio.Writer,
+	req *protocol.Request,
+) error {
+	// Peek at the next byte while the operation runs. A read EOF is the
+	// transport's cancellation signal; waiting for the next request in a
+	// separate goroutine lets a closed client cancel ctx even though the
+	// normal read loop is busy dispatching this request.
+	if err := conn.SetReadDeadline(time.Now().Add(connectionIdleTimeout)); err != nil {
+		return err
+	}
+	peekDone := make(chan error, 1)
+	peekPending := true
+	defer func() {
+		if !peekPending {
+			return
+		}
+		// Every early return must join the read-ahead goroutine before
+		// releasing the connection slot. Closing the transport is what
+		// wakes a blocked Peek on a client that went away.
+		cancel()
+		_ = conn.Close()
+		<-peekDone
+	}()
+	go func() {
+		_, err := reader.Peek(1)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// The next request is already buffered; this is not a
+			// disconnect. The normal read loop can consume it after the
+			// current response.
+			err = nil
+		} else if err != nil {
+			cancel()
+		}
+		peekDone <- err
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	resp := s.dispatch(ctx, req)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := writeBoundedResponse(conn, writer, resp); err != nil {
+		return err
+	}
+	peekErr := <-peekDone
+	peekPending = false
+	if peekErr != nil {
+		return peekErr
+	}
+	return conn.SetReadDeadline(time.Time{})
 }
 
 func (s *Server) dispatch(parent context.Context, req *protocol.Request) protocol.Response {
@@ -258,9 +316,15 @@ func readLine(reader *bufio.Reader) (line []byte, tooLarge bool, err error) {
 	}
 }
 
-func writeBoundedResponse(conn net.Conn, writer *bufio.Writer, resp protocol.Response) error {
-	_ = conn.SetWriteDeadline(time.Now().Add(responseWriteTimeout))
-	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+func writeBoundedResponse(conn net.Conn, writer *bufio.Writer, resp protocol.Response) (err error) {
+	if err = conn.SetWriteDeadline(time.Now().Add(responseWriteTimeout)); err != nil {
+		return err
+	}
+	defer func() {
+		if resetErr := conn.SetWriteDeadline(time.Time{}); err == nil {
+			err = resetErr
+		}
+	}()
 	return writeResponse(writer, resp)
 }
 
