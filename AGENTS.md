@@ -62,5 +62,6 @@ make build                # Linux + Windows helper binaries in ignored bin/
 - `test/` mirrors `lib/`; app-level suites such as `widget_test.dart` and `regions_refresh_test.dart` stay at the test root.
 - `.pre-commit-config.yaml` runs shellcheck, Go formatting/linting/tests/module checks for Linux and Windows, generated-code and Flutter lockfile checks, Dart formatting/analyze, actionlint, gitleaks, and repository hygiene hooks. Formatting hooks may modify files; inspect the diff.
 - See `README.md` for runtime flags, platform behavior, backend flows, and handshake readers; `SETUP.md` for fresh-machine prerequisites; `boltmeshd/README.md` for the socket/pipe protocol and security model; `DEPLOYMENT.md` for releases.
+- Other boltmesh repos live in parent directory (backend, frontend, agent, client, infra)
 
 There are no production servers yet: avoid backward-compatibility layers and add defensive behavior only for real edge cases.

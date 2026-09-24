@@ -71,7 +71,7 @@ adb connect 127.0.0.1:5555
 flutter run -d 127.0.0.1:5555
 ```
 
-## Linux
+## Linux (redhat)
 
 ### 1. Dependencies
 
