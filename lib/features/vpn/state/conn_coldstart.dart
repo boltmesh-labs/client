@@ -270,7 +270,11 @@ extension ConnectionColdStart on ConnectionController {
           await _stopTunnel('cold-start-stale');
           if (sessionEpoch != _sessionEpoch) return;
           if (kind == ApiErrorKind.notFound) {
-            await _device.clearDevice();
+            try {
+              await _wipeDevice();
+            } catch (e) {
+              AppLog.error('cold restore clear device failed', e);
+            }
             if (sessionEpoch != _sessionEpoch) return;
           }
           _stopPolling();

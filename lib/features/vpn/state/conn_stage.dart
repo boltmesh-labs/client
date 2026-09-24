@@ -361,7 +361,7 @@ extension ConnectionStage on ConnectionController {
       _resetLocalHealth();
       if (kind == ApiErrorKind.notFound) {
         try {
-          await _device.clearDevice();
+          await _wipeDevice();
         } catch (e) {
           AppLog.error('external-stop clear device failed', e);
         }

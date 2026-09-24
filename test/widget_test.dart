@@ -59,7 +59,7 @@ class _FakeSessionStore extends SessionStore {
 }
 
 class _FakeDeviceStore extends DeviceStore {
-  const _FakeDeviceStore();
+  _FakeDeviceStore();
 
   @override
   Future<String?> deviceName() async => null;
@@ -73,7 +73,7 @@ class _FakeDeviceStore extends DeviceStore {
 
 /// Device store whose LAN preference never resolves (loading state).
 class _PendingDeviceStore extends DeviceStore {
-  const _PendingDeviceStore();
+  _PendingDeviceStore();
 
   @override
   Future<String?> deviceName() async => null;
@@ -84,7 +84,7 @@ class _PendingDeviceStore extends DeviceStore {
 
 /// Device store whose LAN preference read fails.
 class _ErrorDeviceStore extends DeviceStore {
-  const _ErrorDeviceStore();
+  _ErrorDeviceStore();
 
   @override
   Future<String?> deviceName() async => null;
@@ -224,7 +224,7 @@ class _OrderSessionStore extends SessionStore {
 }
 
 class _OrderDeviceStore extends DeviceStore {
-  const _OrderDeviceStore();
+  _OrderDeviceStore();
 
   @override
   Future<String?> deviceId() async => null;
@@ -251,14 +251,14 @@ ProviderScope vpnScope({
   required ConnectionController Function() connection,
   required AuthController Function() auth,
   BackendHealth health = BackendHealth.reachable,
-  DeviceStore deviceStore = const _FakeDeviceStore(),
+  DeviceStore? deviceStore,
   SessionStore sessionStore = const _FakeSessionStore(),
 }) {
   return ProviderScope(
     overrides: [
       backendHealthProvider.overrideWith((ref) => Stream.value(health)),
       connectionProvider.overrideWith(connection),
-      deviceStoreProvider.overrideWithValue(deviceStore),
+      deviceStoreProvider.overrideWithValue(deviceStore ?? _FakeDeviceStore()),
       sessionStoreProvider.overrideWithValue(sessionStore),
       authProvider.overrideWith(auth),
       // The shell now keeps every tab mounted (IndexedStack), so the Regions
@@ -273,7 +273,7 @@ ProviderScope vpnScope({
 ProviderScope logoutScope() => vpnScope(
   connection: _OrderConnectionController.new,
   auth: _OrderAuthController.new,
-  deviceStore: const _OrderDeviceStore(),
+  deviceStore: _OrderDeviceStore(),
   sessionStore: const _OrderSessionStore(),
 );
 
@@ -419,7 +419,7 @@ void main() {
       vpnScope(
         connection: _ThrowingReleaseController.new,
         auth: _OrderAuthController.new,
-        deviceStore: const _OrderDeviceStore(),
+        deviceStore: _OrderDeviceStore(),
         sessionStore: const _OrderSessionStore(),
       ),
     );
@@ -582,7 +582,7 @@ void main() {
       vpnScope(
         connection: _FakeConnectionController.new,
         auth: _AuthedController.new,
-        deviceStore: const _PendingDeviceStore(),
+        deviceStore: _PendingDeviceStore(),
       ),
     );
     // The unresolved LAN read keeps a CircularProgressIndicator animating, so
@@ -605,7 +605,7 @@ void main() {
       vpnScope(
         connection: _FakeConnectionController.new,
         auth: _AuthedController.new,
-        deviceStore: const _ErrorDeviceStore(),
+        deviceStore: _ErrorDeviceStore(),
       ),
     );
     await tester.pumpAndSettle();

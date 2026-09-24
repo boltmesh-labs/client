@@ -11,6 +11,23 @@ extension ConnectionLifecycle on ConnectionController {
   ConnState _resetSessionCounters(ConnState s) =>
       s.copyWith(pollFailures: 0, autoHealAttempts: 0, autoFailoverAttempts: 0);
 
+  /// Wipes the local device identity, retrying once on failure.
+  ///
+  /// The wipe is one atomic delete, so it either removes the whole identity or
+  /// throws. A single transient secure-storage error must not silently leave
+  /// the previous account's device id, keypair, name, target or dial cache for
+  /// the next login, so retry once before letting the error out. Callers that
+  /// cannot trap the user still catch, but they log the second failure instead
+  /// of treating the wipe as done.
+  Future<void> _wipeDevice() async {
+    try {
+      await _device.clearDevice();
+    } catch (e) {
+      AppLog.error('device wipe failed, retrying', e);
+      await _device.clearDevice();
+    }
+  }
+
   /// Tears down a tunnel after an involuntary auth/session transition.
   ///
   /// The auth listener is synchronous, so the actual privileged/storage work
@@ -37,7 +54,7 @@ extension ConnectionLifecycle on ConnectionController {
         AppLog.error('session-revoked stop failed', e);
       }
       try {
-        await _device.clearDevice();
+        await _wipeDevice();
       } catch (e) {
         AppLog.error('session-revoked clear device failed', e);
       }
@@ -129,7 +146,7 @@ extension ConnectionLifecycle on ConnectionController {
   }) async {
     if (stopReason != null) await _stopTunnel(stopReason);
     try {
-      await _device.clearDevice();
+      await _wipeDevice();
     } catch (e) {
       // The tunnel is already down; leave a recoverable idle snapshot even if
       // secure storage is temporarily unavailable.
@@ -342,7 +359,7 @@ extension ConnectionLifecycle on ConnectionController {
           AppLog.error('release revoke failed', e);
         }
       }
-      await _device.clearDevice();
+      await _wipeDevice();
     } finally {
       release();
     }

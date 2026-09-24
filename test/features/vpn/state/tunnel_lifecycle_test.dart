@@ -1550,6 +1550,35 @@ void main() {
       expect(saved.explicitTarget, isFalse);
     });
 
+    test('releaseDevice surfaces a failed identity wipe', () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+          if (o.method == 'DELETE') return <String, dynamic>{};
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      // The wipe and its single retry both fail: the release must report that
+      // instead of pretending the old identity is gone.
+      store.clearDeviceHook = () => throw StateError('keychain locked');
+
+      await expectLater(ctl.releaseDevice(), throwsA(isA<StateError>()));
+      // The failed wipe must still have released the op mutex.
+      final release = await ctl
+          .debugAcquireMutex('probe')
+          .timeout(const Duration(seconds: 1));
+      release();
+    });
+
     test('connected auto no-ops on the best region', () async {
       final events = <String>[];
       final store = FakeStore();

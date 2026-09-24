@@ -56,7 +56,7 @@ class _FakeSessionStore extends SessionStore {
 }
 
 class _FakeDeviceStore extends DeviceStore {
-  const _FakeDeviceStore();
+  _FakeDeviceStore();
 
   @override
   Future<String?> deviceName() async => null;
@@ -135,7 +135,7 @@ ProviderScope _regionsScope(_CountingRegionsApi stub) {
         (ref) => Stream.value(BackendHealth.reachable),
       ),
       connectionProvider.overrideWith(_FakeConnectionController.new),
-      deviceStoreProvider.overrideWithValue(const _FakeDeviceStore()),
+      deviceStoreProvider.overrideWithValue(_FakeDeviceStore()),
       sessionStoreProvider.overrideWithValue(const _FakeSessionStore()),
       authProvider.overrideWith(_AuthedController.new),
       vpnApiProvider.overrideWithValue(stub.api),

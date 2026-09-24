@@ -275,7 +275,11 @@ extension ConnectionConnect on ConnectionController {
       }
       if (sessionEpoch != _sessionEpoch) return;
       if (vpnErr?.kind == ApiErrorKind.notFound) {
-        await _device.clearDevice();
+        try {
+          await _wipeDevice();
+        } catch (e) {
+          AppLog.error('connect clear device failed', e);
+        }
       }
       if (sessionEpoch != _sessionEpoch) return;
       snap = snap.copyWith(

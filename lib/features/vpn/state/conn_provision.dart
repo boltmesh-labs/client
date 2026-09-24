@@ -112,7 +112,11 @@ extension ConnectionProvision on ConnectionController {
       );
       final rateWait = _noteRateLimit(vpnErr);
       if (vpnErr?.kind == ApiErrorKind.notFound) {
-        await _device.clearDevice();
+        try {
+          await _wipeDevice();
+        } catch (e) {
+          AppLog.error('provision clear device failed', e);
+        }
       }
       if (vpnErr?.kind == ApiErrorKind.validation) {
         // Bad request: the stored key/target pair will fail the same way,

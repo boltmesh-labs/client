@@ -32,7 +32,7 @@ Widget previewShell({
       connectionProvider.overrideWith(
         () => PreviewConnectionController(connState),
       ),
-      deviceStoreProvider.overrideWithValue(const PreviewDeviceStore()),
+      deviceStoreProvider.overrideWithValue(PreviewDeviceStore()),
       sessionStoreProvider.overrideWithValue(const PreviewSessionStore()),
       authProvider.overrideWith(
         authenticated
@@ -160,7 +160,7 @@ class PreviewSessionStore extends SessionStore {
 
 /// In-memory device store: a readable name, no secure-storage writes.
 class PreviewDeviceStore extends DeviceStore {
-  const PreviewDeviceStore();
+  PreviewDeviceStore();
 
   @override
   Future<String?> deviceName() async => 'Preview Device';

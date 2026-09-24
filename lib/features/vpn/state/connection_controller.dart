@@ -409,6 +409,8 @@ class ConnectionController extends Notifier<ConnState> {
   /// Fire-and-forget persist that never throws: the async body catches
   /// both sync throws (e.g. secure storage without a Flutter binding in
   /// tests) and async failures, so callers stay sync and infallible.
+  /// [DeviceStore] serializes the write in call order, so this one-liner
+  /// cannot land after a later [clearDevice] and resurrect the old target.
   void _persistTarget({
     required String? regionId,
     required String? serverId,
