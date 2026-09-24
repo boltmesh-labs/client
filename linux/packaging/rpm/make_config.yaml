@@ -9,6 +9,11 @@ license: ASL 2.0
 url: https://github.com/boltmesh-labs/client
 requires:
   - gtk3
+  # desktop_webview_window links WebKitGTK 4.1 and libsoup 3.
+  - webkit2gtk4.1
+  - libsoup3
+  # flutter_secure_storage_linux links libsecret.
+  - libsecret
   - wireguard-tools
 generic_name: VPN Client
 keywords:

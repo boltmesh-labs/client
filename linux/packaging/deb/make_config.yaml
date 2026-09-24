@@ -11,6 +11,11 @@ section: net
 installed_size: 25000
 dependencies:
   - libgtk-3-0
+  # desktop_webview_window links WebKitGTK 4.1 and libsoup 3.
+  - libwebkit2gtk-4.1-0
+  - libsoup-3.0-0
+  # flutter_secure_storage_linux links libsecret.
+  - libsecret-1-0
   - wireguard-tools
 icon: linux/assets/boltmesh.png
 generic_name: VPN Client
