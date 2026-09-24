@@ -333,51 +333,56 @@ extension ConnectionStage on ConnectionController {
   /// preserved for one-tap reconnect, except on `notFound` where the device
   /// itself is gone) plus a guarded ghost-kill for the handle-less native
   /// tunnel. No-op when superseded.
+  ///
+  /// Serialized under [_mutex]: an unguarded teardown could overlap a Connect
+  /// that started while its stop was blocked (killing the fresh tunnel and
+  /// wedging the Windows/Wintun route), and a stale `notFound` could wipe the
+  /// identity a concurrent Connect had just created. Waiters queue FIFO, so a
+  /// Connect queued behind this teardown starts only after the OS tunnel is
+  /// fully down; one that already ran bumps [_tunnelEpoch] (stop) or replaces
+  /// the dial, and the re-check below skips the stale teardown.
   Future<void> _tearDownCorroboratedDead(
     int epoch,
     DialParams dial, {
     required ApiErrorKind? kind,
     required int sessionEpoch,
   }) async {
-    if (sessionEpoch != _sessionEpoch ||
-        _tunnelEpoch != epoch ||
-        snap.phase != ConnPhase.connected ||
-        !identical(snap.dial, dial)) {
-      AppLog.info('corroborated teardown superseded -> skip');
-      return;
-    }
-    _coldRestore.confirmedAt = null;
-    _stopPolling();
-    _resetLocalHealth();
-    if (kind == ApiErrorKind.notFound) {
-      try {
-        await _device.clearDevice();
-      } catch (e) {
-        AppLog.error('external-stop clear device failed', e);
-      }
-      // A concurrent Connect may have acquired the op mutex and started a
-      // fresh tunnel during the storage await: never clobber it with the
-      // stale idle flip + ghost-kill below.
-      if (_tunnelEpoch != epoch ||
+    final release = await _mutex.acquire('external-stop');
+    try {
+      if (sessionEpoch != _sessionEpoch ||
+          _tunnelEpoch != epoch ||
           snap.phase != ConnPhase.connected ||
           !identical(snap.dial, dial)) {
-        AppLog.info('corroborated teardown superseded during clear -> skip');
+        AppLog.info('corroborated teardown superseded -> skip');
         return;
       }
+      _coldRestore.confirmedAt = null;
+      _stopPolling();
+      _resetLocalHealth();
+      if (kind == ApiErrorKind.notFound) {
+        try {
+          await _device.clearDevice();
+        } catch (e) {
+          AppLog.error('external-stop clear device failed', e);
+        }
+      }
+      _idleAfterDeviceGone(
+        message: kind == ApiErrorKind.notFound
+            ? 'Device was removed. Connect again to reprovision.'
+            : kind == ApiErrorKind.noActivePeer
+            ? 'Session expired. Tap Connect to reconnect.'
+            : 'VPN stopped outside the app',
+        lastStage: VpnStage.disconnected,
+        keepDial: kind == null,
+      );
+      // The native tunnel still needs killing: after a re-attach the plugin
+      // lost its handle, so a plain stop is a no-op (`Running tunnels: []`)
+      // and the OS tunnel keeps handshaking. The ghost-kill downs the owning
+      // backend directly (same object identity). Awaited under the lock so a
+      // queued Connect cannot start a replacement until this is down.
+      await _stopTunnel('external-stop');
+    } finally {
+      release();
     }
-    _idleAfterDeviceGone(
-      message: kind == ApiErrorKind.notFound
-          ? 'Device was removed. Connect again to reprovision.'
-          : kind == ApiErrorKind.noActivePeer
-          ? 'Session expired. Tap Connect to reconnect.'
-          : 'VPN stopped outside the app',
-      lastStage: VpnStage.disconnected,
-      keepDial: kind == null,
-    );
-    // The native tunnel still needs killing: after a re-attach the plugin
-    // lost its handle, so a plain stop is a no-op (`Running tunnels: []`)
-    // and the OS tunnel keeps handshaking. The ghost-kill downs the owning
-    // backend directly (same object identity).
-    unawaited(_stopTunnel('external-stop'));
   }
 }

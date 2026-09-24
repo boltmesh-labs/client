@@ -27,6 +27,50 @@ class FakeTunnel extends support.FakeTunnel {
     : super(events: events, traffic: const {'rx': 1000});
 }
 
+/// [FakeTunnel] whose [stopVpn] can be held open by [stopGate], so a test can
+/// start a reconnect while a teardown stop is still in flight. [startDuringStop]
+/// records the race the op mutex must prevent: a replacement tunnel starting
+/// before the previous stop completed.
+class BlockingStopTunnel extends FakeTunnel {
+  BlockingStopTunnel(super.events);
+
+  /// Completes [stopVpn]; null stops immediately.
+  Completer<void>? stopGate;
+
+  /// True while a [stopVpn] call is awaiting [stopGate].
+  bool stopPending = false;
+
+  /// Set when [startVpn] runs while a stop is still pending.
+  bool startDuringStop = false;
+
+  @override
+  Future<void> stopVpn() async {
+    events.add('tunnel:stop');
+    stopPending = true;
+    final gate = stopGate;
+    if (gate != null) await gate.future;
+    stopPending = false;
+  }
+
+  @override
+  Future<void> startVpn({
+    required String serverAddress,
+    required String wgQuickConfig,
+    required String providerBundleIdentifier,
+    List<String>? excludedApps,
+    List<String>? includedApps,
+  }) async {
+    if (stopPending) startDuringStop = true;
+    await super.startVpn(
+      serverAddress: serverAddress,
+      wgQuickConfig: wgQuickConfig,
+      providerBundleIdentifier: providerBundleIdentifier,
+      excludedApps: excludedApps,
+      includedApps: includedApps,
+    );
+  }
+}
+
 ProviderContainer makeContainer({
   required FakeStore store,
   required FakeKeys keys,
@@ -929,6 +973,144 @@ void main() {
     expect(ctl.debugColdRestoreConfirmedAt, isNull);
     expect(events.where((e) => e.contains('/disconnect')), isEmpty);
   });
+
+  test(
+    'external-stop teardown serializes a reconnect queued behind its stop',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final keys = FakeKeys();
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final tunnel = BlockingStopTunnel(events);
+      final container = makeContainer(store: store, keys: keys, api: api);
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      ctl.debugHandshakeReader = () async => DateTime.now();
+      await ctl.connect();
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      events.clear();
+
+      // Corroborated outside stop, with its stop held open so it stays in
+      // flight while a reconnect arrives.
+      staleHandshake(ctl);
+      tunnel.stageValue = VpnStage.disconnected;
+      final gate = Completer<void>();
+      tunnel.stopGate = gate;
+      await ctl.checkHealthOnce();
+      for (var i = 0; i < 100 && !tunnel.stopPending; i++) {
+        await pumpEventQueue();
+      }
+      expect(tunnel.stopPending, isTrue, reason: 'teardown stop not reached');
+      expect(container.read(connectionProvider).phase, ConnPhase.idle);
+
+      // A Connect tapped while the stop is still in flight must queue behind
+      // it (the teardown holds the op mutex), never start a replacement tunnel
+      // the lingering stop could then kill.
+      final reconnecting = ctl.connect();
+      for (var i = 0; i < 20; i++) {
+        await pumpEventQueue();
+      }
+      expect(
+        tunnel.startDuringStop,
+        isFalse,
+        reason: 'a new tunnel started while the old stop was still pending',
+      );
+
+      // Release the stop: the queued Connect now runs against a down tunnel.
+      gate.complete();
+      await reconnecting;
+      await pumpEventQueue();
+
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(tunnel.startDuringStop, isFalse);
+      expect(events.where((e) => e.startsWith('tunnel:')), [
+        'tunnel:stop',
+        'tunnel:start',
+      ]);
+    },
+  );
+
+  test(
+    'external-stop notFound keeps the device wipe atomic against a reconnect',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final keys = FakeKeys();
+      var configCalls = 0;
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) {
+            configCalls++;
+            // 1: seed connect. 2: the external-stop corroboration, which
+            // proves the device is gone. Later calls (the queued reconnect)
+            // must succeed so the reconnect can reach a fresh start.
+            if (configCalls == 2) throw missingDevice(o);
+            return dialJson();
+          }
+          if (o.path == '/vpn-devices' && o.method == 'POST') {
+            return dialJson();
+          }
+          throw StateError('unexpected ${o.method}:${o.path}');
+        }),
+      );
+      final tunnel = BlockingStopTunnel(events);
+      final container = makeContainer(store: store, keys: keys, api: api);
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      ctl.debugHandshakeReader = () async => DateTime.now();
+      await ctl.connect();
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      events.clear();
+
+      // notFound teardown: gate the local wipe so it stays in flight.
+      staleHandshake(ctl);
+      tunnel.stageValue = VpnStage.disconnected;
+      final clearGate = Completer<void>();
+      var clearPending = false;
+      store.clearDeviceHook = () async {
+        clearPending = true;
+        await clearGate.future;
+        clearPending = false;
+      };
+
+      await ctl.checkHealthOnce();
+      for (var i = 0; i < 100 && !clearPending; i++) {
+        await pumpEventQueue();
+      }
+      expect(clearPending, isTrue, reason: 'clearDevice not reached');
+
+      // A reconnect during the wipe must queue rather than provision a fresh
+      // identity that the pending clearDevice would then erase.
+      final reconnecting = ctl.connect();
+      for (var i = 0; i < 20; i++) {
+        await pumpEventQueue();
+      }
+      expect(
+        events.where((e) => e == 'tunnel:start'),
+        isEmpty,
+        reason: 'reconnect started a tunnel during the pending device wipe',
+      );
+
+      clearGate.complete();
+      await reconnecting;
+      await pumpEventQueue();
+
+      // The queued reconnect provisioned a fresh identity after the wipe
+      // instead of losing one to the stale teardown.
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(await store.deviceId(), 'dev-1');
+    },
+  );
 
   /// One corroborated stall cycle: stale handshake plus 2 failed polls
   /// (backend unreachable), then a single health tick. Handshake staleness
