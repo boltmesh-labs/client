@@ -12,6 +12,25 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Restart=on-failure
 RestartSec=2
 
+# The daemon's SIGTERM path is the primary tunnel teardown: it stops accepting
+# work, waits for active handlers, and then calls Manager.Down. Let systemd
+# deliver the default SIGTERM synchronously; KillMode=mixed waits for that
+# graceful path before killing any remaining children. ExecStopPost is a
+# bounded fallback for a process that exits before reaching its deferred
+# cleanup (for example after a hard failure).
+KillSignal=SIGTERM
+KillMode=mixed
+ExecStopPost=/usr/libexec/boltmesh/boltmeshd --cleanup --config-dir=/run/boltmesh --interface=boltmesh0
+TimeoutStopSec=90s
+
+# The service owns the runtime directory because the config file is needed by
+# both Manager.Down and ExecStopPost. The socket's DirectoryMode creates it
+# before activation; preserving it here prevents either shutdown path from
+# deleting the wg-quick config before teardown finishes.
+RuntimeDirectory=boltmesh
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
 # Persistent structured failure log. systemd owns /var/log/boltmesh and keeps it
 # writable under ProtectSystem=full; the daemon writes boltmeshd.log there.
 LogsDirectory=boltmesh

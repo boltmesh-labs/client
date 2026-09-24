@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 
+	"boltmeshd/internal/protocol"
 	"boltmeshd/internal/server"
 	"boltmeshd/internal/tunnel"
 )
@@ -56,10 +57,21 @@ func prepareFilesystem(opts options) error {
 	return nil
 }
 
-// run installs/uninstalls the service, runs in the foreground for
-// development, or hands control to the service control manager.
+// run tears down a live tunnel, installs/uninstalls the service, runs in the
+// foreground for development, or hands control to the service control manager.
 func run(opts options) error {
 	switch {
+	case opts.cleanup:
+		ctx, cancel := context.WithTimeout(context.Background(), serviceOperationTimeout)
+		defer cancel()
+		status, err := tunnel.NewManager(opts.configDir, opts.iface).Down(ctx)
+		if err != nil {
+			return fmt.Errorf("tunnel cleanup: %w", err)
+		}
+		if status == nil || status.Up || status.Stage != protocol.StageDisconnected {
+			return errors.New("tunnel cleanup: tunnel remains active")
+		}
+		return nil
 	case opts.install:
 		return installService(opts)
 	case opts.uninstall:

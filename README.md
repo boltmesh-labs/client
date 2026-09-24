@@ -150,7 +150,9 @@ in `test/support/fakes.dart`.
   (`boltmeshd/`, installed by the deb/rpm, socket-activated, `boltmesh`
   group). The app itself holds no privilege and never runs
   `sudo`/`wg`/`wg-quick`; the daemon needs `wireguard-tools` for `wg-quick`.
-  Persistent helper failures land in `/var/log/boltmesh/boltmeshd.log`
+  Stopping or uninstalling the package tears down the managed interface,
+  routes, and resolver state before removing the helper. Persistent helper
+  failures land in `/var/log/boltmesh/boltmeshd.log`
   (JSON lines); see `boltmeshd/README.md`.
   OAuth uses the same ephemeral loopback listener as Windows
   (`http://127.0.0.1:{port}/callback`) opened in the system browser, so the

@@ -23,9 +23,10 @@ import (
 )
 
 const (
-	// DefaultConfigDir holds the root-only wg-quick config. /run is a fresh
-	// tmpfs each boot, which matches the daemon's stateless ownership of the
-	// config.
+	// DefaultConfigDir holds the root-only wg-quick config. It lives in the
+	// service-owned runtime directory, which remains available through the
+	// stop sequence so Manager.Down can remove the interface and resolver state
+	// before package cleanup removes the directory.
 	DefaultConfigDir = "/run/boltmesh"
 
 	wgQuickBinary    = "wg-quick"

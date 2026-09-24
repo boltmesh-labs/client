@@ -181,6 +181,18 @@ They also drop a NetworkManager configuration at
 created link and GNOME does not report an activation failure when the tunnel
 is torn down.
 
+Stopping the service always tears down the fixed `boltmesh0` interface before
+the helper exits. The daemon waits for active requests, calls `Manager.Down`
+with a fresh bounded context, and the unit repeats that cleanup in
+`ExecStopPost` for a process that exits unexpectedly. The unit uses the
+synchronous default `SIGTERM`/`KillMode=mixed` path rather than an asynchronous
+`ExecStop` signal wrapper. The service owns
+`/run/boltmesh` and preserves it through the stop sequence; the socket unit
+removes only its socket node. The deb/rpm uninstall scripts stop the service
+before the socket, retry `boltmeshd --cleanup`, and remove the runtime directory
+only after teardown succeeds. If cleanup fails, package removal stops before
+deleting the helper so it can be retried.
+
 Log out and back in so the group membership applies. Verify:
 
 ```sh

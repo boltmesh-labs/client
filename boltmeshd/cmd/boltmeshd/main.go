@@ -36,6 +36,7 @@ type options struct {
 	console     bool
 	install     bool
 	uninstall   bool
+	cleanup     bool
 	showVersion bool
 }
 
@@ -92,6 +93,7 @@ func main() {
 	fs.BoolVar(&opts.console, "console", false, "Run in the foreground instead of as a service (Windows)")
 	fs.BoolVar(&opts.install, "install", false, "Install and start the boltmeshd service, then exit (Windows)")
 	fs.BoolVar(&opts.uninstall, "uninstall", false, "Stop and remove the BoltMesh helper and tunnel services, then exit (Windows)")
+	fs.BoolVar(&opts.cleanup, "cleanup", false, "Tear down the BoltMesh tunnel and exit (requires elevated privileges)")
 	fs.BoolVar(&opts.showVersion, "version", false, "Print version and exit")
 	_ = fs.Parse(os.Args[1:])
 

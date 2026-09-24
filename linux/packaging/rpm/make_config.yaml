@@ -31,10 +31,51 @@ postinstall_scripts:
   - systemctl enable --now boltmeshd.socket >/dev/null 2>&1 || true
   - nmcli general reload conf >/dev/null 2>&1 || true
 postuninstall_scripts:
-  - systemctl disable --now boltmeshd.socket boltmeshd.service >/dev/null 2>&1 || true
-  - rm -f /usr/lib/systemd/system/boltmeshd.service /usr/lib/systemd/system/boltmeshd.socket
-  - rm -f /usr/libexec/boltmesh/boltmeshd
-  - rm -f /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
-  - rmdir /usr/libexec/boltmesh >/dev/null 2>&1 || true
-  - systemctl daemon-reload >/dev/null 2>&1 || true
-  - nmcli general reload conf >/dev/null 2>&1 || true
+  # Reload the new unit definitions, then stop and verify the daemon before
+  # the socket. Its signal handler and ExecStopPost both call Manager.Down; the
+  # explicit --cleanup is a final retry while the service-owned runtime
+  # directory (and wg-quick config) still exists. Keep the destructive removals
+  # in this set -e block so a failed teardown leaves the helper installed and
+  # retryable.
+  - |
+    set -e
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload >/dev/null 2>&1
+      systemctl disable boltmeshd.service boltmeshd.socket >/dev/null 2>&1 || true
+    fi
+    stop_unit() {
+      unit="$1"
+      if ! command -v systemctl >/dev/null 2>&1; then
+        return 0
+      fi
+      load_state="$(systemctl show --property=LoadState --value "$unit")" || return 1
+      if [ "$load_state" = "not-found" ]; then
+        return 0
+      fi
+      if ! systemctl stop "$unit" >/dev/null 2>&1; then
+        active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
+        main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
+        if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
+          return 1
+        fi
+        [ "$main_pid" = 0 ] || return 1
+        return 0
+      fi
+      active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
+      main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
+      if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
+        return 1
+      fi
+      [ "$main_pid" = 0 ] || return 1
+    }
+    stop_unit boltmeshd.service
+    stop_unit boltmeshd.socket
+    /usr/libexec/boltmesh/boltmeshd --cleanup --config-dir=/run/boltmesh --interface=boltmesh0
+    rm -f /run/boltmesh/boltmeshd.sock /run/boltmesh/boltmesh0.conf
+    rmdir /run/boltmesh >/dev/null 2>&1 || true
+    rm -f /usr/lib/systemd/system/boltmeshd.service /usr/lib/systemd/system/boltmeshd.socket
+    rm -f /usr/libexec/boltmesh/boltmeshd
+    rm -f /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+    rmdir /usr/libexec/boltmesh >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    nmcli general reload conf >/dev/null 2>&1 || true

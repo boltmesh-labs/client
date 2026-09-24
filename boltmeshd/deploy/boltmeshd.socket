@@ -9,9 +9,10 @@ ListenStream=/run/boltmesh/boltmeshd.sock
 SocketUser=root
 SocketGroup=boltmesh
 SocketMode=0660
-# A fresh runtime dir each boot; the socket lives inside it.
-RuntimeDirectory=boltmesh
-RuntimeDirectoryMode=0755
+# DirectoryMode creates the parent before socket activation. The service owns
+# the directory lifetime so its config survives the stop sequence; this unit
+# removes only the socket node.
+DirectoryMode=0755
 RemoveOnStop=yes
 
 [Install]

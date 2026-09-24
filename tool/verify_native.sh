@@ -19,9 +19,9 @@ bad() {
 
 # --- Linux: the systemd units parse ---------------------------------------
 if command -v systemd-analyze >/dev/null 2>&1; then
-  # The one expected diagnostic is the missing ExecStart target: the deb/rpm
-  # postinstall installs it, so it is absent on the runner. Everything else
-  # (unknown directives, bad references, syntax) must be clean.
+  # The expected diagnostics are the missing ExecStart/ExecStopPost targets:
+  # the deb/rpm postinstall installs the binary, so it is absent on the runner.
+  # Everything else (unknown directives, bad references, syntax) must be clean.
   verify_out="$(systemd-analyze verify \
     boltmeshd/deploy/boltmeshd.service \
     boltmeshd/deploy/boltmeshd.socket 2>&1 || true)"
@@ -35,6 +35,39 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 else
   printf 'skip  systemd-analyze unavailable\n'
 fi
+
+# The daemon's signal path and the unit-level fallback must both tear down the
+# tunnel, and the service (not the socket) must own the runtime directory that
+# contains the wg-quick config during shutdown. The unit deliberately uses
+# systemd's synchronous SIGTERM/KillMode=mixed path rather than an asynchronous
+# ExecStop signal wrapper.
+if grep -qE '^KillSignal=SIGTERM$' boltmeshd/deploy/boltmeshd.service &&
+  grep -qE '^KillMode=mixed$' boltmeshd/deploy/boltmeshd.service &&
+  grep -qE '^ExecStopPost=.*--cleanup' boltmeshd/deploy/boltmeshd.service &&
+  ! grep -qE '^ExecStop=' boltmeshd/deploy/boltmeshd.service &&
+  grep -qE '^RuntimeDirectory=boltmesh$' boltmeshd/deploy/boltmeshd.service &&
+  grep -qE '^RuntimeDirectoryPreserve=yes$' boltmeshd/deploy/boltmeshd.service &&
+  grep -qE '^DirectoryMode=0755$' boltmeshd/deploy/boltmeshd.socket &&
+  ! grep -qE '^RuntimeDirectory=' boltmeshd/deploy/boltmeshd.socket; then
+  ok 'Linux shutdown owns the tunnel and preserves its config for cleanup'
+else
+  bad 'Linux shutdown cleanup contract is incomplete'
+fi
+
+for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
+  reload_line="$(grep -n 'systemctl daemon-reload' "$package_config" | sed -n '2p' | cut -d: -f1)"
+  service_line="$(grep -n 'stop_unit boltmeshd.service' "$package_config" | cut -d: -f1)"
+  socket_line="$(grep -n 'stop_unit boltmeshd.socket' "$package_config" | cut -d: -f1)"
+  cleanup_line="$(grep -n -- '--cleanup --config-dir=/run/boltmesh --interface=boltmesh0' "$package_config" | cut -d: -f1)"
+  if [[ -n "$reload_line" && -n "$service_line" && -n "$socket_line" && -n "$cleanup_line" &&
+    "$reload_line" -lt "$service_line" && "$service_line" -lt "$socket_line" && "$socket_line" -lt "$cleanup_line" ]] &&
+    grep -q 'MainPID' "$package_config" &&
+    ! grep -q 'rm -rf /run/boltmesh' "$package_config"; then
+    ok "Linux package cleanup ordering: $package_config"
+  else
+    bad "Linux package cleanup ordering is incomplete: $package_config"
+  fi
+done
 
 # --- Linux: the helper stages into a bundle and runs ----------------------
 if command -v go >/dev/null 2>&1; then
