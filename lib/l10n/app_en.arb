@@ -289,6 +289,15 @@
   "@settingsEnterNameFirst": {
     "description": "Snack when saving an empty device name."
   },
+  "settingsDeviceNameTooLong": "Device name must be {max} characters or fewer.",
+  "@settingsDeviceNameTooLong": {
+    "description": "Snack when saving a device name over the backend limit.",
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
   "settingsDeviceNameSaved": "Device name saved",
   "@settingsDeviceNameSaved": {
     "description": "Snack after the device name is stored."

@@ -309,6 +309,27 @@ void main() {
     );
   });
 
+  test('a stage outside the helper contract is rejected', () async {
+    // The daemon only reports connected/connecting/disconnected. A mystery
+    // stage must never be decoded (and then mapped to connected via `up`),
+    // which would suppress tunnel-death detection.
+    final socket = _ScriptedSocket(
+      _reply((id) => _ok(id, _status(stage: 'mystery'))),
+    );
+    final client = HelperClient(socket: socket);
+
+    expect(
+      () => client.status(),
+      throwsA(
+        isA<HelperException>().having(
+          (e) => e.message,
+          'message',
+          contains('malformed'),
+        ),
+      ),
+    );
+  });
+
   test('malformed caps are rejected', () async {
     final socket = _ScriptedSocket(
       _reply((id) => _ok(id, _status(), caps: const ['ok', ''])),

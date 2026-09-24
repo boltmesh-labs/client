@@ -216,6 +216,11 @@ class AppLocalizationsDe extends AppLocalizations {
   String get settingsEnterNameFirst => 'Gib zuerst einen Gerätenamen ein.';
 
   @override
+  String settingsDeviceNameTooLong(int max) {
+    return 'Der Gerätename darf höchstens $max Zeichen lang sein.';
+  }
+
+  @override
   String get settingsDeviceNameSaved => 'Gerätename gespeichert';
 
   @override

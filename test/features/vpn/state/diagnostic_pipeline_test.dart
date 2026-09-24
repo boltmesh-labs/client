@@ -83,6 +83,32 @@ void main() {
       expect(events.where((e) => e.startsWith('GET:')), isEmpty);
     });
 
+    test('a no-link tick manufactures no dead-echo strikes', () async {
+      final events = <String>[];
+      final (container, _, ctl) = await seedPipeline(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        throw StateError('unexpected ${o.path}');
+      }, link: false);
+      staleHandshake(ctl);
+      final probe =
+          container.read(gatewayProbeProvider) as support.FakeGatewayProbe;
+      // Clear any strike run left by the connect, then tick while offline.
+      ctl.debugDeadEchoStrikes = 0;
+      final probesBefore = probe.calls;
+
+      await ctl.checkHealthOnce();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.healthNote, contains('Waiting for network'));
+      // Every echo fails without a link; probing here would fabricate a
+      // dead-path strike that pre-arms aggressive healing when the link
+      // returns. The probe is skipped and the run stays clear.
+      expect(probe.calls, probesBefore);
+      expect(ctl.debugDeadEchoStrikes, 0);
+      expect(state.autoHealAttempts, 0);
+    });
+
     test('alive gateway suppresses the heal', () async {
       final events = <String>[];
       final (container, _, ctl) = await seedPipeline(events, (o) {

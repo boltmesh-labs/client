@@ -59,6 +59,7 @@ class _DeviceNameSectionState extends ConsumerState<DeviceNameSection> {
         Text(l10n.settingsDeviceNameLabel),
         TextField(
           controller: _name,
+          maxLength: maxDeviceNameLength,
           decoration: InputDecoration(hintText: l10n.settingsDeviceNameHint),
         ),
         const SizedBox(height: 8),
@@ -67,6 +68,13 @@ class _DeviceNameSectionState extends ConsumerState<DeviceNameSection> {
             final v = _name.text.trim();
             if (v.isEmpty) {
               _snack(l10n.settingsEnterNameFirst);
+              return;
+            }
+            // Mirror the backend's strip + length contract: `maxLength` counts
+            // grapheme clusters, so a name of combining sequences can still
+            // exceed the code-point limit a 422 is raised against.
+            if (v.runes.length > maxDeviceNameLength) {
+              _snack(l10n.settingsDeviceNameTooLong(maxDeviceNameLength));
               return;
             }
             await ref.read(deviceStoreProvider).setDeviceName(v);

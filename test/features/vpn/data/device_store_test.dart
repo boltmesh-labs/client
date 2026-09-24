@@ -233,6 +233,39 @@ void main() {
     );
   });
 
+  test('setDeviceName enforces the backend length contract', () async {
+    final store = DeviceStore(MapSecureStorage());
+    final atLimit = 'a' * maxDeviceNameLength;
+    await store.setDeviceName(atLimit);
+    expect(await store.deviceName(), atLimit);
+
+    expect(
+      () => store.setDeviceName('a' * (maxDeviceNameLength + 1)),
+      throwsA(isA<ArgumentError>()),
+    );
+    expect(await store.deviceName(), atLimit, reason: 'reject must not write');
+  });
+
+  test('setDeviceName counts code points, not UTF-16 units', () async {
+    final store = DeviceStore(MapSecureStorage());
+    // Each thumbs-up is one Unicode code point (the unit the backend counts)
+    // but two UTF-16 code units, so a code-unit check would wrongly reject it.
+    final emoji = '\u{1F44D}' * maxDeviceNameLength;
+    await store.setDeviceName(emoji);
+    expect(await store.deviceName(), emoji);
+
+    expect(
+      () => store.setDeviceName('$emoji\u{1F44D}'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('setDeviceName rejects an empty or whitespace-only name', () {
+    final store = DeviceStore(MapSecureStorage());
+    expect(() => store.setDeviceName(''), throwsA(isA<ArgumentError>()));
+    expect(() => store.setDeviceName('   '), throwsA(isA<ArgumentError>()));
+  });
+
   test('keypair is one atomic entry inside the identity document', () async {
     final storage = MapSecureStorage();
     final store = DeviceStore(storage);

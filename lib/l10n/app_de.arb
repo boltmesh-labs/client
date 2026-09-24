@@ -53,6 +53,7 @@
   "settingsDeviceNameLabel": "Gerätename",
   "settingsDeviceNameHint": "BoltMesh Device",
   "settingsEnterNameFirst": "Gib zuerst einen Gerätenamen ein.",
+  "settingsDeviceNameTooLong": "Der Gerätename darf höchstens {max} Zeichen lang sein.",
   "settingsDeviceNameSaved": "Gerätename gespeichert",
   "settingsSaveName": "Name speichern",
   "settingsForgetTitle": "Gerät vergessen?",

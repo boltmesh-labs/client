@@ -416,6 +416,12 @@ abstract class AppLocalizations {
   /// **'Enter a device name first.'**
   String get settingsEnterNameFirst;
 
+  /// Snack when saving a device name over the backend limit.
+  ///
+  /// In en, this message translates to:
+  /// **'Device name must be {max} characters or fewer.'**
+  String settingsDeviceNameTooLong(int max);
+
   /// Snack after the device name is stored.
   ///
   /// In en, this message translates to:

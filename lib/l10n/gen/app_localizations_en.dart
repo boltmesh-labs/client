@@ -213,6 +213,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsEnterNameFirst => 'Enter a device name first.';
 
   @override
+  String settingsDeviceNameTooLong(int max) {
+    return 'Device name must be $max characters or fewer.';
+  }
+
+  @override
   String get settingsDeviceNameSaved => 'Device name saved';
 
   @override

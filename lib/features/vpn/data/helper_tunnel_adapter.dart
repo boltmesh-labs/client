@@ -133,13 +133,21 @@ class HelperTunnelAdapter implements TunnelAdapter {
   }
 }
 
+/// Maps a validated helper stage to the app's [VpnStage].
+///
+/// [HelperStatus.fromJson] rejects any stage outside the contract, so the
+/// default is defensive only: an unexpected value must never be reported as
+/// [VpnStage.connected] on the strength of `up` (that would suppress
+/// tunnel-death detection), so it degrades to disconnected instead.
 VpnStage _stageOf(HelperStatus status) {
   switch (status.stage) {
     case 'connected':
       return VpnStage.connected;
     case 'connecting':
       return VpnStage.connecting;
+    case 'disconnected':
+      return VpnStage.disconnected;
     default:
-      return status.up ? VpnStage.connected : VpnStage.disconnected;
+      return VpnStage.disconnected;
   }
 }

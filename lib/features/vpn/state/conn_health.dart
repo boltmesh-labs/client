@@ -142,11 +142,26 @@ extension ConnectionHealth on ConnectionController {
         stageStalled ||
         handshakeAge == null ||
         handshakeAge >= ConnectionTuning.echoProbeAfter;
+    // Layer 2 (physical link) is read before the Layer 1 in-tunnel echo: while
+    // the OS reports no usable link every echo fails, and each false result
+    // would otherwise count as a dead-path strike that pre-arms
+    // echo-shortened healing for when connectivity returns. An offline tick
+    // skips the probe and clears the run instead — an unknown echo never
+    // counts. The read stays gated on [probeEcho] so a healthy tick performs
+    // no link read; the link gate below re-reads to catch a drop during the
+    // echo.
     final bool? gateway;
     if (probeEcho) {
-      gateway = await _gatewayAlive(dial.wgDns);
+      final linkUp = await _hasLink();
       if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-      _deadEchoStrikes = gateway == false ? _deadEchoStrikes + 1 : 0;
+      if (linkUp) {
+        gateway = await _gatewayAlive(dial.wgDns);
+        if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+        _deadEchoStrikes = gateway == false ? _deadEchoStrikes + 1 : 0;
+      } else {
+        gateway = null;
+        _deadEchoStrikes = 0;
+      }
     } else {
       gateway = null;
       _deadEchoStrikes = 0;

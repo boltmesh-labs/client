@@ -6,6 +6,12 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/mutex.dart';
 import '../../../core/storage_options.dart';
 
+/// Longest device name the backend accepts for `VpnDeviceCreateIn.name` and
+/// `VpnDeviceUpdateIn.name` (`max_length=64`). Enforced on save so an
+/// over-long name can never be stored and then fail every provisioning call
+/// with a 422.
+const maxDeviceNameLength = 64;
+
 /// Device identity secrets for the VPN flow.
 ///
 /// Everything that belongs to one device identity — id, keypair, custom
@@ -105,7 +111,22 @@ class DeviceStore {
   }) => _mutate((d) => d['keypair'] = {'priv': privateKey, 'pub': publicKey});
 
   Future<String?> deviceName() async => _string(await _doc(), 'deviceName');
-  Future<void> setDeviceName(String v) => _mutate((d) => d['deviceName'] = v);
+
+  /// Stores the custom device name. Rejects an empty or over-long name here
+  /// (mirroring the backend's strip + `1..maxDeviceNameLength` contract) so
+  /// the Settings editor and any other caller cannot persist a name the
+  /// backend will refuse at provisioning time.
+  Future<void> setDeviceName(String v) {
+    final trimmed = v.trim();
+    if (trimmed.isEmpty || trimmed.runes.length > maxDeviceNameLength) {
+      throw ArgumentError.value(
+        v,
+        'v',
+        'device name must be 1..$maxDeviceNameLength characters',
+      );
+    }
+    return _mutate((d) => d['deviceName'] = v);
+  }
 
   /// One UUID per provisioning attempt; persisted until 201/200 so
   /// retries reuse the same `Idempotency-Key` instead of consuming

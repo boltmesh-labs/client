@@ -39,6 +39,13 @@ const helperProtocolVersion = 1;
 /// daemon enforces validation regardless, and absence is tolerated.
 const helperCapabilities = <String>['strict-validation', 'caps'];
 
+/// Tunnel stages the helper protocol permits, mirroring the daemon's
+/// `protocol.Stage*` constants. Any other value is a contract violation (an
+/// incompatible or malformed daemon), not an unknown state to be defaulted:
+/// mapping a mystery stage by the `up` flag could report a dead tunnel as
+/// connected and suppress death detection.
+const helperStages = <String>{'connected', 'connecting', 'disconnected'};
+
 /// A helper-level failure (as opposed to a transport failure), carrying the
 /// daemon's error code (`bad_config`, `unavailable`, …).
 class HelperException implements Exception {
@@ -78,6 +85,7 @@ class HelperStatus {
     if (interfaceName is! String ||
         up is! bool ||
         stage is! String ||
+        !helperStages.contains(stage) ||
         lastHandshake is! num ||
         rxBytes is! num ||
         txBytes is! num) {

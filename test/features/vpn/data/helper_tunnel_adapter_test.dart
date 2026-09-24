@@ -56,6 +56,20 @@ void main() {
     expect(await broken.readStage(), isNull);
   });
 
+  test(
+    'readStage never reports a contract-violating stage as connected',
+    () async {
+      // A malformed/incompatible daemon that says `up: true` with an unknown
+      // stage must read as unknown, not as a live tunnel.
+      final adapter = _adapter(
+        support.ScriptedHelperSocket([
+          support.helperOk(support.helperStatusJson(stage: 'mystery')),
+        ]),
+      );
+      expect(await adapter.readStage(), isNull);
+    },
+  );
+
   test('readTraffic reports counters while up, null while down', () async {
     final up = _adapter(
       support.ScriptedHelperSocket([
