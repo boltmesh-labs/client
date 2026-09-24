@@ -44,6 +44,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Stop in-flight pipe exchanges from posting to the engine (owned by the
+  // controller) before the controller destroys it. Call on the platform
+  // thread, which is where window lifetime runs.
+  boltmesh::ShutdownHelperPipe();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

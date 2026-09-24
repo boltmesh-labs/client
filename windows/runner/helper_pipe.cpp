@@ -9,11 +9,21 @@
 // The framing/overlapped-I/O lives in helper_pipe_io.cpp, which links no
 // Flutter code and is exercised by tests/helper_pipe_io_test.cpp; this file
 // only wires it to the method channel.
+//
+// The exchange runs on a detached worker thread, never on the platform
+// thread: a stopped, wedged, or impersonating helper must not stall window
+// messages, the tray, or close handling for the whole 10-60 second budget.
+// The outcome is marshalled back to the platform thread through the engine,
+// where MethodResult callbacks belong.
 #include "helper_pipe.h"
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <system_error>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <flutter/encodable_value.h>
@@ -25,6 +35,73 @@
 #include "helper_pipe_io.h"
 
 namespace boltmesh {
+namespace {
+
+using Result = flutter::MethodResult<flutter::EncodableValue>;
+
+// The engine is owned by the FlutterViewController and dies with the window,
+// while an exchange may still be in flight on a worker thread. g_engine_mutex
+// guards g_engine so a worker can never post to a destroyed engine: shutdown
+// clears the pointer before the controller is torn down, and a worker holds
+// the mutex across its post. A post the engine's task runner never runs
+// (because the engine is destroyed) is cancelled, which destroys the captured
+// result without touching the engine.
+std::mutex g_engine_mutex;
+flutter::FlutterEngine* g_engine = nullptr;  // guarded by g_engine_mutex
+
+// One exchange handed to a worker. It owns the request and the result; the
+// result is only completed from a platform-thread task.
+struct PendingExchange {
+  std::string request;
+  unsigned long timeout_ms = io::kIoTimeoutMs;
+  std::shared_ptr<Result> result;
+};
+
+// PostOutcome delivers a worker's outcome on the platform thread, where
+// MethodResult callbacks belong. It holds g_engine_mutex across the post so the
+// engine cannot be destroyed between the null check and the call, and drops the
+// outcome when the engine is already gone.
+void PostOutcome(std::shared_ptr<Result> result, std::string response,
+                 bool ok) {
+  std::lock_guard<std::mutex> lock(g_engine_mutex);
+  flutter::FlutterEngine* engine = g_engine;
+  if (engine == nullptr) return;
+  engine->PostPlatformThreadTask([result = std::move(result),
+                                  response = std::move(response),
+                                  ok]() mutable {
+    if (ok) {
+      result->Success(flutter::EncodableValue(std::move(response)));
+    } else {
+      result->Error("unavailable", "boltmeshd pipe unavailable");
+    }
+  });
+}
+
+// StartExchange performs one pipe exchange off the platform thread. The
+// shared_ptr keeps the request alive for the worker and lets a failed
+// std::thread construction still answer the caller instead of throwing
+// through the method-channel callback.
+void StartExchange(std::shared_ptr<PendingExchange> exchange) {
+  try {
+    std::thread([exchange]() {
+      std::string response;
+      bool ok = false;
+      try {
+        ok = io::ExchangePipe(io::kHelperPipe, exchange->request, &response,
+                              exchange->timeout_ms);
+      } catch (...) {
+        // An exception escaping a detached thread terminates the process;
+        // report the transport as unavailable instead.
+        ok = false;
+      }
+      PostOutcome(std::move(exchange->result), std::move(response), ok);
+    }).detach();
+  } catch (const std::system_error&) {
+    exchange->result->Error("unavailable", "helper worker unavailable");
+  }
+}
+
+}  // namespace
 
 void RegisterHelperPipe(flutter::FlutterEngine* engine) {
   static bool registered = false;
@@ -91,17 +168,27 @@ void RegisterHelperPipe(flutter::FlutterEngine* engine) {
           return;
         }
 
-        std::string response;
-        if (!io::ExchangePipe(io::kHelperPipe, request, &response,
-                              timeout_ms)) {
-          result->Error("unavailable", "boltmeshd pipe unavailable");
-          return;
-        }
-        result->Success(flutter::EncodableValue(response));
+        auto exchange = std::make_shared<PendingExchange>();
+        exchange->request = std::move(request);
+        exchange->timeout_ms = timeout_ms;
+        exchange->result = std::shared_ptr<Result>(std::move(result));
+        StartExchange(std::move(exchange));
       });
   channels.push_back(std::move(channel));
 
+  {
+    std::lock_guard<std::mutex> lock(g_engine_mutex);
+    g_engine = engine;
+  }
   registered = true;
+}
+
+void ShutdownHelperPipe() {
+  // Called on the platform thread before the controller (and its engine) is
+  // destroyed. In-flight workers either post before this returns or observe a
+  // null engine and drop their outcome.
+  std::lock_guard<std::mutex> lock(g_engine_mutex);
+  g_engine = nullptr;
 }
 
 }  // namespace boltmesh
