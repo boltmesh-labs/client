@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"syscall"
 	"time"
 
@@ -100,11 +101,12 @@ func (s *winService) updateCommand(handle *mgr.Service, exe string, args []strin
 }
 
 func serviceCommand(exe string, args []string) string {
-	command := syscall.EscapeArg(exe)
+	command := make([]string, 0, len(args)+1)
+	command = append(command, syscall.EscapeArg(exe))
 	for _, arg := range args {
-		command += " " + syscall.EscapeArg(arg)
+		command = append(command, syscall.EscapeArg(arg))
 	}
-	return command
+	return strings.Join(command, " ")
 }
 
 // stop stops the tunnel service, leaving it registered so the next `up`

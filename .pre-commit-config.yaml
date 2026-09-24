@@ -36,6 +36,14 @@ repos:
         files: ^boltmeshd/
         pass_filenames: false
 
+      - id: golangci-lint-boltmeshd-windows
+        name: golangci-lint (boltmeshd, Windows)
+        entry: make -C boltmeshd lint-windows
+        language: system
+        types: [go]
+        files: ^boltmeshd/
+        pass_filenames: false
+
       # --- Generated code (l10n + build_runner) ---
       - id: check-generated
         name: check generated code
