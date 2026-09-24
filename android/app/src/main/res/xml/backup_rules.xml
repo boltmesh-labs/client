@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 and lower backup rules. Keep the WireGuard configuration and
+  secure-storage files out of every backup transport, even if backup behavior
+  changes on an OEM device.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="vpn_prefs.xml" />
+    <exclude domain="sharedpref" path="FlutterSecureStorage.xml" />
+    <exclude domain="sharedpref" path="FlutterSecureKeyStorage.xml" />
+    <exclude domain="sharedpref" path="FlutterSecureStorageConfiguration.xml" />
+    <exclude domain="sharedpref" path="FlutterSecureStorageConfiguration:FlutterSecureStorage.xml" />
+</full-backup-content>
