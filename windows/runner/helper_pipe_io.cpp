@@ -28,6 +28,10 @@ namespace {
 
 using TickCount = ULONGLONG;
 constexpr unsigned long kDrainTimeoutMs = 1000;
+// Interval between connection attempts while the daemon is still creating its
+// pipe instance. WaitNamedPipeW cannot cover this window: when no instance
+// exists it returns immediately, so OpenPipe polls instead.
+constexpr unsigned long kPipePollIntervalMs = 50;
 
 // The Windows service the privileged helper registers as (see
 // boltmeshd/cmd/boltmeshd/main_windows.go). Binding the pipe's server process
@@ -242,15 +246,44 @@ bool VerifyPipeServer(HANDLE pipe) {
   return server_pid == service_pid;
 }
 
+// OpenPipe connects to the named pipe, waiting up to connect_wait_ms for an
+// instance to appear and become free.
+//
+// CreateFileW is tried first: when an instance exists and is free, this is the
+// whole operation. A failure is retried until the deadline:
+//
+//  - ERROR_PIPE_BUSY: an instance exists but another client holds it.
+//    WaitNamedPipeW blocks until one frees up (bounded by the same deadline),
+//    but another client can still win the race between it returning and the
+//    next CreateFileW, so the open is attempted again rather than assumed.
+//  - ERROR_FILE_NOT_FOUND: no instance exists yet, because the daemon is still
+//    starting. WaitNamedPipeW returns immediately in this case regardless of
+//    the timeout, so a short poll is used to give the advertised startup grace
+//    a chance to work.
+//
+// Any other error is not transient (for example ERROR_ACCESS_DENIED) and is
+// returned to the caller.
 HANDLE OpenPipe(const wchar_t* pipe_name, unsigned long connect_wait_ms) {
   const DWORD access = GENERIC_READ | GENERIC_WRITE;
-  HANDLE pipe = CreateFileW(pipe_name, access, 0, nullptr, OPEN_EXISTING,
-                            FILE_FLAG_OVERLAPPED, nullptr);
-  if (pipe != INVALID_HANDLE_VALUE) return pipe;
-  // The daemon may still be starting; wait briefly for the pipe, then retry.
-  if (!WaitNamedPipeW(pipe_name, connect_wait_ms)) return INVALID_HANDLE_VALUE;
-  return CreateFileW(pipe_name, access, 0, nullptr, OPEN_EXISTING,
-                     FILE_FLAG_OVERLAPPED, nullptr);
+  const TickCount deadline = DeadlineAfter(connect_wait_ms);
+  for (;;) {
+    HANDLE pipe = CreateFileW(pipe_name, access, 0, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_OVERLAPPED, nullptr);
+    if (pipe != INVALID_HANDLE_VALUE) return pipe;
+
+    const DWORD error = GetLastError();
+    const unsigned long remaining = RemainingMs(deadline);
+    if (remaining == 0) return INVALID_HANDLE_VALUE;
+
+    if (error == ERROR_PIPE_BUSY) {
+      WaitNamedPipeW(pipe_name, remaining);
+    } else if (error == ERROR_FILE_NOT_FOUND) {
+      Sleep(remaining < kPipePollIntervalMs ? remaining
+                                            : kPipePollIntervalMs);
+    } else {
+      return INVALID_HANDLE_VALUE;
+    }
+  }
 }
 
 // ExchangePipeImpl is the shared transport. authenticate_peer is true for the

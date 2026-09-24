@@ -429,6 +429,20 @@ else
   bad "windows/packaging/exe/boltmesh.iss allows a user-writable install directory"
 fi
 
+# Inno only logs a [Run] program's exit code, so installing the helper there
+# could not fail the install. The helper install must run from [Code] (before
+# the postinstall app launch), suppress that launch when it fails, and report a
+# nonzero setup exit code.
+if grep -qF "Exec(HelperPath, '-install'" "$inno_iss" &&
+  grep -qF 'ResultCode <> 0' "$inno_iss" &&
+  grep -qF 'Check: HelperInstalled' "$inno_iss" &&
+  grep -qF 'if HelperInstallFailed then' "$inno_iss" &&
+  ! grep -qF 'Parameters: "-install"' "$inno_iss"; then
+  ok "Windows installer installs the helper fail-closed before launching the app"
+else
+  bad "windows/packaging/exe/boltmesh.iss can install and launch a bundle with a failed helper"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "native platform contract checks failed" >&2
   exit 1

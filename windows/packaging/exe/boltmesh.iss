@@ -76,11 +76,69 @@ Name: "{autoprograms}\{{DISPLAY_NAME}}"; Filename: "{app}\{{EXECUTABLE_NAME}}"
 Name: "{autodesktop}\{{DISPLAY_NAME}}"; Filename: "{app}\{{EXECUTABLE_NAME}}"; Tasks: desktopicon
 Name: "{userstartup}\{{DISPLAY_NAME}}"; Filename: "{app}\{{EXECUTABLE_NAME}}"; WorkingDir: "{app}"; Tasks: launchAtStartup
 [Run]
-Filename: "{app}\{{EXECUTABLE_NAME}}"; Description: "{cm:LaunchProgram,{{DISPLAY_NAME}}}"; Flags: {% if PRIVILEGES_REQUIRED == 'admin' %}runascurrentuser{% endif %} nowait postinstall skipifsilent
-; Install and start the privileged helper so the GUI never has to elevate.
-Filename: "{app}\boltmeshd.exe"; Parameters: "-install"; StatusMsg: "Installing the BoltMesh helper service..."; Flags: runhidden waituntilterminated
-
+; Launch the app only after CurStepChanged(ssPostInstall) has installed the
+; privileged helper. The helper owns the WireGuard tunnel service, so a bundle
+; whose helper failed to install cannot connect; HelperInstalled keeps the app
+; from starting in that state.
+Filename: "{app}\{{EXECUTABLE_NAME}}"; Description: "{cm:LaunchProgram,{{DISPLAY_NAME}}}"; Flags: {% if PRIVILEGES_REQUIRED == 'admin' %}runascurrentuser{% endif %} nowait postinstall skipifsilent; Check: HelperInstalled
 [Code]
+; The privileged helper is installed here rather than as a [Run] entry: Inno
+; only logs a [Run] program's exit code, so a failed boltmeshd -install would
+; otherwise be followed by the app launch and a "successful" install with no
+; working tunnel. Installing it during ssPostInstall also runs it before the
+; postinstall app launch. A failure suppresses that launch and is reported
+; through the setup exit code.
+var
+  HelperInstallFailed: Boolean;
+
+; Gates the postinstall app launch; a bundle whose helper failed must not start.
+function HelperInstalled(): Boolean;
+begin
+  Result := not HelperInstallFailed;
+end;
+
+procedure InstallHelperService();
+var
+  HelperPath: String;
+  ResultCode: Integer;
+begin
+  HelperPath := ExpandConstant('{app}\boltmeshd.exe');
+  if not Exec(HelperPath, '-install', ExpandConstant('{app}'), SW_HIDE,
+              ewWaitUntilTerminated, ResultCode) then
+  begin
+    HelperInstallFailed := True;
+    Log('The BoltMesh helper could not be started for install.');
+  end
+  else if ResultCode <> 0 then
+  begin
+    HelperInstallFailed := True;
+    Log(Format('The BoltMesh helper could not be installed (exit code %d).',
+      [ResultCode]));
+  end;
+
+  if HelperInstallFailed and not WizardSilent then
+    MsgBox('The BoltMesh helper service could not be installed, so the app ' +
+      'cannot create a VPN tunnel. Re-run the installer, or see the setup log ' +
+      'for details.', mbCriticalError, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    InstallHelperService();
+end;
+
+; A failed helper install means the install did not achieve its purpose. Report
+; a nonzero exit code so silent and automated installs see the failure instead
+; of success.
+function GetCustomSetupExitCode(): Integer;
+begin
+  if HelperInstallFailed then
+    Result := 1
+  else
+    Result := 0;
+end;
+
 ; The privileged helper and tunnel services run as LocalSystem and load their
 ; binaries from {app}. DisableDirPage hides the directory page, but the /DIR
 ; command line can still override DefaultDirName, so verify the destination is

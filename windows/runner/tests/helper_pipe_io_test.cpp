@@ -45,17 +45,23 @@ std::wstring UniquePipeName(const wchar_t* suffix) {
 }
 
 // ServerArgs carries the pipe name, the reply the server should send (empty
-// means "accept the request but never answer"), and the request it read.
+// means "accept the request but never answer"), the delay before the pipe is
+// created, and the request it read.
 struct ServerArgs {
   std::wstring pipe_name;
   std::string reply;
+  DWORD delay_ms = 0;
   std::string request;
 };
 
-// ServerThread serves exactly one connection: it reads one request line into
-// args->request and, when reply is non-empty, writes reply + '\n'.
+// ServerThread serves exactly one connection: it creates the pipe (after
+// args->delay_ms, to model a daemon that is still starting), reads one request
+// line into args->request and, when reply is non-empty, writes reply + '\n'.
 DWORD WINAPI ServerThread(LPVOID param) {
   auto* args = static_cast<ServerArgs*>(param);
+  if (args->delay_ms != 0) {
+    Sleep(args->delay_ms);
+  }
   HANDLE pipe = CreateNamedPipeW(
       args->pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
@@ -152,6 +158,24 @@ void TestUnreachablePipe() {
   Check(!ok, "ExchangePipe returns false for an absent pipe");
 }
 
+// The daemon may still be starting when the app first connects. WaitNamedPipeW
+// returns immediately when no instance exists at all, so the transport must
+// poll for the pipe to be created rather than give up on the first miss.
+void TestWaitsForPipeToAppear() {
+  ServerArgs args;
+  args.pipe_name = UniquePipeName(L"delayed");
+  args.reply = R"({"v":1,"id":"1","ok":true})";
+  args.delay_ms = 200;
+  HANDLE thread = StartServer(&args);
+
+  std::string response;
+  const bool ok = boltmesh::io::ExchangePipeUnverified(
+      args.pipe_name.c_str(), "{}", &response, 3000, 2000);
+  Check(ok, "ExchangePipe waits for a pipe the daemon has not created yet");
+  Check(response == args.reply, "delayed-pipe response line is returned");
+  WaitForServer(thread, "delayed-pipe server thread joined");
+}
+
 // A local process that pre-created the pipe name must be rejected before the
 // request is written: this server is not the boltmeshd service process.
 void TestRejectsServerThatIsNotTheService() {
@@ -177,6 +201,7 @@ int main() {
   TestRoundTrip();
   TestTimeoutWhenServerNeverReplies();
   TestUnreachablePipe();
+  TestWaitsForPipeToAppear();
   TestRejectsServerThatIsNotTheService();
 
   if (g_failures != 0) {
