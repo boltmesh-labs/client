@@ -12,11 +12,14 @@
 
 #define WIN32_LEAN_AND_MEAN
 
+#include <process.h>
 #include <windows.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace boltmesh {
 namespace io {
@@ -38,20 +41,80 @@ unsigned long RemainingMs(TickCount deadline) {
              : static_cast<unsigned long>(remaining);
 }
 
-// WaitOverlapped waits for one overlapped operation. On timeout it cancels the
-// operation and bounds the completion drain so the caller's deadline remains
-// authoritative.
-bool WaitOverlapped(HANDLE pipe, OVERLAPPED* overlapped,
+// One overlapped operation and everything the kernel touches while it is in
+// flight. It lives on the heap rather than the caller's stack so it can outlive
+// the call that started it: CancelIoEx only marks the operation for
+// cancellation, and the kernel may keep writing the completion status into
+// `overlapped`, signalling `event`, and reading/writing `buffer` after the
+// caller's deadline has passed. Freeing any of that early is a use-after-free.
+struct OverlappedOp {
+  OverlappedOp()
+      : overlapped{}, event(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    overlapped.hEvent = event;
+  }
+  ~OverlappedOp() {
+    if (event != nullptr) CloseHandle(event);
+  }
+
+  OVERLAPPED overlapped;
+  HANDLE event;
+  // Owns the bytes the kernel accesses. The write payload is copied in so a
+  // still-pending IRP cannot reach into a caller buffer that has been freed.
+  std::vector<char> buffer;
+
+  bool valid() const { return event != nullptr; }
+};
+
+// ReapThread frees an operation once the kernel has signalled its completion
+// event. It is what makes the drain timeout safe: a slow or non-cancellable
+// provider keeps the operation alive until it is genuinely finished. It uses
+// the CRT (_beginthreadex) because destroying the operation touches the C++
+// runtime.
+unsigned WINAPI ReapThread(void* param) {
+  auto* op = static_cast<OverlappedOp*>(param);
+  WaitForSingleObject(op->event, INFINITE);
+  delete op;
+  return 0;
+}
+
+// RetireOverlapped gives up the caller's ownership of an operation whose
+// cancellation could not be confirmed. The OVERLAPPED/buffer must not be
+// destroyed while the kernel may still use them, so the reaper watches the
+// completion event instead. If no reaper thread can be started the operation is
+// deliberately leaked: a small, bounded leak is strictly safer than a
+// use-after-free.
+void RetireOverlapped(OverlappedOp* op) {
+  const uintptr_t thread =
+      _beginthreadex(nullptr, 0, ReapThread, op, 0, nullptr);
+  if (thread != 0) {
+    CloseHandle(reinterpret_cast<HANDLE>(thread));
+  }
+}
+
+// WaitOverlapped waits for one overlapped operation. When it does not complete
+// within timeout_ms it requests cancellation and waits one bounded drain
+// interval. true means the operation completed and `*op` is still caller-owned.
+// false means it failed; when the kernel might still be using it, ownership has
+// been retired and `*op` is left null so the caller cannot free it.
+bool WaitOverlapped(HANDLE pipe, std::unique_ptr<OverlappedOp>* op,
                     unsigned long timeout_ms, DWORD* transferred) {
-  if (WaitForSingleObject(overlapped->hEvent, timeout_ms) != WAIT_OBJECT_0) {
-    CancelIoEx(pipe, overlapped);
-    // Never let a stuck provider turn the caller's timeout into an
-    // uninterruptible platform-thread wait. Closing the pipe below cancels
-    // any operation that did not report completion during the drain.
-    (void)WaitForSingleObject(overlapped->hEvent, kDrainTimeoutMs);
+  OverlappedOp* current = op->get();
+  if (WaitForSingleObject(current->event, timeout_ms) == WAIT_OBJECT_0) {
+    return GetOverlappedResult(pipe, &current->overlapped, transferred, FALSE) !=
+           0;
+  }
+  // A timeout or a wait failure are both "not confirmed complete"; ask for
+  // cancellation either way. CancelIoEx is asynchronous, so its return does not
+  // let us free anything.
+  CancelIoEx(pipe, &current->overlapped);
+  // The completion event is the only proof the kernel has stopped touching our
+  // memory. A fixed drain bound on its own is not a completion guarantee, so if
+  // it expires without the event we hand the operation to a reaper.
+  if (WaitForSingleObject(current->event, kDrainTimeoutMs) == WAIT_OBJECT_0) {
     return false;
   }
-  return GetOverlappedResult(pipe, overlapped, transferred, FALSE) != 0;
+  RetireOverlapped(op->release());
+  return false;
 }
 
 bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
@@ -59,22 +122,27 @@ bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
   while (offset < data.size()) {
     const unsigned long remaining = RemainingMs(deadline);
     if (remaining == 0) return false;
-    const DWORD chunk = static_cast<DWORD>(
-        (data.size() - offset) < 64 * 1024 ? (data.size() - offset) : 64 * 1024);
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (overlapped.hEvent == nullptr) return false;
+    const size_t left = data.size() - offset;
+    const DWORD chunk =
+        static_cast<DWORD>(left < 64 * 1024 ? left : 64 * 1024);
+
+    // The IRP reads from op->buffer, so the payload must be owned by the
+    // operation and outlive it.
+    auto op = std::make_unique<OverlappedOp>();
+    if (!op->valid()) return false;
+    op->buffer.assign(data.data() + offset, data.data() + offset + chunk);
 
     const BOOL started =
-        WriteFile(pipe, data.data() + offset, chunk, nullptr, &overlapped);
+        WriteFile(pipe, op->buffer.data(), chunk, nullptr, &op->overlapped);
     DWORD written = 0;
     bool ok = false;
     if (started) {
-      ok = WaitOverlapped(pipe, &overlapped, remaining, &written);
+      ok = WaitOverlapped(pipe, &op, remaining, &written);
     } else if (GetLastError() == ERROR_IO_PENDING) {
-      ok = WaitOverlapped(pipe, &overlapped, remaining, &written);
+      ok = WaitOverlapped(pipe, &op, remaining, &written);
     }
-    CloseHandle(overlapped.hEvent);
+    // If WaitOverlapped retired the operation, `op` is null and the reaper owns
+    // it; a failed start never issued an IRP, so destroying it is safe.
     if (!ok || written == 0) return false;
     offset += written;
   }
@@ -85,28 +153,27 @@ bool WriteAll(HANDLE pipe, const std::string& data, TickCount deadline) {
 // first. The trailing newline is stripped.
 bool ReadLine(HANDLE pipe, std::string* out, TickCount deadline) {
   out->clear();
-  char buffer[4096];
   while (out->size() <= kMaxResponseBytes) {
     const unsigned long remaining = RemainingMs(deadline);
     if (remaining == 0) return false;
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (overlapped.hEvent == nullptr) return false;
+
+    auto op = std::make_unique<OverlappedOp>();
+    if (!op->valid()) return false;
+    op->buffer.resize(4096);
 
     const BOOL started =
-        ReadFile(pipe, buffer, static_cast<DWORD>(sizeof(buffer)), nullptr,
-                 &overlapped);
+        ReadFile(pipe, op->buffer.data(), static_cast<DWORD>(op->buffer.size()),
+                 nullptr, &op->overlapped);
     DWORD read = 0;
     bool ok = false;
     if (started) {
-      ok = WaitOverlapped(pipe, &overlapped, remaining, &read);
+      ok = WaitOverlapped(pipe, &op, remaining, &read);
     } else if (GetLastError() == ERROR_IO_PENDING) {
-      ok = WaitOverlapped(pipe, &overlapped, remaining, &read);
+      ok = WaitOverlapped(pipe, &op, remaining, &read);
     }
-    CloseHandle(overlapped.hEvent);
     if (!ok || read == 0) return false;
 
-    out->append(buffer, read);
+    out->append(op->buffer.data(), read);
     const size_t newline = out->find('\n');
     if (newline != std::string::npos) {
       out->resize(newline);
