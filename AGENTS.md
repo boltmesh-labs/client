@@ -1,61 +1,66 @@
 # AGENTS.md
 
-BoltMesh VPN: Flutter WireGuard client (`lib/`) plus the privileged Linux/Windows helper (`boltmeshd/`, Go, entry `cmd/boltmeshd/main.go`). Backend contract lives in the [`backend`](https://github.com/boltmesh-labs/backend) repo (`app/vpn/`; `/vpn-devices`, `/vpn-regions` under `/v1`).
+BoltMesh is a Flutter WireGuard client (`lib/`, root `pubspec.yaml`) plus a privileged Go helper (`boltmeshd/`, entry `boltmeshd/cmd/boltmeshd/main.go`). The backend contract is in the separate [`backend`](https://github.com/boltmesh-labs/backend) repository (`app/vpn/`; `/vpn-devices` and `/vpn-regions` under `/v1`).
 
-## Commands
+## Toolchain and entry points
 
-Client (Flutter ≥3.47), from the repo root, in CI order:
+- Use Flutter 3.47.x stable (Dart `^3.13.0`) and Go 1.26. Android builds use JDK 21 plus Android platform/build-tools 36; Windows native/release builds need Visual Studio 2022 C++ and Inno Setup 6.
+- `lib/main.dart` is the composition root; `lib/app/root_shell.dart` is the auth gate, and `lib/features/vpn/state/connection_controller.dart` orchestrates provisioning, connect/switch, polling, and recovery through its `conn_*.dart` part files.
+- The Flutter app is unprivileged: Linux uses `/run/boltmesh/boltmeshd.sock`; Windows uses `\\.\pipe\boltmesh\boltmeshd`. `boltmeshd` owns `wg-quick`/WireGuard service work and privileged reads; never add `sudo`, `wg`, `wg-quick`, or GUI elevation to the app.
+
+## Verification
+
+### Flutter client (repository root)
+
+Run the CI validation order when changing Dart code:
 
 ```sh
 flutter pub get
-bash tool/check_generated.sh        # regenerate l10n + build_runner, fail on drift
+bash tool/check_generated.sh
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 flutter test --coverage
-bash tool/coverage_gate.sh 80       # floor on hand-written lines only
-bash tool/verify_native.sh          # systemd units + staged Linux helper,
-                                    # Android manifest, Windows helper channel
+bash tool/coverage_gate.sh 80
+bash tool/verify_native.sh
 ```
 
-- Single test: `flutter test test/features/vpn/data/wg_conf_test.dart` (test paths mirror `lib/`).
-- Run against a local backend: `flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1`. API base defaults to production `https://api.boltmesh.mooo.com/v1`; release builds refuse `http://`.
-- Android emulator is tunneled to `127.0.0.1:5555`: `flutter run -d 127.0.0.1:5555`.
+- Run one test with `flutter test test/features/vpn/data/wg_conf_test.dart`; test paths mirror `lib/`.
+- For a local backend, run `podman-compose up -d` from the `infra` repository, then use `flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1`. The default API is production HTTPS; release builds reject `http://`.
+- Android validation is `flutter build apk --debug` followed by `(cd android && ./gradlew :app:lintDebug)`; the build must run first so Gradle has `android/local.properties`.
+- Windows native validation (`flutter build windows --debug` and the named-pipe C++ test) must run on Windows; the helper’s Windows-tagged Go tests also run only on the Windows CI runner.
 
-boltmeshd (from `boltmeshd/`, Go 1.26; builds Linux amd64/arm64 + Windows amd64/arm64):
+### `boltmeshd` (run from `boltmeshd/`)
 
 ```sh
-make vet && make test   # go test ./... -v -count=1
-make build              # Linux + Windows binaries into bin/
-make all                # clean + format + lint + vet + test + build + checksums
+make lint                 # Linux/shared files
+make lint-windows         # GOOS=windows amd64 lint
+make mod-tidy-check       # go mod tidy -diff, read-only
+make vet
+make test                 # go test ./... -v -count=1
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
+make build                # Linux + Windows helper binaries in ignored bin/
 ```
 
-`make lint` needs golangci-lint v2. CI's `validate-boltmeshd` job runs `gofmt`, golangci-lint (Linux and `GOOS=windows`), `deadcode`, `GOOS=windows` build/vet and `go test ./...` on every push/PR; `validate-windows` also runs the Windows-tagged tests on a Windows runner.
+`make all` is a broad build/check target but does not replace `make lint-windows` or Windows-tagged tests. `bin/` is ignored; do not commit helper binaries.
 
-The Windows backend is build-tagged (`*_windows.go`), so `go test` on Linux covers shared + Linux code only. Cross-check Windows with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...` before pushing.
+## High-risk conventions
 
-## Gotchas
+- Generated Dart is committed but excluded from analysis: `lib/l10n/gen/**`, `**/*.freezed.dart`, and `**/*.g.dart`. Never hand-edit it; after changing `.arb` files or freezed/JSON models run `bash tool/check_generated.sh` and commit the regenerated output.
+- `analysis_options.yaml` also excludes native platform directories, so Dart analysis does not replace Android/Windows builds. Keep its strict casts/raw types/inference and custom lints intact.
+- Tests are deterministic: use `package:fake_async` and `async.elapse`, never real sleeps; `dart_test.yaml` has a 60-second timeout and no retries. Shared doubles live in `test/support/fakes.dart`; state suites build on `test/support/vpn_harness.dart` and subclass only their delta.
+- Keep public `ConnectionController` methods (`connect`, `switchServer`, `rotateKeys`, `pollStatusOnce`, …) as instance methods, never extension members. The `conn_*.dart` extensions cannot access Riverpod’s protected `ref`/`state`; use the class accessors instead.
+- Do not treat a null Apple handshake as proof of failure: unsupported/null reads never heal, and only the health-policy path may act on degraded state. Byte counters are display-only.
+- The Windows client is x64-only because `wireguard_flutter_plus` supplies amd64 tunnel/WireGuard DLLs. `windows/packaging/stage_boltmeshd.ps1` rejects arm64 bundles and the Inno config pins `x64compatible`; the standalone arm64 helper target is not an app package.
+- Close-to-tray code is in `lib/app/desktop_tray.dart` over `lib/core/desktop/`; it is desktop-only and disabled under `flutter test`. Add tray menu strings through the `.arb` localization files, then regenerate.
+- Releases are driven by `v*` tags. `tool/set_release_version.dart` rewrites the checked-in dev version before tagged builds; signing/artifact details are in `DEPLOYMENT.md`. `flutter create .` only fills missing native shells and must not overwrite `lib/`.
+- Dependabot groups minor/patch updates by `pub`, Gradle, Go modules, and GitHub Actions; major updates remain separate so generated-code and platform checks are reviewable.
 
-- **Generated code is committed but excluded from analysis** (`lib/l10n/gen/**`, `*.freezed.dart`, `*.g.dart`). After editing `.arb` files or freezed/json models, run `bash tool/check_generated.sh` (does `flutter gen-l10n` + `dart run build_runner build`) and commit the result — CI fails on drift. Never hand-edit those files.
-- **The analyzer is strict**: `strict-casts`, `strict-raw-types`, `strict-inference`, plus the extra lints in `analysis_options.yaml` (`unawaited_futures`, `prefer_relative_imports`, `directives_ordering`, `avoid_print`, `prefer_single_quotes`, …). Pre-commit runs plain `flutter analyze`; CI adds `--fatal-infos`.
-- **Tests are deterministic**: timer behaviour uses `package:fake_async` (`async.elapse`), never real sleeps. `dart_test.yaml` sets a 60s timeout and deliberately no `retry` — flakiness must be fixed, not masked. Shared doubles live in `test/support/fakes.dart`; state suites layer fixtures on `test/support/vpn_harness.dart`, `typedef`-aliasing the fakes and subclassing only the delta.
-- **`ConnectionController` public methods (`connect`, `switchServer`, `pollStatusOnce`, …) must stay instance methods, never extension members** — `flutter_riverpod` exposes the class and Dart resolves extensions statically, so a test/preview override would be silently bypassed. Implementations live in the `conn_*.dart` part files; those cannot touch Riverpod's `@protected` `ref`/`state` and must go through the class accessors (`snap`, `_api`, `_tunnel`, `_networkMonitor`, …).
-- **The app is unprivileged**: it never runs `sudo`/`wg`/`wg-quick` and never starts an elevated Windows service. Linux and Windows both delegate to `boltmeshd` (newline-delimited JSON `ping`/`status`/`up`/`down`) — over `/run/boltmesh/boltmeshd.sock` (group `boltmesh`) on Linux and `\\.\pipe\boltmesh\boltmeshd` on Windows. On Windows the daemon owns the `boltmesh0` tunnel service and the app's runner only proxies the pipe (`windows/runner/helper_pipe.cpp`, since `dart:io` has no named-pipe client). Apple handshake reads are still a placeholder, and a null read never heals.
-- **The shipped Windows app is x64-only**: `windows/packaging/stage_boltmeshd.ps1` stages an amd64 helper and fails fast on a non-x64 `BuildDir`, and `windows/packaging/exe/make_config.yaml` pins Inno to `x64compatible`. The helper's `make` still cross-builds a standalone Windows arm64 binary, but the `wireguard_flutter_plus` plugin hardcodes amd64 tunnel/wireguard DLLs, so arm64 app builds are not supported yet (x64 runs on Windows on ARM under emulation). `tool/verify_native.sh` enforces this contract.
-- **Desktop close-to-tray** (`window_manager` + `tray_manager`) lives in
-  `lib/app/desktop_tray.dart` (coordinator + `DesktopTrayHost`) over the
-  `lib/core/desktop/` seam. It is gated by `supportsDesktopTray` (desktop only,
-  never under `flutter test`), so the widget suites leave the window alone; the
-  tray never hides a window it cannot bring back (a failed tray start restores
-  close-to-quit). Menu wording is localized, so new strings go through the
-  `.arb` files and `tool/check_generated.sh`.
-- **Dependency updates are automated** (`.github/dependabot.yml`): Dependabot opens weekly PRs grouped per ecosystem (`pub`, Gradle, `gomod`, `github-actions`), with major bumps left as individual PRs. Each PR runs the same `validate*`/`security` jobs as any other PR, so a bump that breaks generated-code drift or a build is caught before merge.
-- `flutter create --org com.boltmesh --project-name boltmesh .` only fills in missing `android/ ios/ macos/ windows/ linux/` shells — it never overwrites `lib/`.
-- **Release**: the git tag is the source of truth; CI runs `dart run tool/set_release_version.dart` before every build job. The checked-in `version: 0.1.0+1` is a dev placeholder. Tagged release jobs (`build-android`/`build-linux`/`build-windows`) run only on `v*` and fail rather than ship unsigned artifacts. The `release` job publishes SHA-256 checksums, Syft SBOMs, keyless cosign signatures for the Linux packages and provenance/SBOM attestations, and attaches the Android APK; signing, secrets and packaging details are in `README.md` and `DEPLOYMENT.md`.
-- No backward compatibility: there are no production servers yet. Keep it lean; guard only real edge cases.
+## Layout and local checks
 
-## Layout & conventions
+- `lib/`: `app/` (auth/navigation/lifecycle), `core/` (HTTP, environment, errors, locale, logging, mutex, theme, storage), `features/auth/{data,state,ui}`, `features/vpn/{data,domain,state,ui}`, and `previews/`.
+- `test/` mirrors `lib/`; app-level suites such as `widget_test.dart` and `regions_refresh_test.dart` stay at the test root.
+- `.pre-commit-config.yaml` runs shellcheck, Go formatting/linting/tests/module checks for Linux and Windows, generated-code and Flutter lockfile checks, Dart formatting/analyze, actionlint, gitleaks, and repository hygiene hooks. Formatting hooks may modify files; inspect the diff.
+- See `README.md` for runtime flags, platform behavior, backend flows, and handshake readers; `SETUP.md` for fresh-machine prerequisites; `boltmeshd/README.md` for the socket/pipe protocol and security model; `DEPLOYMENT.md` for releases.
 
-- `lib/`: `main.dart`; `app/` (auth gate + nav/lifecycle shell); `core/` (dio, env, errors, ip, locale, log, mutex, theme, TLS pinning); `features/auth/{data,state,ui}`; `features/vpn/{data,domain,state,ui}`; `previews/`.
-- `test/` mirrors `lib/`; app-level suites (`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root.
-- Pre-commit (`.pre-commit-config.yaml`): gofmt + golangci-lint (boltmeshd), generated-code check, dart format + flutter analyze, prettier, markdownlint.
-- Deeper docs: `README.md` (platform notes, release builds, backend flows, handshake readers), `SETUP.md` (fresh-machine setup), `boltmeshd/README.md` (socket/pipe protocol + security model).
+There are no production servers yet: avoid backward-compatibility layers and add defensive behavior only for real edge cases.

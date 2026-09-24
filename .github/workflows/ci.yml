@@ -14,10 +14,6 @@ on:
       - develop
   workflow_call:
 
-# Least privilege: every job only reads the repository. The release job in
-# `default.yml` grants itself the extra scopes it needs (contents/id-token/
-# attestations) so a compromised third-party action cannot mint OIDC tokens or
-# touch the security tab from these validate/scan jobs.
 permissions:
   contents: read
 
