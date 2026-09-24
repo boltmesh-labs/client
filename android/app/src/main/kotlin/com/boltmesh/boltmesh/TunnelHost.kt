@@ -357,6 +357,9 @@ internal object TunnelHost {
     null
   }
 
+  // These string-based lookups are part of the release ABI; the matching R8
+  // field-name keeps live in android/app/proguard-rules.pro; the release
+  // smoke test guards them.
   private fun pluginField(plugin: Any, name: String): Any? = try {
     plugin.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(
       plugin,

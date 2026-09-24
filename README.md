@@ -111,6 +111,14 @@ in `test/support/fakes.dart`.
   a detached Activity's `cleanUpFlutterEngine` cannot cancel them. A true
   process death (force-stop / OOM) still cold-starts via
   `reconcileColdStart`.
+- **Android minified bridge**: `TunnelHost` reflects a small, explicit set of
+  plugin/backend fields. `android/app/proguard-rules.pro` keeps those field
+  names for R8; Flutter's generated plugin rules may still obfuscate the
+  owner classes, while production accesses them through `javaClass`. PR CI
+  builds a minified release APK and runs the
+  `MinifiedTunnelBridgeTest` instrumentation smoke test, so a plugin update
+  cannot silently turn handshake, active-peer, or ghost-kill reads into
+  unknown/empty results again.
 - **iOS/macOS**: enable the NetworkExtension capability
   (Packet Tunnel Provider) in Xcode for the Runner target
   (`ios/Runner/Runner.entitlements` already declares it, but the
@@ -466,6 +474,8 @@ bash tool/check_generated.sh
 # Native-platform contracts (systemd units + staged Linux payload, the
 # Android manifest the background tunnel needs, the Windows helper channel):
 bash tool/verify_native.sh
+# Minified-release Android bridge smoke test (with an emulator running):
+(cd android && ./gradlew :app:connectedReleaseAndroidTest)
 ```
 
 `tool/check_generated.sh` regenerates `flutter gen-l10n` + `build_runner`
@@ -479,7 +489,8 @@ one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
 The Windows named-pipe transport is covered by a Flutter-free C++ test
 (`windows/runner/tests/helper_pipe_io_test.cpp`, built as
 `helper_pipe_io_tests` and run by the `validate-windows` job); Android is
-additionally checked by `./gradlew :app:lintDebug` in `validate-android`.
+additionally checked by `./gradlew :app:lintDebug` and the minified-release
+`MinifiedTunnelBridgeTest` instrumentation test in `validate-android`.
 
 Test paths mirror `lib/` (e.g. `flutter test
 test/features/vpn/data/wg_conf_test.dart`). Shared doubles live in

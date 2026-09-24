@@ -41,7 +41,7 @@ release is built on the same validated commit, then builds and publishes:
 | Job | Workflow | Trigger | Checks |
 | - | - | - | - |
 | `validate` | `ci.yml` | every push/PR, and the release gate | `tool/check_generated.sh`, `flutter analyze --fatal-infos`, `dart format --set-exit-if-changed lib test`, `flutter test --coverage`, `tool/coverage_gate.sh 80` |
-| `validate-android` | `ci.yml` | every push/PR, and the release gate | `flutter build apk --debug` |
+| `validate-android` | `ci.yml` | every push/PR, and the release gate | `flutter build apk --release` (R8/minified) + emulator `:app:connectedReleaseAndroidTest` bridge smoke test |
 | `validate-windows` | `ci.yml` | every push/PR, and the release gate | `flutter build windows --debug`, Windows-tagged `boltmeshd` tests |
 | `validate-boltmeshd` | `ci.yml` | every push/PR, and the release gate | `gofmt`, golangci-lint (Linux + `GOOS=windows`), `deadcode`, `GOOS=windows` build/vet, `go test ./...` under `boltmeshd/` |
 | `security` | `ci.yml` | every push/PR, and the release gate | Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |

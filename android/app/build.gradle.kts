@@ -37,6 +37,9 @@ android {
     namespace = "com.boltmesh.boltmesh"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+    // The bridge smoke test must exercise the same minified variant that
+    // is shipped, rather than the unminified debug APK.
+    testBuildType = "release"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -58,6 +61,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -75,6 +79,14 @@ android {
 
     buildTypes {
         release {
+            // TunnelHost's backend bridge uses a deliberately small reflection
+            // ABI. Keep the release build minified while preserving the exact
+            // field names in proguard-rules.pro.
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
             } else {
@@ -103,4 +115,7 @@ dependencies {
     // (GoBackend/Tunnel/Config). Must stay on the exact version the plugin
     // bundles so both load the same classes.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }

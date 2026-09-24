@@ -131,11 +131,20 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Configures and compiles the Android app so a broken Gradle edit (e.g.
-      # the release signing config) fails on the PR instead of a release tag.
-      # Uses the debug fallback, so no keystore secret is needed here.
-      - name: Build Android APK (debug)
-        run: flutter build apk --debug
+      # GitHub's hosted Android images expose KVM for the emulator step.  The
+      # rule is harmless on runners where /dev/kvm is already configured.
+      - name: Enable Android emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Compile the exact minified variant that is shipped. This catches R8
+      # rule/dependency regressions on every PR; the debug fallback means no
+      # keystore secret is needed here.
+      - name: Build Android APK (minified release)
+        run: flutter build apk --release
 
       # Android Lint needs the SDK path flutter build wrote to
       # android/local.properties, hence after the build. It catches
@@ -143,6 +152,19 @@ jobs:
       - name: Run Android Lint
         working-directory: android
         run: ./gradlew :app:lintDebug
+
+      # Reflection names are easy to break in a dependency update and are not
+      # observable by a debug-only build. Run the instrumentation test against
+      # the minified release APK on an emulator.
+      - name: Run minified tunnel bridge smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: |
+            cd android
+            ./gradlew :app:connectedReleaseAndroidTest
 
   validate-native:
     name: "Validate native platform contracts"
