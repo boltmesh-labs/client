@@ -39,8 +39,10 @@ type options struct {
 	showVersion bool
 }
 
+// getEnv returns an explicitly configured environment value, including an
+// empty value. The fallback applies only when the variable is unset.
 func getEnv(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
+	if val, ok := os.LookupEnv(key); ok {
 		return val
 	}
 	return fallback

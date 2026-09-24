@@ -72,10 +72,12 @@ const (
 
 // Request is one line from the client.
 type Request struct {
-	V      int      `json:"v"`
-	ID     string   `json:"id"`
-	Op     string   `json:"op"`
-	Config string   `json:"config,omitempty"`
+	V  int    `json:"v"`
+	ID string `json:"id"`
+	Op string `json:"op"`
+	// Config is nil when the field is omitted. A non-nil pointer preserves an
+	// explicitly empty value, which remains distinct for envelope validation.
+	Config *string  `json:"config,omitempty"`
 	Caps   []string `json:"caps,omitempty"`
 }
 
@@ -89,11 +91,11 @@ func (r *Request) Validate() error {
 	}
 	switch r.Op {
 	case OpPing, OpStatus, OpDown:
-		if r.Config != "" {
+		if r.Config != nil {
 			return fmt.Errorf("config is not allowed for op %q", r.Op)
 		}
 	case OpUp:
-		if r.Config == "" {
+		if r.Config == nil || *r.Config == "" {
 			return fmt.Errorf("op %q requires a config", r.Op)
 		}
 	default:

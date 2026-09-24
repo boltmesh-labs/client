@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -46,15 +47,19 @@ func TestRequestValidate(t *testing.T) {
 		{"ping ok", func(*Request) {}, false},
 		{"status ok", func(r *Request) { r.Op = OpStatus }, false},
 		{"down ok", func(r *Request) { r.Op = OpDown }, false},
-		{"up with config", func(r *Request) { r.Op = OpUp; r.Config = "x" }, false},
+		{"up with config", func(r *Request) { r.Op = OpUp; r.Config = stringPointer("x") }, false},
 		{"empty id", func(r *Request) { r.ID = "" }, true},
 		{"bad id", func(r *Request) { r.ID = "a b" }, true},
 		{"overlong id", func(r *Request) { r.ID = strings.Repeat("a", MaxIDLength+1) }, true},
 		{"unknown op", func(r *Request) { r.Op = "bogus" }, true},
-		{"config on ping", func(r *Request) { r.Config = "x" }, true},
-		{"config on status", func(r *Request) { r.Op = OpStatus; r.Config = "x" }, true},
-		{"config on down", func(r *Request) { r.Op = OpDown; r.Config = "x" }, true},
+		{"config on ping", func(r *Request) { r.Config = stringPointer("x") }, true},
+		{"config on status", func(r *Request) { r.Op = OpStatus; r.Config = stringPointer("x") }, true},
+		{"config on down", func(r *Request) { r.Op = OpDown; r.Config = stringPointer("x") }, true},
+		{"empty config on ping", func(r *Request) { r.Config = stringPointer("") }, true},
+		{"empty config on status", func(r *Request) { r.Op = OpStatus; r.Config = stringPointer("") }, true},
+		{"empty config on down", func(r *Request) { r.Op = OpDown; r.Config = stringPointer("") }, true},
 		{"up without config", func(r *Request) { r.Op = OpUp }, true},
+		{"up with empty config", func(r *Request) { r.Op = OpUp; r.Config = stringPointer("") }, true},
 		{"caps ok", func(r *Request) { r.Caps = []string{CapStrictValidation} }, false},
 		{"empty cap", func(r *Request) { r.Caps = []string{""} }, true},
 		{"overlong cap", func(r *Request) { r.Caps = []string{strings.Repeat("a", MaxCapLength+1)} }, true},
@@ -73,6 +78,33 @@ func TestRequestValidate(t *testing.T) {
 			err := req.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRequestConfigPresenceSurvivesJSONDecoding(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantPresent bool
+		wantValue   string
+	}{
+		{"omitted", `{"v":1,"id":"1","op":"up"}`, false, ""},
+		{"explicit empty", `{"v":1,"id":"1","op":"up","config":""}`, true, ""},
+		{"non-empty", `{"v":1,"id":"1","op":"up","config":"x"}`, true, "x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req Request
+			if err := json.Unmarshal([]byte(tt.input), &req); err != nil {
+				t.Fatalf("Unmarshal(%s): %v", tt.input, err)
+			}
+			if got := req.Config != nil; got != tt.wantPresent {
+				t.Fatalf("Config presence = %v, want %v", got, tt.wantPresent)
+			}
+			if req.Config != nil && *req.Config != tt.wantValue {
+				t.Fatalf("Config = %q, want %q", *req.Config, tt.wantValue)
 			}
 		})
 	}
@@ -123,3 +155,5 @@ func TestFailHasNoStatus(t *testing.T) {
 		t.Fatalf("response = %+v", resp)
 	}
 }
+
+func stringPointer(value string) *string { return &value }

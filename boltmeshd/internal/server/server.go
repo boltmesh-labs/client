@@ -284,7 +284,7 @@ func (s *Server) dispatch(ctx context.Context, req *protocol.Request) protocol.R
 		}
 		return protocol.OK(id, status)
 	case protocol.OpUp:
-		status, err := s.manager.Up(ctx, req.Config)
+		status, err := s.manager.Up(ctx, *req.Config)
 		if err != nil {
 			return s.failure(id, "up", err)
 		}

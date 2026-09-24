@@ -177,7 +177,7 @@ func TestUpPassesConfigThrough(t *testing.T) {
 	c := newClient(t, m)
 
 	const cfg = "[Interface]\nPrivateKey = x\n"
-	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: cfg})
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: stringPointer(cfg)})
 	if !resp.OK {
 		t.Fatalf("up response = %+v", resp)
 	}
@@ -190,7 +190,7 @@ func TestOpErrorMapsToWireCode(t *testing.T) {
 	m := &fakeManager{upErr: &protocol.OpError{Code: protocol.CodeBadConfig, Err: errors.New("nope")}}
 	c := newClient(t, m)
 
-	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: "x"})
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: stringPointer("x")})
 	if resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeBadConfig {
 		t.Fatalf("response = %+v, want bad_config", resp)
 	}
@@ -363,7 +363,25 @@ func TestConfigRejectedForNonUpOps(t *testing.T) {
 				V:      protocol.Version,
 				ID:     "1",
 				Op:     op,
-				Config: "x",
+				Config: stringPointer("x"),
+			})
+			if resp.ID != "1" {
+				t.Fatalf("rejected response id = %q, want %q", resp.ID, "1")
+			}
+		})
+	}
+}
+
+func TestExplicitEmptyConfigRejectedForNonUpOps(t *testing.T) {
+	for _, op := range []string{protocol.OpPing, protocol.OpStatus, protocol.OpDown} {
+		t.Run(op, func(t *testing.T) {
+			// A non-nil pointer to an empty string ensures JSON marshaling keeps
+			// config present, so the server cannot mistake it for an omitted field.
+			resp := rejected(t, newClient(t, &fakeManager{}), protocol.Request{
+				V:      protocol.Version,
+				ID:     "1",
+				Op:     op,
+				Config: stringPointer(""),
 			})
 			if resp.ID != "1" {
 				t.Fatalf("rejected response id = %q, want %q", resp.ID, "1")
@@ -463,7 +481,7 @@ func TestFailureRecordIsStructured(t *testing.T) {
 	c := newClientLogging(t, m, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	const secretConfig = "[Interface]\nPrivateKey = super-secret-key\n"
-	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: secretConfig})
+	resp := c.request(protocol.Request{V: protocol.Version, ID: "1", Op: protocol.OpUp, Config: stringPointer(secretConfig)})
 	if resp.OK || resp.Error == nil || resp.Error.Code != protocol.CodeInternal {
 		t.Fatalf("response = %+v, want internal failure", resp)
 	}
@@ -482,3 +500,5 @@ func TestFailureRecordIsStructured(t *testing.T) {
 		t.Fatalf("failure record leaked the config: %s", buf.String())
 	}
 }
+
+func stringPointer(value string) *string { return &value }
