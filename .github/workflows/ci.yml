@@ -17,11 +17,70 @@ on:
 permissions:
   contents: read
 
+# A superseded push must not keep burning the full fan-out (two emulators,
+# Windows + Go setups). Cancel-in-progress on PRs and pushes alike; a tagged
+# release is driven by `default.yml`, which calls this workflow in its own
+# `release` context, where the same group is unique per run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  # The hooks in `.pre-commit-config.yaml` are the repo's documented local
+  # gate, but until now nothing in CI ran them, so `actionlint`, `gitleaks`,
+  # `shellcheck`, `prettier`, `markdownlint`, the lockfile check and
+  # `go mod tidy -diff` only ever ran on a contributor's machine while
+  # `SECURITY.md` presented them as enforced. Running the same config here
+  # keeps the two in step.
+  pre-commit:
+    name: "Pre-commit hooks"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Run pre-commit on all files
+        uses: pre-commit/action@v3.0.1
+
+  # Dependabot covers four ecosystems here, but nothing checked the actions
+  # and build tooling a PR actually pulls in. This catches a newly introduced
+  # vulnerable or unexpectedly-licensed dependency before it merges.
+  dependency-review:
+    name: "Dependency Review"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -61,8 +120,11 @@ jobs:
   validate-windows:
     name: "Validate Windows runner"
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -113,9 +175,52 @@ jobs:
         working-directory: boltmeshd
         run: go test ./... -count=1
 
-  validate-android:
-    name: "Validate Android build (API ${{ matrix.api-level }})"
+  # The minified release build and the lint result are identical on every API
+  # level, so they run once here rather than once per emulator leg. The
+  # instrumentation run below still compiles through Gradle on each leg.
+  android-build:
+    name: "Validate Android build"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.x"
+          channel: "stable"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Compile the exact minified variant that is shipped. This catches R8
+      # rule/dependency regressions on every PR; the debug fallback means no
+      # keystore secret is needed here.
+      - name: Build Android APK (minified release)
+        run: flutter build apk --release
+
+      # Android Lint needs the SDK path flutter build wrote to
+      # android/local.properties, hence after the build. It catches
+      # manifest/resource/API misuse the Dart suite cannot see.
+      - name: Run Android Lint
+        working-directory: android
+        run: ./gradlew :app:lintDebug
+
+  validate-android:
+    name: "Validate Android smoke tests (API ${{ matrix.api-level }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +229,8 @@ jobs:
         api-level: [30, 35]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Java 21
         uses: actions/setup-java@v5
@@ -151,19 +258,6 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # Compile the exact minified variant that is shipped. This catches R8
-      # rule/dependency regressions on every PR; the debug fallback means no
-      # keystore secret is needed here.
-      - name: Build Android APK (minified release)
-        run: flutter build apk --release
-
-      # Android Lint needs the SDK path flutter build wrote to
-      # android/local.properties, hence after the build. It catches
-      # manifest/resource/API misuse the Dart suite cannot see.
-      - name: Run Android Lint
-        working-directory: android
-        run: ./gradlew :app:lintDebug
-
       # Reflection names and the API 30 Config.parse path are easy to break
       # in a dependency update and are not observable by a debug-only build.
       # Run the instrumentation tests against the minified release APK.
@@ -182,8 +276,11 @@ jobs:
   validate-native:
     name: "Validate native platform contracts"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -205,14 +302,55 @@ jobs:
       - name: Verify native platform contracts
         run: bash tool/verify_native.sh
 
+  # The Linux desktop target was only ever compiled by the tag-driven release
+  # pipeline, so a broken `linux/CMakeLists.txt`, runner source or native
+  # dependency shipped straight to a release tag. `verify_native.sh` only
+  # greps the packaging config; the actual compile happens here. Needs the
+  # X11/Xi headers the tray plugin links against (see SETUP.md).
+  validate-linux:
+    name: "Validate Linux desktop build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libsecret-1-dev libjsoncpp-dev libwebkit2gtk-4.1-dev \
+            libx11-dev libxi-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.x"
+          channel: "stable"
+          cache: true
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux runner (debug)
+        run: flutter build linux --debug
+
   validate-boltmeshd:
     name: "Validate boltmeshd"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: boltmeshd
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -265,12 +403,14 @@ jobs:
   security:
     name: "Security Scan"
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Run Trivy Filesystem Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0

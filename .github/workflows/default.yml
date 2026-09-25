@@ -20,6 +20,20 @@ on:
 permissions:
   contents: read
 
+# Tool versions are pinned so a release is reproducible: an unpinned
+# `dart pub global activate fastforge` resolves whatever the registry serves
+# when the tag is built, so the same tag could package differently a day
+# later. Bump this deliberately (and re-verify the packaging hooks) rather
+# than letting it float.
+env:
+  FASTFORGE_VERSION: "0.6.12"
+
+# One release run per tag; a re-push of the same tag supersedes the previous
+# attempt rather than running two signing pipelines at once.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Runs every validation job in ci.yml (validate, validate-*, security). The
   # build jobs below depend on this one job, so a failing test or scan blocks
@@ -33,9 +47,12 @@ jobs:
     needs: [validate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Java 21
         uses: actions/setup-java@v5
@@ -107,9 +124,12 @@ jobs:
     needs: [validate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Linux build dependencies
         run: |
@@ -144,7 +164,7 @@ jobs:
 
       - name: Install fastforge
         run: |
-          dart pub global activate fastforge
+          dart pub global activate fastforge "$FASTFORGE_VERSION"
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       - name: Package Linux installers (deb, rpm)
@@ -164,9 +184,12 @@ jobs:
     needs: [validate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -202,7 +225,7 @@ jobs:
 
       - name: Install fastforge
         run: |
-          dart pub global activate fastforge
+          dart pub global activate fastforge "$FASTFORGE_VERSION"
           echo "$env:LOCALAPPDATA\Pub\Cache\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       # Decodes the base64 .pfx (repo secrets) to a temp file and exports its
@@ -247,6 +270,7 @@ jobs:
     needs: [build-android, build-linux, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       # Write the drafted release and its assets; read this run's artifacts.
       contents: write
@@ -260,6 +284,8 @@ jobs:
       # The release job SBOMs the tag's source (Dart pubspec.lock, Go modules),
       # so it needs the repository, not just the downloaded build outputs.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Download Android Artifact
         uses: actions/download-artifact@v8
@@ -279,9 +305,12 @@ jobs:
           name: windows-installer
           path: artifacts/windows
 
+      # Pinned to a release tag, not the mutable `@v0` moving ref: this job
+      # holds `id-token: write`, so the action resolves into a context that can
+      # mint OIDC tokens for the release signature.
       - name: Install Syft
         id: syft
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@v0.24.2
 
       # Source SBOM: catalogues Dart (pubspec.lock), Go (boltmeshd/go.mod) and
       # any other lockfiles at the tag. Excludes the downloaded binaries, which

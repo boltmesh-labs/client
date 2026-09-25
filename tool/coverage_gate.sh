@@ -16,9 +16,16 @@ if [[ ! -f "$lcov" ]]; then
   exit 1
 fi
 
+# lcov `SF:` paths are absolute and use the host separator, so the generated
+# markers are matched against both forms: a Windows/macOS developer would
+# otherwise get a different (inflated) percentage than CI on the same tree.
 read -r lf lh < <(
   awk -F: '
-    /^SF:/{ skip = ($0 ~ /lib\/l10n\/gen\// || $0 ~ /\.(g|freezed)\.dart$/) }
+    function is_generated(p) {
+      gsub(/\\/, "/", p)
+      return (p ~ /lib\/l10n\/gen\// || p ~ /\.(g|freezed)\.dart$/)
+    }
+    /^SF:/{ skip = is_generated($0) }
     /^LF:/{ if (!skip) lf += $2 }
     /^LH:/{ if (!skip) lh += $2 }
     END { printf "%d %d\n", lf, lh }
