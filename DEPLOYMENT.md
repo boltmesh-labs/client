@@ -73,6 +73,13 @@ security-advisory updates open immediately rather than waiting for the batch.
 | All | `*.cdx.json` / `*.spdx.json` | CycloneDX + SPDX SBOMs (Syft) |
 | All | `boltmesh-<tag>-*.sigstore.json` | raw Sigstore attestation bundles |
 
+**There is no Apple artifact.** No iOS or macOS build, signing, notarization or
+store submission exists in this pipeline, and none can be added without a
+`macos`-runner job, an Apple Developer account and a Network Extension
+provisioning profile. Shipping an Apple target is blocked on the Xcode
+extension target, not on this workflow. See
+[README.md → Platform status](README.md#platform-status).
+
 The `release` job is the single signing/attestation point. It generates the
 checksum manifest and SBOMs, keyless-signs the Linux packages and `SHA256SUMS`
 with cosign (the signature is bound to the workflow's OIDC identity at the tag

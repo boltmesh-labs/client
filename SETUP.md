@@ -150,6 +150,54 @@ Handshakes are **not** readable on Apple: there is no native reader, so the
 health policy treats a null handshake as absence of evidence and heals only
 from a degraded OS stage. See README "Handshake readers".
 
+### 5. The privileged-helper alternative (optional, experimental)
+
+macOS can also run the tunnel through the `boltmeshd` helper instead of a
+Network Extension — the same privileged-daemon model as Linux and Windows. This
+is what `boltmeshd`'s darwin backend implements: a launchd LaunchDaemon running
+the WireGuard data plane in userspace over `utun` (macOS has no kernel
+WireGuard, and `wgctrl` has no darwin backend).
+
+It is **not wired up and not proven**. The helper builds and is vetted/linted
+for darwin, but the Flutter client still routes macOS to the VPN plugin, and
+nothing has run on a Mac. Treat it as a design in progress:
+
+```bash
+cd boltmeshd && make build-darwin   # cross-compiles; needs no Mac
+```
+
+See `boltmeshd/README.md` for the full design and its security properties.
+
+## iOS
+
+Same blockers as macOS, and a shorter list of things that can be done off a
+Mac — everything here needs one.
+
+1. **Prereqs**: macOS + Xcode, Go on `PATH`, and an Apple Developer account
+   with the Network Extensions capability. A physical device is required; the
+   iOS Simulator cannot host a Network Extension.
+2. **Extension target**: in Xcode
+   (`open ios/Runner.xcworkspace`), add a **Network Extension** target —
+   product name `boltmeshTunnel`, language Swift, provider type **Packet Tunnel
+   Provider** — with a bundle identifier that is a prefix of the app's. Follow
+   steps 3–10 of the plugin's `ios_setup_readme.md` (in
+   `~/.pub-cache/hosted/pub.dev/wireguard_flutter_plus-*/`) for the
+   `WireGuardKitGo` bridge, the App Group capability, and the
+   `PacketTunnelProvider.swift` implementation.
+3. **Entitlements**: `ios/Runner/Runner.entitlements` already declares
+   `packet-tunnel-provider` and the App Group `group.com.boltmesh.boltmesh`.
+   The profile must include both.
+4. **Run**:
+
+    ```bash
+    flutter run -d <device-id> \
+      --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel \
+      --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
+    ```
+
+There is no helper path on iOS: the app sandbox forbids the privileged daemon
+model Linux and Windows use.
+
 ## Linux (redhat)
 
 ### 1. Dependencies

@@ -76,6 +76,71 @@ lib/
 `regions_refresh_test.dart`) stay at the `test/` root, and shared doubles live
 in `test/support/fakes.dart`.
 
+## Platform status
+
+Where each target actually stands. "Shipping" means the tunnel works and CI
+validates the platform; "blocked" names what is missing rather than implying
+progress that has not been made.
+
+| Target | Tunnel | Privileged helper | CI | State |
+| --- | --- | --- | --- | --- |
+| **Android** | in-process (`VpnService`) | not needed | build, lint, minified-bridge + API 30/35 instrumentation | **shipping** |
+| **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
+| **Windows** | WireGuard-for-Windows service | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** |
+| **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
+| **iOS** | Network Extension only | not possible (sandbox) | none | **blocked on Apple hardware** |
+
+### What blocks iOS and macOS
+
+Both are blocked on the same thing, which **cannot be produced from this
+repository** and cannot be worked around in code:
+
+1. **A Packet Tunnel extension target.** On Apple the tunnel is not the app; it
+   is a separate Xcode target that must be authored in Xcode. `ios/` and
+   `macos/` contain only the app target.
+2. **`WireGuardKitGo`.** The extension links a Go static library built from
+   [`wireguard-apple`](https://github.com/aakashch0179/wireguard-apple). It is a
+   third-party fork and is not vendored here.
+3. **A provisioning profile** carrying the Network Extension entitlement,
+   granted per-team by Apple. Requires a paid Apple Developer account.
+4. **A Mac to run any of it on.** Everything above needs macOS with Xcode.
+   Cross-compiling the Go helper for `darwin` works from Linux; the tunnel it
+   drives, the extension, and the app itself do not.
+
+### Apple work that *is* done
+
+Not everything was blocked, and the parts that were not are landed and tested:
+
+- The app-side **entitlements** are declared for both platforms —
+  `networkextension`/`packet-tunnel-provider` and the App Group. macOS had
+  neither, so its app target could never have hosted a Packet Tunnel provider.
+- The **App Group is plumbed through** (`VPN_APP_GROUP`, resolved next to
+  `VPN_PROVIDER_BUNDLE_ID`). It was silently never passed to the plugin, which
+  fell back to `group.orbanvpn.wireguard` — a group in no provisioning
+  profile, so a connect failed inside the extension with an opaque error.
+  `bash tool/verify_native.sh` now asserts the entitlements on every run.
+- The **macOS OAuth path is correct** and deliberately differs from Windows and
+  Linux: it returns over the registered `boltmesh://` custom scheme via
+  `ASWebAuthenticationSession`, with no loopback listener.
+- **`boltmeshd` has a macOS backend** (see `boltmeshd/README.md`): a launchd
+  LaunchDaemon running the WireGuard data plane in userspace over `utun`, since
+  macOS has no kernel WireGuard and `wgctrl` has no darwin backend. It
+  cross-compiles for `darwin/amd64` and `darwin/arm64`, is vetted and linted
+  with `GOOS=darwin` in CI, and shares its platform-independent UAPI
+  translation with the other backends. **It has never been run on a Mac.**
+
+### Known macOS gaps, stated plainly
+
+- The **client does not talk to the macOS helper yet.** `lib/features/vpn/data/`
+  still routes macOS to the VPN plugin, not to `boltmeshd`. The helper side is
+  written; the Dart side and the `.pkg` packaging are not.
+- The macOS backend installs a **full-tunnel default route only**. Per-peer
+  `AllowedIPs` split-tunneling is unimplemented there, unlike Linux.
+- `macos/Runner.xcodeproj` has two targets (`Runner`, `RunnerTests`). Adding the
+  extension is a manual Xcode step every developer repeats.
+- **No Apple CI job, no release job, and no notarization.** `flutter build
+  macos` is never run anywhere, and `DEPLOYMENT.md` lists no Apple artifact.
+
 ## Platform notes (after `flutter create`)
 
 - **Android**: supports **API 30 (Android 11) and newer**, and builds against
@@ -139,6 +204,11 @@ in `test/support/fakes.dart`.
   contains. Unlike Windows/Linux, macOS OAuth returns over the registered
   `boltmesh://` custom scheme (no loopback listener — `flutter_web_auth_2`
   implements macOS with `ASWebAuthenticationSession`).
+  A **privileged-helper path also exists for macOS** (`boltmeshd`'s darwin
+  backend, a launchd LaunchDaemon), which would remove the Network Extension
+  dependency entirely and match Linux/Windows. It cross-compiles and is vetted
+  and linted in CI, but the client does not use it yet and it has never run on
+  a Mac — see `boltmeshd/README.md` and Platform status.
 - **Windows**: hands all privileged work to the `boltmeshd` helper
   (`boltmeshd/`, installed as a LocalSystem service by the Inno Setup `.exe`).
   The plugin still bundles Wintun, `wireguard_svc.exe` and `wireguard.dll`,
@@ -473,8 +543,9 @@ handshakes through its own channel (the plugin is never forked). Contract:
 handshake, or null when unknown (null never heals — only the
 degraded-stage path acts). Dart side: `lib/features/vpn/data/` —
 `tunnel_adapter.dart`, whose `handshakeReaderSupported` gates the
-never-handshook branch (Apple is still a placeholder, so its null reads
-never count).
+never-handshook branch. Every `isHandshakeStale` call site must pass it: the
+default is `true`, which reads a permanent null as "never handshook" and tears
+down a live tunnel on exactly the platforms that have no reader.
 
 - **Linux and Windows**: work today via the privileged `boltmeshd` helper
   (`boltmeshd/`). On Linux it reads the peer handshake with `wgctrl` and
@@ -495,11 +566,17 @@ never count).
 - **Windows**: works today through the helper (see above); the GUI-side
   `runner/helper_pipe.cpp` only shuttles the JSON exchange over the named pipe
   (Dart has no Windows named-pipe client) and the daemon owns the reads.
-- **iOS/macOS**: app side sends `sendProviderMessage("getHandshake")`
-  over the `NETunnelProviderSession` (same pattern the plugin uses for
-  `getStats`); the Packet Tunnel extension (Xcode target, created per the
-  Platform notes above) answers with the WireGuardKit peer handshake
-  epoch. Until both halves land, Apple reads are unknown.
+- **iOS/macOS**: **not implemented; reads are unknown.** The app side would
+  send `sendProviderMessage("getHandshake")` over the `NETunnelProviderSession`
+  (the pattern the plugin uses for `getStats`) and the Packet Tunnel extension
+  would answer with the WireGuardKit peer handshake epoch. Neither half is
+  written, and the extension target does not exist (see Platform status).
+- **macOS, via the helper instead**: `boltmeshd`'s darwin backend reads the
+  peer table over the same UAPI `get=1` exchange it configures the device
+  with, so the handshake needs no extension-side code — but the client does not
+  use the macOS helper yet, so this is not wired up. A null handshake on Apple
+  is absence of evidence and never heals on its own; only a degraded OS stage
+  acts. See the reader-support gate in `lib/features/vpn/state/`.
 
 ## Tests
 
@@ -519,6 +596,21 @@ bash tool/verify_native.sh
 # Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
 ```
+
+The Go helper has its own gates (`boltmeshd/`), including the two that keep the
+build-tagged backends from rotting invisibly on a Linux host:
+
+```sh
+cd boltmeshd
+go test ./...          # host-platform suite
+make lint-darwin       # golangci-lint with GOOS=darwin
+make test-darwin       # go vet: type-checks the darwin files AND their tests
+make build-darwin      # cross-compiles darwin/amd64 + darwin/arm64
+```
+
+`make test-darwin` type-checks the darwin-tagged tests but cannot **run** them:
+they need a macOS host with a `utun` interface and root. There is no Apple CI
+runner, so the macOS data plane has no executed test.
 
 `tool/check_generated.sh` regenerates `flutter gen-l10n` + `build_runner`
 output and fails on drift: those files are excluded from analysis, so a stale
@@ -541,6 +633,14 @@ additionally checked by `./gradlew :app:lintDebug` and the minified-release
 `MinifiedTunnelBridgeTest` plus API 30 `WireGuardConnectSmokeTest`
 instrumentation tests in `validate-android`. The Android CI matrix runs the
 release smoke tests on API 30 and 35.
+
+Apple is the one platform with no executed test of any kind — no emulator, no
+simulator, no runner. What CI does instead is compile and analyse: the
+`validate-boltmeshd` job cross-compiles the helper for `darwin/amd64` and
+`darwin/arm64` and runs `golangci-lint` with `GOOS=darwin`, and
+`verify_native.sh` asserts the Apple entitlements. The platform-independent
+UAPI translation the macOS backend depends on *is* unit-tested on Linux. See
+Platform status.
 
 Test paths mirror `lib/` (e.g. `flutter test
 test/features/vpn/data/wg_conf_test.dart`). Shared doubles live in
