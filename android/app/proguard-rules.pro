@@ -18,5 +18,25 @@
     private com.wireguard.android.backend.Tunnel currentTunnel;
 }
 
+# androidx.test:runner's AndroidJUnitRunner.onCreate calls
+# androidx.tracing.Trace, but the app never does, so R8 shrinks it away. The
+# minified androidTest APK then treats the class as app-provided and omits it,
+# so the release smoke-test runner crashes with NoClassDefFoundError in
+# onCreate and `connectedReleaseAndroidTest` hangs with no test result. Keep it
+# in the release APK; the runner resolves it from there at runtime.
+-keep class androidx.tracing.** { *; }
+
+# Same class of failure: AndroidJUnitRunner.registerTestStorage uses Kotlin's
+# top-level lazy(), and the minified androidTest APK resolves kotlin.* from the
+# app APK. The app's own Kotlin usage does not reach every stdlib entry point
+# the runner needs, so R8 must not shrink them out.
+-keep class kotlin.LazyKt { *; }
+
+# WireGuardConnectSmokeTest parses a config through the shipped release APK.
+# Production only reaches Config.parse() on the cold-start path, so R8 inlines
+# it into TunnelHost and the test's call into the WireGuard model then dies with
+# NoSuchMethodError. Keep the model the connect-path smoke test asserts on.
+-keep class com.wireguard.config.** { *; }
+
 # Do not add owner-class keeps here: production uses javaClass, and AGP applies
 # the release mapping to androidTest class references.

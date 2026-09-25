@@ -271,7 +271,11 @@ jobs:
           # `cd android` line would be a no-op subshell and `./gradlew`
           # would be resolved at the repo root. Set the step cwd instead.
           working-directory: android
-          script: ./gradlew :app:connectedReleaseAndroidTest
+          # A crashed instrumentation run must fail loudly instead of hanging:
+          # UTP's am_instrument_timeout is effectively unbounded (one year), so
+          # a missing runtime class makes the runner die before reporting and
+          # the task waits forever. Bound it so the job fails in minutes.
+          script: timeout 1500 ./gradlew :app:connectedReleaseAndroidTest
 
   validate-native:
     name: "Validate native platform contracts"
