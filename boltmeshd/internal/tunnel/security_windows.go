@@ -105,7 +105,7 @@ func setConfigDACL(path string, acl *windows.ACL) error {
 
 // setConfigSecurityOnHandle applies owner and DACL to an already-open object.
 func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *windows.ACL) error {
-	restorePrivilege, err := enableRestorePrivilege()
+	restorePrivilege, canAssign, err := enableRestorePrivilege()
 	if err != nil {
 		return fmt.Errorf("prepare the owner assignment: %w", err)
 	}
@@ -122,9 +122,42 @@ func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *w
 		acl,
 		nil,
 	); err != nil {
+		// ERROR_INVALID_OWNER while handing the object to an account other
+		// than our own means the caller cannot reassign ownership. The raw
+		// Windows message does not say why, so an operator running -install
+		// is left guessing. canAssign separates the two causes: a token that
+		// never held SE_RESTORE_NAME cannot be fixed from inside the process,
+		// while a token that held it and was still refused is a different
+		// fault. A daemon already running as SYSTEM assigns its own SID and
+		// never reaches here, so this cannot misreport the service path.
+		if current, ok := ownerIsCurrentUser(owner); ok && !current &&
+			errors.Is(err, windows.ERROR_INVALID_OWNER) {
+			if canAssign {
+				return fmt.Errorf(
+					"set owner and DACL: %w (SeRestorePrivilege is enabled and Windows "+
+						"still refused to transfer ownership to %s)", err, owner,
+				)
+			}
+			return fmt.Errorf(
+				"set owner and DACL: %w (cannot transfer ownership to %s: this process "+
+					"does not hold SeRestorePrivilege, so run -install as an administrator)",
+				err, owner,
+			)
+		}
 		return fmt.Errorf("set owner and DACL: %w", err)
 	}
 	return nil
+}
+
+// ownerIsCurrentUser reports whether owner is the account this process runs as.
+// ok is false when the token user cannot be read, so that no advice is attached
+// to a failure whose cause is then genuinely unknown.
+func ownerIsCurrentUser(owner *windows.SID) (current, ok bool) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil || user.User.Sid == nil {
+		return false, false
+	}
+	return user.User.Sid.Equals(owner), true
 }
 
 // enableRestorePrivilege turns SE_RESTORE_NAME on for the process token and
@@ -139,35 +172,41 @@ func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *w
 // A token that does not hold the privilege at all is left untouched: the
 // privilege cannot be granted from inside the process, and letting
 // SetSecurityInfo report ERROR_INVALID_OWNER keeps the failure attributable.
-// The returned function is never nil and is safe to call when nothing changed.
-func enableRestorePrivilege() (func(), error) {
+// canAssign reports whether the privilege is enabled once the call returns, so
+// a refusal can be attributed to a token that could never hold it versus one
+// that held it and was still refused. The returned function is never nil and is
+// safe to call when nothing changed.
+func enableRestorePrivilege() (restore func(), canAssign bool, err error) {
 	name, err := windows.UTF16PtrFromString("SeRestorePrivilege")
 	if err != nil {
-		return nil, fmt.Errorf("encode the privilege name: %w", err)
+		return nil, false, fmt.Errorf("encode the privilege name: %w", err)
 	}
 	var luid windows.LUID
 	if err := windows.LookupPrivilegeValue(nil, name, &luid); err != nil {
-		return nil, fmt.Errorf("look up SE_RESTORE_NAME: %w", err)
+		return nil, false, fmt.Errorf("look up SE_RESTORE_NAME: %w", err)
 	}
 
 	token := windows.GetCurrentProcessToken()
 	present, enabled, err := tokenPrivilegeState(token, luid)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if !present || enabled {
-		return func() {}, nil
+	if !present {
+		return func() {}, false, nil
+	}
+	if enabled {
+		return func() {}, true, nil
 	}
 	if err := setPrivilegeEnabled(token, luid, true); err != nil {
 		// ERROR_NOT_ALL_ASSIGNED means the token lists the privilege but
 		// does not really hold it, so there is nothing to enable. Anything
 		// else is a genuine failure to report.
 		if !errors.Is(err, windows.ERROR_NOT_ALL_ASSIGNED) {
-			return nil, fmt.Errorf("enable SE_RESTORE_NAME: %w", err)
+			return nil, false, fmt.Errorf("enable SE_RESTORE_NAME: %w", err)
 		}
-		return func() {}, nil
+		return func() {}, false, nil
 	}
-	return func() { _ = setPrivilegeEnabled(token, luid, false) }, nil
+	return func() { _ = setPrivilegeEnabled(token, luid, false) }, true, nil
 }
 
 // tokenPrivilegeState reports whether the token holds the privilege and whether

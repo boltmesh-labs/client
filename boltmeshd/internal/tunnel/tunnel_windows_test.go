@@ -261,7 +261,7 @@ func TestEnableRestorePrivilegeRestoresToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restore, err := enableRestorePrivilege()
+	restore, canAssign, err := enableRestorePrivilege()
 	if err != nil {
 		t.Fatalf("enableRestorePrivilege() = %v", err)
 	}
@@ -281,8 +281,38 @@ func TestEnableRestorePrivilegeRestoresToken(t *testing.T) {
 	if after != before {
 		t.Fatalf("SE_RESTORE_NAME enabled = %v after restore, want %v", after, before)
 	}
-	if before && !during {
-		t.Fatal("SE_RESTORE_NAME was enabled before the call but not during it")
+	if canAssign && !during {
+		t.Fatal("canAssign = true but SE_RESTORE_NAME is not enabled during the call")
+	}
+	// Whatever it reported, the only state a caller may observe afterwards is
+	// the one it started in.
+	if canAssign != during && before {
+		t.Fatalf("canAssign = %v, want %v for an already-enabled privilege", canAssign, during)
+	}
+}
+
+// TestOwnerIsCurrentUser pins the predicate that decides whether a failed
+// ownership transfer is reported as needing elevation. It must recognise the
+// daemon's own account, or the LocalSystem service path would be told to run as
+// an administrator.
+func TestOwnerIsCurrentUser(t *testing.T) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.User.Sid == nil {
+		t.Fatal("current token user has no SID")
+	}
+	system, err := windows.StringToSid(configOwnerSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, ok := ownerIsCurrentUser(system)
+	if !ok {
+		t.Fatal("ownerIsCurrentUser() could not read the token user")
+	}
+	if want := user.User.Sid.Equals(system); current != want {
+		t.Fatalf("ownerIsCurrentUser(%s) = %v, want %v", configOwnerSID, current, want)
 	}
 }
 
