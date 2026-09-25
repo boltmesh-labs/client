@@ -316,12 +316,11 @@ func TestOwnerIsCurrentUser(t *testing.T) {
 	}
 }
 
-// TestProtectConfigDirAppliesACL proves the syscall path works end to end.
-func TestProtectConfigDirAppliesACL(t *testing.T) {
-	dir := t.TempDir()
-	// Grant cleanup access back afterwards: the protected DACL denies the
-	// invoking (non-SYSTEM) test account, which would otherwise make
-	// t.TempDir() removal fail.
+// restoreEveryoneAccess grants cleanup access back after a test protected a
+// directory: the protected DACL denies the invoking (non-SYSTEM) test account,
+// which would otherwise make t.TempDir() removal fail.
+func restoreEveryoneAccess(t *testing.T, dir string) {
+	t.Helper()
 	t.Cleanup(func() {
 		everyone, err := windows.StringToSid("S-1-1-0")
 		if err != nil {
@@ -343,21 +342,125 @@ func TestProtectConfigDirAppliesACL(t *testing.T) {
 		_ = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
 			windows.DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
 	})
+}
 
+// protectDirForTest runs protectConfigDir, retargeting the owner at the current
+// account when the token cannot assign a foreign owner. A non-elevated CI runner
+// has no SERestorePrivilege, so Windows rejects the SYSTEM owner outright;
+// SetSecurityInfo applies the whole descriptor in one call, so the failed
+// attempt left the directory untouched and the retry starts from the same state.
+func protectDirForTest(t *testing.T, dir string) {
+	t.Helper()
+	err := protectConfigDir(dir)
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, windows.ERROR_INVALID_OWNER) {
+		t.Fatalf("protectConfigDir() = %v", err)
+	}
+	retargetConfigOwnerToCurrentUser(t)
 	if err := protectConfigDir(dir); err != nil {
-		// Assigning an owner other than the caller's own token SID requires
-		// SE_RESTORE_NAME, which a non-elevated CI runner token does not
-		// hold, so Windows rejects the SYSTEM owner outright. SetSecurityInfo
-		// applies the descriptor in one call, so the failed attempt left the
-		// directory untouched and the retry starts from the same state.
-		if !errors.Is(err, windows.ERROR_INVALID_OWNER) {
-			t.Fatalf("protectConfigDir() = %v", err)
+		t.Fatalf("protectConfigDir() with a self-assignable owner = %v", err)
+	}
+}
+
+// TestProtectConfigDirStripsForeignACE covers the case a CI temp directory
+// cannot reproduce. ProgramData's default ACL carries an inheritable
+// CREATOR OWNER entry, so a directory an interactive admin creates under it
+// arrives already granting that account full control, inheritable by
+// everything below. A t.TempDir() has no such ACE, which is why
+// TestProtectConfigDirAppliesACL passes without ever seeing one. Asserting the
+// policy on a pristine directory only proves the code can build the right DACL;
+// this proves it discards a pre-existing one that is not the policy.
+func TestProtectConfigDirStripsForeignACE(t *testing.T) {
+	dir := t.TempDir()
+	restoreEveryoneAccess(t, dir)
+
+	// Seed the DACL ProgramData hands a newly-created subdirectory: SYSTEM and
+	// Administrators as full control, plus the creating account.
+	seed := []windows.EXPLICIT_ACCESS{}
+	for _, entry := range []struct {
+		sid         string
+		trusteeType windows.TRUSTEE_TYPE
+	}{
+		{localSystemSID, windows.TRUSTEE_IS_USER},
+		{administratorsSID, windows.TRUSTEE_IS_GROUP},
+	} {
+		sid, err := windows.StringToSid(entry.sid)
+		if err != nil {
+			t.Fatal(err)
 		}
-		retargetConfigOwnerToCurrentUser(t)
-		if err := protectConfigDir(dir); err != nil {
-			t.Fatalf("protectConfigDir() with a self-assignable owner = %v", err)
+		seed = append(seed, windows.EXPLICIT_ACCESS{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  entry.trusteeType,
+				TrusteeValue: windows.TrusteeValueFromSID(sid),
+			},
+		})
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed = append(seed, windows.EXPLICIT_ACCESS{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_USER,
+			TrusteeValue: windows.TrusteeValueFromSID(user.User.Sid),
+		},
+	})
+	seedACL, err := windows.ACLFromEntries(seed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION, nil, nil, seedACL, nil); err != nil {
+		t.Fatalf("seed the directory DACL: %v", err)
+	}
+
+	protectDirForTest(t, dir)
+
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatalf("GetNamedSecurityInfo() = %v", err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatalf("DACL() = %v", err)
+	}
+	allowed := make(map[string]bool)
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatalf("GetAce(%d) = %v", i, err)
+		}
+		allowed[(*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()] = true
+	}
+	for _, unwanted := range []string{user.User.Sid.String(), "S-1-1-0"} {
+		if allowed[unwanted] {
+			t.Fatalf("protected DACL still grants %s", unwanted)
 		}
 	}
+	if !allowed[localSystemSID] || !allowed[administratorsSID] {
+		t.Fatalf("protected DACL = %v, want SYSTEM and Administrators", allowed)
+	}
+	if len(allowed) != 2 {
+		t.Fatalf("protected DACL grants %d principals, want exactly 2: %v", len(allowed), allowed)
+	}
+}
+
+// TestProtectConfigDirAppliesACL proves the syscall path works end to end.
+func TestProtectConfigDirAppliesACL(t *testing.T) {
+	dir := t.TempDir()
+	restoreEveryoneAccess(t, dir)
+
+	protectDirForTest(t, dir)
 
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {

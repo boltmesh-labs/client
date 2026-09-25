@@ -109,6 +109,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "boltmeshd: secure filesystem paths: %v\n", err)
 		os.Exit(1)
 	}
+	// Must precede configureLogging: the running daemon holds the log file open
+	// and keeps its already-mapped image, so neither a fresh log nor the newly
+	// installed binary takes effect until it has stopped. No-op elsewhere.
+	if err := quiesceRunningService(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "boltmeshd: quiesce the running service: %v\n", err)
+		os.Exit(1)
+	}
 	configureLogging(opts)
 
 	if err := run(opts); err != nil {

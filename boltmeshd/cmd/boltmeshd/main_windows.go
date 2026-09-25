@@ -57,6 +57,48 @@ func prepareFilesystem(opts options) error {
 	return nil
 }
 
+// quiesceRunningService stops an already-running daemon so the installer can
+// take over its resources. Two things depend on it, and neither works without
+// it:
+//
+//   - configureLogging replaces the log file, which fails with ACCESS_DENIED
+//     while the old process still holds it open.
+//   - A running service keeps its already-mapped image. openOrCreateService
+//     repoints the registration at the new executable and installService
+//     tolerates ERROR_SERVICE_ALREADY_RUNNING, so without a stop here an
+//     upgrade reported success while the previous daemon kept serving. That
+//     also means the new hardening code was never exercised on the machine.
+//
+// A service that is absent or already stopped is success, so a first install
+// needs no special case.
+func quiesceRunningService(opts options) error {
+	if !opts.install {
+		return nil
+	}
+	manager, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("connect to service manager: %w", err)
+	}
+	defer func() { _ = manager.Disconnect() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), serviceOperationTimeout)
+	defer cancel()
+
+	handle, err := openDaemonService(ctx, manager)
+	if err != nil {
+		return fmt.Errorf("open the running %s service: %w", windowsServiceName, err)
+	}
+	if handle == nil {
+		return nil
+	}
+	defer func() { _ = handle.Close() }()
+
+	if err := stopAndWaitService(ctx, handle, windowsServiceName); err != nil {
+		return fmt.Errorf("stop the running %s service: %w", windowsServiceName, err)
+	}
+	return nil
+}
+
 // run tears down a live tunnel, installs/uninstalls the service, runs in the
 // foreground for development, or hands control to the service control manager.
 func run(opts options) error {

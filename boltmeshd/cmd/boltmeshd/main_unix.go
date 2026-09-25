@@ -41,6 +41,11 @@ func prepareLogFile(path string) error {
 // the machine-wide config directory before any privileged file operation.
 func prepareFilesystem(_ options) error { return nil }
 
+// quiesceRunningService is a no-op on Unix: the package manager owns the
+// systemd unit and stops it before replacing the binary, so there is no
+// already-mapped image or held log file to release here.
+func quiesceRunningService(_ options) error { return nil }
+
 // tunnelCleanupTimeout is a little longer than the tunnel manager's command
 // budget. The extra margin covers scheduling and the final device read while
 // still keeping a stuck cleanup from outliving the systemd stop operation.

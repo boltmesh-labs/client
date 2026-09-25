@@ -9,6 +9,23 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
+// TestQuiesceRunningServiceOnlyOnInstall pins the one property of the quiesce
+// that is observable without a service: it must be inert for every invocation
+// except -install. The daemon's own service start runs this path, so a
+// regression here would make the service try to stop itself.
+func TestQuiesceRunningServiceOnlyOnInstall(t *testing.T) {
+	for _, opts := range []options{
+		{},
+		{console: true},
+		{cleanup: true},
+		{uninstall: true},
+	} {
+		if err := quiesceRunningService(opts); err != nil {
+			t.Errorf("quiesceRunningService(%+v) = %v, want nil", opts, err)
+		}
+	}
+}
+
 func TestServiceRecoveryActions(t *testing.T) {
 	actions := serviceRecoveryActions()
 	if len(actions) != 3 {
