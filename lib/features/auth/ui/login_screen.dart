@@ -120,10 +120,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 FilledButton(
                   onPressed: auth.working ? null : _submit,
                   child: auth.working
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                      ? Semantics(
+                          // The label replaces the button's own (disabled)
+                          // semantics, so a screen reader still announces
+                          // what the app is doing instead of nothing.
+                          label: l10n.commonSigningIn,
+                          child: const ExcludeSemantics(
+                            child: SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
                         )
                       : Text(l10n.loginTitle),
                 ),

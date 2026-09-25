@@ -83,6 +83,22 @@
   "@homeWorking": {
     "description": "Semantics label for the in-progress spinner."
   },
+  "commonRestoringSession": "Restoring your session…",
+  "@commonRestoringSession": {
+    "description": "Semantics label for the spinner shown while the saved session is being restored at startup."
+  },
+  "commonSigningIn": "Signing in…",
+  "@commonSigningIn": {
+    "description": "Semantics label for the spinner shown while a sign-in request is in flight."
+  },
+  "commonLoadingRegions": "Loading regions…",
+  "@commonLoadingRegions": {
+    "description": "Semantics label for the spinner shown while the region list is being fetched."
+  },
+  "commonApplyingSetting": "Applying setting…",
+  "@commonApplyingSetting": {
+    "description": "Semantics label for the spinner shown while a connection setting is being applied to the tunnel."
+  },
   "homeBackendUnreachable": "Backend unreachable. Connect is disabled until the server is reachable.",
   "@homeBackendUnreachable": {
     "description": "Banner on the disconnected Home when the control-plane probe fails; the Connect button is disabled alongside it."

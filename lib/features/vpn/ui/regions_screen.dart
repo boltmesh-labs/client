@@ -163,7 +163,14 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
             child: RefreshIndicator(
               onRefresh: _refreshRegions,
               child: regions.when(
-                loading: () => _messageState(const CircularProgressIndicator()),
+                loading: () => _messageState(
+                  Semantics(
+                    label: l10n.commonLoadingRegions,
+                    child: const ExcludeSemantics(
+                      child: CircularProgressIndicator(),
+                    ),
+                  ),
+                ),
                 // Raw exception text is never shown; the provider already
                 // logs it. The retry button (and pull-to-refresh) gives the
                 // error branch an affordance instead of a dead end.

@@ -64,6 +64,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeWorking => 'Working…';
 
   @override
+  String get commonRestoringSession => 'Restoring your session…';
+
+  @override
+  String get commonSigningIn => 'Signing in…';
+
+  @override
+  String get commonLoadingRegions => 'Loading regions…';
+
+  @override
+  String get commonApplyingSetting => 'Applying setting…';
+
+  @override
   String get homeBackendUnreachable =>
       'Backend unreachable. Connect is disabled until the server is reachable.';
 

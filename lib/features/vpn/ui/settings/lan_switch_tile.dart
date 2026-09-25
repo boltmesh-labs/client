@@ -32,10 +32,15 @@ class LanSwitchTile extends ConsumerWidget {
     return pref.when(
       loading: () => unknownTile(
         subtitle: l10n.settingsAllowLanLoading,
-        trailing: const SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2),
+        trailing: Semantics(
+          label: l10n.commonApplyingSetting,
+          child: const ExcludeSemantics(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
         ),
       ),
       error: (_, _) => unknownTile(

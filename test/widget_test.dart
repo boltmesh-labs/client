@@ -382,6 +382,32 @@ void main() {
     expect(find.byType(NavigationBar), findsNothing);
   });
 
+  testWidgets('busy spinners announce what the app is doing', (tester) async {
+    // Every spinner that gates a screen or an action needs a semantics label;
+    // a bare CircularProgressIndicator says nothing to a screen reader. These
+    // are the states a user can actually land in: the session restore at
+    // startup and a sign-in in flight both block the whole app.
+    final handle = tester.binding.ensureSemantics();
+
+    await tester.pumpWidget(testScope(authenticated: false));
+    await tester.pumpAndSettle();
+    // The login screen's own busy state, reached by submitting the form.
+    await tester.enterText(find.byType(TextField).first, 'someone');
+    await tester.enterText(find.byType(TextField).last, 'hunter2');
+    await tester.tap(find.widgetWithText(FilledButton, 'Log in'));
+    await tester.pump();
+
+    expect(
+      find.bySemanticsLabel('Signing in…'),
+      findsOneWidget,
+      reason: 'the in-flight sign-in must be announced',
+    );
+
+    // Let the in-flight request settle so its timer does not outlive the test.
+    await tester.pumpAndSettle();
+    handle.dispose();
+  });
+
   testWidgets('login form exposes autofill hints and a password tooltip', (
     tester,
   ) async {

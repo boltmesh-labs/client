@@ -194,6 +194,30 @@ abstract class AppLocalizations {
   /// **'Working…'**
   String get homeWorking;
 
+  /// Semantics label for the spinner shown while the saved session is being restored at startup.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring your session…'**
+  String get commonRestoringSession;
+
+  /// Semantics label for the spinner shown while a sign-in request is in flight.
+  ///
+  /// In en, this message translates to:
+  /// **'Signing in…'**
+  String get commonSigningIn;
+
+  /// Semantics label for the spinner shown while the region list is being fetched.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading regions…'**
+  String get commonLoadingRegions;
+
+  /// Semantics label for the spinner shown while a connection setting is being applied to the tunnel.
+  ///
+  /// In en, this message translates to:
+  /// **'Applying setting…'**
+  String get commonApplyingSetting;
+
   /// Banner on the disconnected Home when the control-plane probe fails; the Connect button is disabled alongside it.
   ///
   /// In en, this message translates to:

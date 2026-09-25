@@ -64,6 +64,18 @@ class AppLocalizationsDe extends AppLocalizations {
   String get homeWorking => 'Wird ausgeführt …';
 
   @override
+  String get commonRestoringSession => 'Sitzung wird wiederhergestellt …';
+
+  @override
+  String get commonSigningIn => 'Anmeldung läuft …';
+
+  @override
+  String get commonLoadingRegions => 'Regionen werden geladen …';
+
+  @override
+  String get commonApplyingSetting => 'Einstellung wird angewendet …';
+
+  @override
   String get homeBackendUnreachable =>
       'Backend nicht erreichbar. Verbinden ist deaktiviert, bis der Server wieder erreichbar ist.';
 
