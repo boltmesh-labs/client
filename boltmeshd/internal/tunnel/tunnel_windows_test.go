@@ -237,6 +237,55 @@ func retargetConfigOwnerToCurrentUser(t *testing.T) {
 	t.Cleanup(func() { configOwnerSID = previous })
 }
 
+// TestEnableRestorePrivilegeRestoresToken covers the privilege handling that
+// lets the elevated installer make the directory SYSTEM-owned. A token that
+// holds SE_RESTORE_NAME must have it enabled only for the duration of the call,
+// and a token that does not hold it must be left alone rather than reporting a
+// failure of its own.
+func TestEnableRestorePrivilegeRestoresToken(t *testing.T) {
+	name, err := windows.UTF16PtrFromString("SeRestorePrivilege")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, name, &luid); err != nil {
+		t.Fatal(err)
+	}
+	token := windows.GetCurrentProcessToken()
+	restorePrivilegeState := func() (bool, error) {
+		_, enabled, err := tokenPrivilegeState(token, luid)
+		return enabled, err
+	}
+
+	before, err := restorePrivilegeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore, err := enableRestorePrivilege()
+	if err != nil {
+		t.Fatalf("enableRestorePrivilege() = %v", err)
+	}
+	if restore == nil {
+		t.Fatal("enableRestorePrivilege() returned a nil restore function")
+	}
+	during, err := restorePrivilegeState()
+	if err != nil {
+		restore()
+		t.Fatal(err)
+	}
+	restore()
+	after, err := restorePrivilegeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("SE_RESTORE_NAME enabled = %v after restore, want %v", after, before)
+	}
+	if before && !during {
+		t.Fatal("SE_RESTORE_NAME was enabled before the call but not during it")
+	}
+}
+
 // TestProtectConfigDirAppliesACL proves the syscall path works end to end.
 func TestProtectConfigDirAppliesACL(t *testing.T) {
 	dir := t.TempDir()

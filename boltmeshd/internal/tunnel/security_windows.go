@@ -105,6 +105,12 @@ func setConfigDACL(path string, acl *windows.ACL) error {
 
 // setConfigSecurityOnHandle applies owner and DACL to an already-open object.
 func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *windows.ACL) error {
+	restorePrivilege, err := enableRestorePrivilege()
+	if err != nil {
+		return fmt.Errorf("prepare the owner assignment: %w", err)
+	}
+	defer restorePrivilege()
+
 	if err := windows.SetSecurityInfo(
 		handle,
 		windows.SE_FILE_OBJECT,
@@ -119,6 +125,87 @@ func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *w
 		return fmt.Errorf("set owner and DACL: %w", err)
 	}
 	return nil
+}
+
+// enableRestorePrivilege turns SE_RESTORE_NAME on for the process token and
+// returns the function that puts it back. Assigning an owner other than the
+// caller's own token SID requires that privilege, and the accounts that have a
+// business reassigning ownership hold it disabled by default: LocalSystem, and
+// the elevated administrator the Windows installer runs as. Without enabling
+// it here, SetSecurityInfo rejects the SYSTEM owner with ERROR_INVALID_OWNER
+// and protectConfigDir fails closed, so the installer could never harden the
+// config directory it creates.
+//
+// A token that does not hold the privilege at all is left untouched: the
+// privilege cannot be granted from inside the process, and letting
+// SetSecurityInfo report ERROR_INVALID_OWNER keeps the failure attributable.
+// The returned function is never nil and is safe to call when nothing changed.
+func enableRestorePrivilege() (func(), error) {
+	name, err := windows.UTF16PtrFromString("SeRestorePrivilege")
+	if err != nil {
+		return nil, fmt.Errorf("encode the privilege name: %w", err)
+	}
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, name, &luid); err != nil {
+		return nil, fmt.Errorf("look up SE_RESTORE_NAME: %w", err)
+	}
+
+	token := windows.GetCurrentProcessToken()
+	present, enabled, err := tokenPrivilegeState(token, luid)
+	if err != nil {
+		return nil, err
+	}
+	if !present || enabled {
+		return func() {}, nil
+	}
+	if err := setPrivilegeEnabled(token, luid, true); err != nil {
+		// ERROR_NOT_ALL_ASSIGNED means the token lists the privilege but
+		// does not really hold it, so there is nothing to enable. Anything
+		// else is a genuine failure to report.
+		if !errors.Is(err, windows.ERROR_NOT_ALL_ASSIGNED) {
+			return nil, fmt.Errorf("enable SE_RESTORE_NAME: %w", err)
+		}
+		return func() {}, nil
+	}
+	return func() { _ = setPrivilegeEnabled(token, luid, false) }, nil
+}
+
+// tokenPrivilegeState reports whether the token holds the privilege and whether
+// it is currently enabled.
+func tokenPrivilegeState(token windows.Token, luid windows.LUID) (present, enabled bool, err error) {
+	var returned uint32
+	// The first call exists only to fill in the required size.
+	_ = windows.GetTokenInformation(token, windows.TokenPrivileges, nil, 0, &returned)
+	if returned == 0 {
+		return false, false, errors.New("process token reported an empty privilege set")
+	}
+	buffer := make([]byte, returned)
+	if err := windows.GetTokenInformation(
+		token, windows.TokenPrivileges, &buffer[0], uint32(len(buffer)), &returned,
+	); err != nil {
+		return false, false, fmt.Errorf("read the process token privileges: %w", err)
+	}
+	privileges := (*windows.Tokenprivileges)(unsafe.Pointer(&buffer[0])).AllPrivileges()
+	for _, privilege := range privileges {
+		if privilege.Luid == luid {
+			return true, privilege.Attributes&windows.SE_PRIVILEGE_ENABLED != 0, nil
+		}
+	}
+	return false, false, nil
+}
+
+// setPrivilegeEnabled enables or disables a single privilege. The privileges
+// left out of state keep their current state because disableAllPrivileges is
+// false, so this never disturbs a concurrent operation on another goroutine's
+// token use.
+func setPrivilegeEnabled(token windows.Token, luid windows.LUID, enable bool) error {
+	attributes := uint32(0)
+	if enable {
+		attributes = windows.SE_PRIVILEGE_ENABLED
+	}
+	state := windows.Tokenprivileges{PrivilegeCount: 1}
+	state.Privileges[0] = windows.LUIDAndAttributes{Luid: luid, Attributes: attributes}
+	return windows.AdjustTokenPrivileges(token, false, &state, uint32(unsafe.Sizeof(state)), nil, nil)
 }
 
 // ProtectDir applies the same SYSTEM + Administrators owner and protected
