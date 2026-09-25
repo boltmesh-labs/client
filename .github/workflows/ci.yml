@@ -392,6 +392,31 @@ jobs:
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
 
+      # The macOS backend is build-tagged like the Windows one, so it needs the
+      # same treatment or it is never analysed. `go vet` type-checks the
+      # darwin-tagged tests too; they cannot be *run* here (they need a utun
+      # interface and root), which is what the macOS runner is for.
+      - name: Run golangci-lint (macOS)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        with:
+          version: v2.13.2
+          working-directory: boltmeshd
+
+      - name: Cross-compile for macOS
+        run: |
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./...
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
+      # Host-platform only, deliberately. deadcode resolves build tags for the
+      # GOOS it runs under, so on Linux the macOS (and Windows) backends are
+      # invisible — and the UAPI translation layer they share would be reported
+      # as unreachable. The `go vet` steps above already type-check both tagged
+      # backends; this check exists to catch genuinely dead code in what the
+      # host actually builds.
       - name: Check for unreachable functions (deadcode)
         run: |
           out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)"

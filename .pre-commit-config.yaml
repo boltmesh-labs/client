@@ -59,6 +59,27 @@ repos:
         files: ^boltmeshd/
         pass_filenames: false
 
+      # The macOS backend lives entirely behind `//go:build darwin`, so neither
+      # the Linux nor the Windows lint ever sees it. Without this hook it
+      # would rot silently until someone built on a Mac.
+      - id: golangci-lint-boltmeshd-darwin
+        name: golangci-lint (boltmeshd, macOS)
+        entry: make -C boltmeshd lint-darwin
+        language: system
+        types: [go]
+        files: ^boltmeshd/
+        pass_filenames: false
+
+      # Type-checks the darwin-only files and their tests. The tagged tests
+      # themselves need a macOS host (utun + root) and run only there.
+      - id: go-vet-boltmeshd-darwin
+        name: go vet (boltmeshd, macOS)
+        entry: make -C boltmeshd test-darwin
+        language: system
+        types: [go]
+        files: ^boltmeshd/
+        pass_filenames: false
+
       # --- Go Tests / Module Metadata (boltmeshd) ---
       - id: go-test-boltmeshd
         name: go test (boltmeshd)
