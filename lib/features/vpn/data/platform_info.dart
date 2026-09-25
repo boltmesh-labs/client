@@ -33,6 +33,39 @@ String currentPlatformLabel() {
 /// (`--dart-define=VPN_PROVIDER_BUNDLE_ID=<ext id>`); ignored elsewhere.
 const _kProviderBundleId = String.fromEnvironment('VPN_PROVIDER_BUNDLE_ID');
 
+/// App Group shared container for iOS/macOS
+/// (`--dart-define=VPN_APP_GROUP=group.<...>`); ignored elsewhere.
+const _kAppGroup = String.fromEnvironment('VPN_APP_GROUP');
+
+/// Resolves the App Group ID to hand to the tunnel plugin.
+///
+/// The app and its Packet Tunnel extension must share one App Group: the
+/// extension reads the `wgQuick` config the app hands over through that
+/// container. `wireguard_flutter_plus` falls back to
+/// `group.orbanvpn.wireguard` when this is null, which is in nobody's
+/// provisioning profile — the connection then fails deep inside the
+/// extension with an opaque error. Failing fast here names the missing
+/// define instead. Parameters are injectable for tests.
+String resolveAppGroup({
+  TargetPlatform? platform,
+  String appGroup = _kAppGroup,
+  bool web = kIsWeb,
+}) {
+  if (web) return '';
+  final p = platform ?? defaultTargetPlatform;
+  if (p == TargetPlatform.iOS || p == TargetPlatform.macOS) {
+    if (appGroup.isEmpty) {
+      throw StateError(
+        'Missing VPN_APP_GROUP. Re-run with '
+        '--dart-define=VPN_APP_GROUP=group.<app group id> (the App Group '
+        'shared by the app and its Network Extension).',
+      );
+    }
+    return appGroup;
+  }
+  return '';
+}
+
 /// Resolves the bundle ID to hand to the tunnel plugin. The plugin
 /// documents `providerBundleIdentifier` as iOS/macOS-only, so every other
 /// platform (plus web) passes `''`. On Apple platforms a missing define

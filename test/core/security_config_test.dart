@@ -160,4 +160,71 @@ void main() {
       );
     });
   });
+
+  group('resolveAppGroup', () {
+    test('non-apple platforms pass empty string', () {
+      // The plugin ignores the App Group off Apple, so passing it elsewhere
+      // would be noise; empty keeps the call site uniform.
+      for (final p in [
+        TargetPlatform.android,
+        TargetPlatform.windows,
+        TargetPlatform.linux,
+        TargetPlatform.fuchsia,
+      ]) {
+        expect(resolveAppGroup(platform: p, appGroup: 'group.x'), '');
+      }
+    });
+
+    test('apple platforms require the dart-define', () {
+      // The plugin otherwise falls back to `group.orbanvpn.wireguard`, which
+      // is in no provisioning profile, so the connect fails inside the
+      // extension with an opaque error. Fail fast with a named define.
+      expect(
+        () => resolveAppGroup(platform: TargetPlatform.iOS),
+        throwsStateError,
+      );
+      expect(
+        () => resolveAppGroup(platform: TargetPlatform.macOS),
+        throwsStateError,
+      );
+      expect(
+        resolveAppGroup(
+          platform: TargetPlatform.iOS,
+          appGroup: 'group.com.boltmesh.boltmesh',
+        ),
+        'group.com.boltmesh.boltmesh',
+      );
+      expect(
+        resolveAppGroup(
+          platform: TargetPlatform.macOS,
+          appGroup: 'group.com.boltmesh.boltmesh',
+        ),
+        'group.com.boltmesh.boltmesh',
+      );
+    });
+
+    test('the error names the missing define', () {
+      // A build that misconfigures this should be told what to pass.
+      expect(
+        () => resolveAppGroup(platform: TargetPlatform.macOS),
+        throwsA(
+          predicate<Object>(
+            (e) => e.toString().contains('VPN_APP_GROUP'),
+            'mentions VPN_APP_GROUP',
+          ),
+        ),
+      );
+    });
+
+    test('web always passes empty string', () {
+      expect(
+        resolveAppGroup(
+          platform: TargetPlatform.macOS,
+          appGroup: 'group.x',
+          web: true,
+        ),
+        '',
+      );
+    });
+  });
 }

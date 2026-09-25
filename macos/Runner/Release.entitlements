@@ -4,7 +4,31 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- The OAuth loopback listener and the desktop tray's local socket.
+	     Neither is used on macOS today (the plugin's ASWebAuthenticationSession
+	     path needs no listener), but the entitlement is harmless to keep and
+	     removing it would break a future loopback port. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- Packet Tunnel provider host app. The Packet Tunnel extension target
+	     itself is NOT in this repository: it has to be added in Xcode (see
+	     SETUP.md "macOS Network Extension"), together with the WireGuardKitGo
+	     bridge it links against. A provisioning profile must include this
+	     entitlement, which Apple grants per-team for Network Extensions. -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+	<!-- Shared container the extension reads the wgQuick config from. Must
+	     match the extension target's App Group AND the profile; the ID is
+	     passed to the plugin via the VPN_APP_GROUP Dart define. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.boltmesh.boltmesh</string>
+	</array>
 </dict>
 </plist>

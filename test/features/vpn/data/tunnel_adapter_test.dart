@@ -24,7 +24,19 @@ class HangingTunnel implements WireGuardFlutterInterface {
     String? vpnName,
     String? iosAppGroup,
     String? extensionBundleId,
-  }) async {}
+  }) async {
+    initialized = true;
+    this.interfaceName = interfaceName;
+    this.iosAppGroup = iosAppGroup;
+  }
+
+  /// Records what the adapter handed the plugin on `initialize`.
+  bool initialized = false;
+  String? interfaceName;
+
+  /// Null here means the adapter omitted the App Group, which on Apple makes
+  /// the plugin fall back to a group no provisioning profile contains.
+  String? iosAppGroup;
   @override
   Future<void> startVpn({
     required String serverAddress,
@@ -262,6 +274,47 @@ void main() {
       );
 
       expect(adapter.handshakeReaderSupported, isTrue);
+    });
+  });
+
+  group('ensureInitialized', () {
+    tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    test('passes the App Group to the plugin on Apple', () async {
+      // The Packet Tunnel extension reads the wgQuick config out of the
+      // shared App Group container. Omitting it made the plugin fall back to
+      // `group.orbanvpn.wireguard` — in no provisioning profile — so the
+      // connect failed inside the extension with an opaque error.
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final tunnel = HangingTunnel([]);
+      final adapter = WireGuardTunnelAdapter.testUninitialized(tunnel);
+
+      await expectLater(
+        adapter.ensureInitialized(),
+        throwsStateError,
+        reason: 'a misconfigured Apple build must fail fast, naming the define',
+      );
+      expect(
+        tunnel.initialized,
+        isFalse,
+        reason: 'the plugin must not be initialized without a valid App Group',
+      );
+      expect(adapter.isReady, isFalse);
+    });
+
+    test('passes an empty App Group off Apple', () async {
+      // The plugin ignores it elsewhere; empty keeps the call site uniform and
+      // avoids implying an App Group exists on a platform without one.
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final tunnel = HangingTunnel([]);
+      final adapter = WireGuardTunnelAdapter.testUninitialized(tunnel);
+
+      await adapter.ensureInitialized();
+
+      expect(tunnel.initialized, isTrue);
+      expect(tunnel.iosAppGroup, '');
+      expect(tunnel.interfaceName, 'boltmesh0');
+      expect(adapter.isReady, isTrue);
     });
   });
 }

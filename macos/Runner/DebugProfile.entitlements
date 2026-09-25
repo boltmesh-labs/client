@@ -10,5 +10,17 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- Packet Tunnel provider host app. The extension target itself is added
+	     in Xcode, not in this repo (see SETUP.md "macOS Network Extension"). -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+	<!-- Shared container with the extension; passed to the plugin via
+	     the VPN_APP_GROUP Dart define. Must match the extension's group. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.boltmesh.boltmesh</string>
+	</array>
 </dict>
 </plist>

@@ -118,7 +118,24 @@ class FakeTunnel implements WireGuardFlutterInterface {
     String? vpnName,
     String? iosAppGroup,
     String? extensionBundleId,
-  }) async {}
+  }) async {
+    initialized = true;
+    this.interfaceName = interfaceName;
+    this.vpnName = vpnName;
+    this.iosAppGroup = iosAppGroup;
+    this.extensionBundleId = extensionBundleId;
+  }
+
+  /// `initialize` was called (the adapter only reports ready afterwards).
+  bool initialized = false;
+  String? interfaceName;
+  String? vpnName;
+
+  /// The App Group handed to the plugin. Null means the call site omitted it,
+  /// which on Apple makes the plugin fall back to a group that is in no
+  /// provisioning profile.
+  String? iosAppGroup;
+  String? extensionBundleId;
 
   @override
   Future<void> startVpn({

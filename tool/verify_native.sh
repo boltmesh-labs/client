@@ -479,6 +479,47 @@ else
   bad "windows/packaging/exe/boltmesh.iss can silently leave services behind"
 fi
 
+# Apple Network Extension entitlements. The extension *target* is created in
+# Xcode (it cannot be committed), but the entitlements the app target carries
+# can drift silently: a missing `networkextension` or App Group entry only
+# shows up as an opaque failure inside the Packet Tunnel extension on a
+# developer's Mac. Assert them here so the drift fails on Linux CI instead.
+#
+# The App Group must also match the one the app hands to the plugin; the Dart
+# side reads the same value from the VPN_APP_GROUP define, so both are
+# checked against the group declared in the entitlements.
+apple_entitlements=(
+  ios/Runner/Runner.entitlements
+  macos/Runner/DebugProfile.entitlements
+  macos/Runner/Release.entitlements
+)
+for f in "${apple_entitlements[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    bad "$f is missing"
+    continue
+  fi
+  if ! grep -q 'com.apple.developer.networking.networkextension' "$f" ||
+    ! grep -q 'packet-tunnel-provider' "$f"; then
+    bad "$f does not declare the packet-tunnel-provider capability"
+  elif ! grep -q 'com.apple.security.application-groups' "$f"; then
+    bad "$f declares no App Group (the extension reads the wgQuick config from it)"
+  else
+    ok "Apple entitlements declare the tunnel capability and App Group ($f)"
+  fi
+done
+
+# The adapter hands the plugin this App Group on Apple. A define that drifted
+# from the entitlements file would build cleanly and fail only at connect.
+apple_app_group=$(grep -ho 'group\.[A-Za-z0-9._-]*' \
+  macos/Runner/Release.entitlements | head -1)
+if [[ -z "$apple_app_group" ]]; then
+  bad "no App Group id found in macos/Runner/Release.entitlements"
+elif grep -qF "$apple_app_group" SETUP.md; then
+  ok "the entitlements App Group is documented for the VPN_APP_GROUP define"
+else
+  bad "the entitlements App Group ($apple_app_group) is not documented for VPN_APP_GROUP"
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "native platform contract checks failed" >&2
   exit 1

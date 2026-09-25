@@ -112,10 +112,14 @@ extension ConnectionTunnel on ConnectionController {
     bool sessionCurrent() => expectedSession == _sessionEpoch;
     if (!sessionCurrent()) return;
 
-    // Validate the Apple bundle ID before touching the live tunnel: a
-    // missing define must fail fast instead of stopping the working tunnel
-    // and then throwing.
+    // Validate the Apple Network-Extension build config before touching the
+    // live tunnel, so a missing define fails fast here rather than after the
+    // working tunnel has already been stopped. `bundleId` is what `startVpn`
+    // needs; the App Group is checked for the same reason even though
+    // `ensureInitialized` resolves it too — a connect must name the actual
+    // missing define, not a later plugin failure.
     final bundleId = resolveProviderBundleId();
+    resolveAppGroup();
     AppLog.info(
       'tunnel start gen=$_tunnelEpoch device=${AppLog.redact(dial.deviceId)} '
       'server=${dial.serverName} ${dial.endpoint}:${dial.wgPort}',

@@ -10,5 +10,13 @@
 	<array>
 		<string>packet-tunnel-provider</string>
 	</array>
+	<!-- Shared container the Packet Tunnel extension reads the wgQuick
+	     config from. Must match the extension target's App Group AND the
+	     provisioning profile; the ID is passed to the plugin via
+	     the VPN_APP_GROUP Dart define. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.boltmesh.boltmesh</string>
+	</array>
 </dict>
 </plist>

@@ -32,8 +32,11 @@ folders and never overwrites `lib/`.
 # API_BASE_URL defaults to https://api.boltmesh.mooo.com/v1 (production);
 # point it at the local stack with:
 flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1
-# iOS/macOS Network Extension target id:
-# --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.app.WGExtension
+# iOS/macOS Network Extension target id, and the App Group shared by the
+# app and that extension. Both are required on Apple; the app fails fast
+# naming whichever is missing (see SETUP.md "macOS"):
+# --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel
+# --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
 # optional public-key (SPKI) pin(s): comma-separated base64 SHA-256 of the
 # server cert's SubjectPublicKeyInfo (survives cert renewal while the key is
 # reused; compute with `openssl x509 -pubkey -noout | openssl pkey -pubin
@@ -123,11 +126,19 @@ in `test/support/fakes.dart`.
   `MinifiedTunnelBridgeTest` instrumentation smoke test, so a plugin update
   cannot silently turn handshake, active-peer, or ghost-kill reads into
   unknown/empty results again.
-- **iOS/macOS**: enable the NetworkExtension capability
-  (Packet Tunnel Provider) in Xcode for the Runner target
-  (`ios/Runner/Runner.entitlements` already declares it, but the
-  extension target + a provisioning profile with the entitlement are
-  still created in Xcode, not in this repo).
+- **iOS/macOS**: the tunnel is a **Network Extension**, so the app itself is
+  only half of it. The `networkextension` (Packet Tunnel) and App Group
+  entitlements are declared in `ios/Runner/Runner.entitlements` and
+  `macos/Runner/{DebugProfile,Release}.entitlements`, but the **extension
+  target**, its `WireGuardKitGo` bridge and a provisioning profile carrying
+  the entitlement are created in Xcode and are **not** in this repo — see
+  [SETUP.md "macOS"](SETUP.md#macos) for the full one-time setup. Both Apple
+  platforms need `--dart-define=VPN_PROVIDER_BUNDLE_ID=<ext id>` and
+  `--dart-define=VPN_APP_GROUP=group.<id>`; the app fails fast naming the
+  missing one rather than letting the plugin fall back to a group no profile
+  contains. Unlike Windows/Linux, macOS OAuth returns over the registered
+  `boltmesh://` custom scheme (no loopback listener — `flutter_web_auth_2`
+  implements macOS with `ASWebAuthenticationSession`).
 - **Windows**: hands all privileged work to the `boltmeshd` helper
   (`boltmeshd/`, installed as a LocalSystem service by the Inno Setup `.exe`).
   The plugin still bundles Wintun, `wireguard_svc.exe` and `wireguard.dll`,

@@ -11,6 +11,7 @@ import 'helper_socket_stub.dart'
     if (dart.library.io) 'helper_socket_io.dart'
     as helper_platform;
 import 'helper_tunnel_adapter.dart';
+import 'platform_info.dart';
 import 'tunnel_tuning.dart';
 
 /// True where the plugin has no handshake source of its own and the native
@@ -123,6 +124,23 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }) : _raw = raw,
        _initialized = true;
 
+  /// Test adapter with a pre-supplied plugin but initialization still
+  /// pending, so [ensureInitialized] actually runs (and its arguments can be
+  /// observed) without reaching `WireGuardFlutter.instance`, which throws off
+  /// a real platform.
+  @visibleForTesting
+  factory WireGuardTunnelAdapter.testUninitialized(
+    WireGuardFlutterInterface raw, {
+    HandshakeReader? handshakeReader,
+  }) {
+    final adapter = WireGuardTunnelAdapter.test(
+      raw,
+      handshakeReader: handshakeReader,
+    );
+    adapter._initialized = false;
+    return adapter;
+  }
+
   /// Own host channel for handshake reads (never the VPN plugin's).
   /// Missing handler (web, or a platform whose native code hasn't landed)
   /// resolves as unknown, never as a stall.
@@ -151,7 +169,16 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   Future<void> ensureInitialized() async {
     if (_initialized) return;
     final wg = _raw ?? WireGuardFlutter.instance;
-    await wg.initialize(interfaceName: 'boltmesh0', vpnName: 'BoltMesh VPN');
+    // `iosAppGroup` is the App Group the Packet Tunnel extension reads the
+    // wgQuick config from. Omitting it makes the plugin fall back to
+    // `group.orbanvpn.wireguard`, which is in no provisioning profile — the
+    // connect then fails inside the extension with an opaque error. Resolved
+    // through `resolveAppGroup()` so Apple fails fast with a named define.
+    await wg.initialize(
+      interfaceName: 'boltmesh0',
+      vpnName: 'BoltMesh VPN',
+      iosAppGroup: resolveAppGroup(),
+    );
     _raw = wg;
     _initialized = true;
   }

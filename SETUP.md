@@ -71,6 +71,85 @@ adb connect 127.0.0.1:5555
 flutter run -d 127.0.0.1:5555
 ```
 
+## macOS
+
+macOS has the least automated setup of any target: the tunnel is a **Network
+Extension**, which is a separate Xcode target plus a signing entitlement that
+cannot be produced from this repository. Everything below is a one-time,
+per-developer-Mac setup.
+
+**Nothing in this section can be done on Linux or Windows** — the Network
+Extension capability requires macOS with Xcode, and a provisioning profile
+from an Apple Developer account that has been granted the Network Extension
+entitlement for `packet-tunnel-provider`.
+
+### 1. Prereqs
+
+- macOS 12.0 or newer (the deployment target in
+  `macos/Runner.xcodeproj`), Xcode 15+.
+- Go on `PATH` (`brew install go`) — the extension links a Go-built static
+  library, see step 4.
+- An Apple Developer account with the **Network Extensions** capability.
+
+### 2. Add the Packet Tunnel extension target
+
+This is the part that is *not* in the repo. In Xcode
+(`open macos/Runner.xcworkspace`):
+
+1. **File ▸ New ▸ Target… ▸ Network Extension**, product name
+   `boltmeshTunnel`, language **Swift**, provider type **Packet Tunnel
+   Provider**. Set its bundle identifier to a prefix of the app's
+   (`PRODUCT_BUNDLE_IDENTIFIER` in `macos/Runner/Configs/AppInfo.xcconfig`) —
+   e.g. `com.boltmesh.boltmesh.tunnel`.
+2. Give **both** the Runner target and the extension target the **Network
+   Extensions** (Packet Tunnel) capability and the **App Groups** capability,
+   and check the **same** group in both:
+   `group.com.boltmesh.boltmesh`. That value is already declared in
+   `macos/Runner/*.entitlements` and `ios/Runner/Runner.entitlements`; it
+   must match the App Group in the provisioning profile or the connect fails.
+3. Replace the generated `PacketTunnelProvider.swift` with the WireGuard
+   implementation from the plugin's `ios_setup_readme.md` (it is
+   reproduced in the `wireguard_flutter_plus` package under
+   `~/.pub-cache/hosted/pub.dev/wireguard_flutter_plus-*/`).
+
+### 3. Wire up the WireGuardKitGo bridge
+
+The extension needs a Go static library (`libwg-go.a`) that is not vendored
+here. Follow step 4 of the plugin's `ios_setup_readme.md` for macOS:
+
+- vendor `WireGuardKitGo` from
+  [`wireguard-apple`](https://github.com/aakashch0179/wireguard-apple) into
+  the project;
+- add an **External Build System** target running `/usr/bin/make` in
+  `$(PROJECT_DIR)/WireGuardKitGo`, with *Pass build settings in environment*
+  checked;
+- make the extension depend on that target and link `out/libwg-go.a`.
+
+### 4. Build and run
+
+Both defines are required on Apple; the app fails fast with a named error if
+either is missing (see `resolveAppGroup`/`resolveProviderBundleId` in
+`lib/features/vpn/data/platform_info.dart`).
+
+```bash
+flutter config --enable-macos-desktop
+flutter pub get
+
+flutter run -d macos \
+  --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel \
+  --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
+```
+
+Accept the system VPN consent prompt on first connect. OAuth uses the system
+browser and returns over the registered `boltmesh://` custom scheme (declared
+in `macos/Runner/Info.plist`) — unlike Windows/Linux, macOS does **not** use
+the ephemeral loopback listener, because `flutter_web_auth_2` implements
+macOS with `ASWebAuthenticationSession` and that path needs no listener.
+
+Handshakes are **not** readable on Apple: there is no native reader, so the
+health policy treats a null handshake as absence of evidence and heals only
+from a degraded OS stage. See README "Handshake readers".
+
 ## Linux (redhat)
 
 ### 1. Dependencies
