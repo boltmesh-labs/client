@@ -186,27 +186,48 @@ func enableRestorePrivilege() (restore func(), canAssign bool, err error) {
 		return nil, false, fmt.Errorf("look up SE_RESTORE_NAME: %w", err)
 	}
 
-	token := windows.GetCurrentProcessToken()
+	// GetCurrentProcessToken is a pseudo handle that is valid for TOKEN_QUERY
+	// only; AdjustTokenPrivileges needs a real handle opened with
+	// TOKEN_ADJUST_PRIVILEGES and rejects the pseudo one with
+	// ERROR_INVALID_HANDLE. The read below still works with the pseudo handle,
+	// which is why the misuse only surfaced at the AdjustTokenPrivileges call.
+	// This handle has to outlive the function because the restore closure runs
+	// after it returns, so it is released there rather than in a defer.
+	var token windows.Token
+	if err := windows.OpenProcessToken(
+		windows.CurrentProcess(),
+		windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY,
+		&token,
+	); err != nil {
+		return nil, false, fmt.Errorf("open the process token: %w", err)
+	}
+	release := func() { _ = windows.CloseHandle(windows.Handle(token)) }
+
 	present, enabled, err := tokenPrivilegeState(token, luid)
 	if err != nil {
+		release()
 		return nil, false, err
 	}
 	if !present {
-		return func() {}, false, nil
+		return release, false, nil
 	}
 	if enabled {
-		return func() {}, true, nil
+		return release, true, nil
 	}
 	if err := setPrivilegeEnabled(token, luid, true); err != nil {
 		// ERROR_NOT_ALL_ASSIGNED means the token lists the privilege but
 		// does not really hold it, so there is nothing to enable. Anything
 		// else is a genuine failure to report.
 		if !errors.Is(err, windows.ERROR_NOT_ALL_ASSIGNED) {
+			release()
 			return nil, false, fmt.Errorf("enable SE_RESTORE_NAME: %w", err)
 		}
-		return func() {}, false, nil
+		return release, false, nil
 	}
-	return func() { _ = setPrivilegeEnabled(token, luid, false) }, true, nil
+	return func() {
+		_ = setPrivilegeEnabled(token, luid, false)
+		release()
+	}, true, nil
 }
 
 // tokenPrivilegeState reports whether the token holds the privilege and whether
