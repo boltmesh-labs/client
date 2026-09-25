@@ -23,22 +23,40 @@ class ControlPlaneProbe {
   /// [ConnectionTuning.controlProbeTimeout], so this holds a single entry.
   final Map<Duration, Dio> _clients = {};
 
-  Future<bool?> check({Duration timeout = const Duration(seconds: 5)}) async {
-    if (Env.isLoopbackApi) return null;
-    try {
-      final healthEndpoint = healthUrl(Env.apiBaseUrl);
-      final dio = _clients.putIfAbsent(
+  /// Tests inject a client factory (and the base URL / loopback decision)
+  /// instead: the production values are compile-time `Env` constants, and
+  /// `flutter test` stubs `HttpClient` so a real socket is never reachable.
+  /// The seam still exercises the real [Dio] request path and, crucially, the
+  /// tri-state branching below.
+  final String? apiBaseUrl;
+  final bool? loopbackApi;
+  final Dio Function(String healthEndpoint, Duration timeout)? dioFactory;
+
+  ControlPlaneProbe({this.apiBaseUrl, this.loopbackApi, this.dioFactory});
+
+  Dio _clientFor(String healthEndpoint, Duration timeout) =>
+      _clients.putIfAbsent(
         timeout,
-        () => pinnedDio(
-          BaseOptions(
-            baseUrl: healthEndpoint,
-            connectTimeout: timeout,
-            receiveTimeout: timeout,
-            sendTimeout: timeout,
-          ),
-        ),
+        () =>
+            dioFactory?.call(healthEndpoint, timeout) ??
+            pinnedDio(
+              BaseOptions(
+                baseUrl: healthEndpoint,
+                connectTimeout: timeout,
+                receiveTimeout: timeout,
+                sendTimeout: timeout,
+              ),
+            ),
       );
-      final response = await dio.get<dynamic>('');
+
+  Future<bool?> check({Duration timeout = const Duration(seconds: 5)}) async {
+    if (loopbackApi ?? Env.isLoopbackApi) return null;
+    try {
+      final healthEndpoint = healthUrl(apiBaseUrl ?? Env.apiBaseUrl);
+      final response = await _clientFor(
+        healthEndpoint,
+        timeout,
+      ).get<dynamic>('');
       AppLog.info('control probe ok status=${response.statusCode}');
       return true;
     } on DioException catch (e) {
