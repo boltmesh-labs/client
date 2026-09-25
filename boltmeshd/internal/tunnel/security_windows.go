@@ -19,6 +19,15 @@ const (
 	administratorsSID = "S-1-5-32-544"
 )
 
+// configOwnerSID is the owner setConfigSecurity applies and verifyConfigSecurity
+// requires. Assigning an owner other than the caller's own token SID needs
+// SE_RESTORE_NAME, so it is a variable only so the Windows tests can retarget
+// the assertion at the current user when the runner token lacks that privilege
+// (a non-elevated CI runner, an unelevated shell). Production always runs
+// boltmeshd as LocalSystem, where S-1-5-18 is a no-op assignment.
+// TestConfigOwnerSIDIsLocalSystem pins the production value.
+var configOwnerSID = localSystemSID
+
 const (
 	// Do not request DELETE while applying security to a path. Apart from
 	// being unnecessary, it lets an already-open handle with a permissive
@@ -192,7 +201,7 @@ func configACL(inheritance uint32) (*windows.ACL, error) {
 // handle also means a path swap cannot redirect the operation to another
 // object between the open and the security update.
 func setConfigSecurity(handle windows.Handle, inheritance uint32) error {
-	owner, err := windows.StringToSid(localSystemSID)
+	owner, err := windows.StringToSid(configOwnerSID)
 	if err != nil {
 		return fmt.Errorf("resolve SYSTEM SID: %w", err)
 	}
@@ -220,7 +229,7 @@ func verifyConfigSecurity(handle windows.Handle) error {
 	if err != nil {
 		return fmt.Errorf("read owner: %w", err)
 	}
-	system, err := windows.StringToSid(localSystemSID)
+	system, err := windows.StringToSid(configOwnerSID)
 	if err != nil {
 		return fmt.Errorf("resolve SYSTEM SID: %w", err)
 	}
@@ -229,7 +238,7 @@ func verifyConfigSecurity(handle windows.Handle) error {
 		if owner != nil {
 			ownerSID = owner.String()
 		}
-		return fmt.Errorf("owner is %s, want %s", ownerSID, localSystemSID)
+		return fmt.Errorf("owner is %s, want %s", ownerSID, configOwnerSID)
 	}
 
 	control, _, err := sd.Control()

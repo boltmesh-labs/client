@@ -173,9 +173,11 @@ jobs:
           api-level: ${{ matrix.api-level }}
           arch: x86_64
           disable-animations: true
-          script: |
-            cd android
-            ./gradlew :app:connectedReleaseAndroidTest
+          # The action runs each `script` line in its own `sh -c`, so a
+          # `cd android` line would be a no-op subshell and `./gradlew`
+          # would be resolved at the repo root. Set the step cwd instead.
+          working-directory: android
+          script: ./gradlew :app:connectedReleaseAndroidTest
 
   validate-native:
     name: "Validate native platform contracts"

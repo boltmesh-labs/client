@@ -209,6 +209,34 @@ func TestConfigACLPolicy(t *testing.T) {
 	}
 }
 
+// TestConfigOwnerSIDIsLocalSystem pins the production owner. The end-to-end test
+// above may retarget configOwnerSID when the runner token cannot assign a
+// foreign owner, so the default has to be asserted on its own.
+func TestConfigOwnerSIDIsLocalSystem(t *testing.T) {
+	if configOwnerSID != localSystemSID {
+		t.Fatalf("configOwnerSID = %q, want %q", configOwnerSID, localSystemSID)
+	}
+}
+
+// retargetConfigOwnerToCurrentUser points configOwnerSID at the invoking account,
+// which is always assignable, and restores it when the test ends. Production
+// runs as LocalSystem, where the SYSTEM owner assignment is a no-op; this only
+// keeps the rest of protectConfigDir covered on a token without
+// SE_RESTORE_NAME.
+func retargetConfigOwnerToCurrentUser(t *testing.T) {
+	t.Helper()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatalf("read the current token user: %v", err)
+	}
+	if user.User.Sid == nil {
+		t.Fatal("current token user has no SID")
+	}
+	previous := configOwnerSID
+	configOwnerSID = user.User.Sid.String()
+	t.Cleanup(func() { configOwnerSID = previous })
+}
+
 // TestProtectConfigDirAppliesACL proves the syscall path works end to end.
 func TestProtectConfigDirAppliesACL(t *testing.T) {
 	dir := t.TempDir()
@@ -238,7 +266,18 @@ func TestProtectConfigDirAppliesACL(t *testing.T) {
 	})
 
 	if err := protectConfigDir(dir); err != nil {
-		t.Fatalf("protectConfigDir() = %v", err)
+		// Assigning an owner other than the caller's own token SID requires
+		// SE_RESTORE_NAME, which a non-elevated CI runner token does not
+		// hold, so Windows rejects the SYSTEM owner outright. SetSecurityInfo
+		// applies the descriptor in one call, so the failed attempt left the
+		// directory untouched and the retry starts from the same state.
+		if !errors.Is(err, windows.ERROR_INVALID_OWNER) {
+			t.Fatalf("protectConfigDir() = %v", err)
+		}
+		retargetConfigOwnerToCurrentUser(t)
+		if err := protectConfigDir(dir); err != nil {
+			t.Fatalf("protectConfigDir() with a self-assignable owner = %v", err)
+		}
 	}
 
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
