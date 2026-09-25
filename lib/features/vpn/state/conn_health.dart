@@ -7,10 +7,7 @@ const _noNetworkNote =
 
 extension ConnectionHealth on ConnectionController {
   bool _healthSessionCurrent(int sessionEpoch, int epoch, DialParams dial) =>
-      sessionEpoch == _sessionEpoch &&
-      epoch == _tunnelEpoch &&
-      snap.phase == ConnPhase.connected &&
-      identical(snap.dial, dial);
+      _sessionCurrent(sessionEpoch: sessionEpoch, epoch: epoch, dial: dial);
 
   /// Runs at most one health tick across timer, resume, and manual callers.
   /// This is deliberately shared with the public method rather than living
@@ -136,7 +133,9 @@ extension ConnectionHealth on ConnectionController {
         snap.backendIssue == BackendIssue.serverError;
     final answeredBackendIssue = backendAnswered();
     final stageStalled =
-        stage != null && _isDegradedStage(stage) && snap.pollFailures >= 1;
+        stage != null &&
+        _isDegradedStage(stage) &&
+        snap.pollFailures >= ConnectionTuning.handshakeStallPollThreshold;
     final handshakeAge = handshake == null ? null : now.difference(handshake);
     final probeEcho =
         stageStalled ||
@@ -194,8 +193,10 @@ extension ConnectionHealth on ConnectionController {
         ) &&
         isBackendCorroborated(
           pollFailures: snap.pollFailures,
+          pollThreshold: ConnectionTuning.handshakeStallPollThreshold,
           lastStatusAt: snap.lastStatusAt,
           now: now,
+          quietFor: ConnectionTuning.backendQuietFor,
         );
     // Hard ceiling: past [ConnectionTuning.hardHandshakeStaleAfter]
     // (observed) or [ConnectionTuning.hardFirstHandshakeCeiling] after a
@@ -307,8 +308,10 @@ extension ConnectionHealth on ConnectionController {
       autoFailoverAttempts: snap.autoFailoverAttempts,
       pollFailures: snap.pollFailures,
       healThreshold: ConnectionTuning.failoverHealThreshold,
+      maxFailovers: ConnectionTuning.maxAutoFailovers,
       lastStatusAt: snap.lastStatusAt,
       now: now,
+      quietFor: ConnectionTuning.backendQuietFor,
     )) {
       // A corroborated stall that already survived a same-server restart has
       // proven the cached path dead: stop before discovery so the region

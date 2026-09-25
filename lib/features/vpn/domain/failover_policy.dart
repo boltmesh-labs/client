@@ -5,6 +5,13 @@ import '../data/models.dart';
 /// Kept free of Riverpod/timers/storage so it can be unit-tested in
 /// isolation. Thresholds live with the controller; only the decision
 /// functions live here.
+///
+/// The policy parameters ([healThreshold], [maxFailovers],
+/// [pollThreshold], [quietFor]) are required rather than defaulted: a
+/// silent default would be a second copy of the tuned value in
+/// `ConnectionTuning`, and the two drifting apart is exactly how a retune
+/// stops taking effect. Callers pass the constant; tests pass an explicit
+/// value.
 
 /// True when a corroborated stall should escalate from a same-server
 /// offline restart to switching to a different server.
@@ -27,11 +34,11 @@ bool shouldEscalateToFailover({
   required int autoHealAttempts,
   required int autoFailoverAttempts,
   required int pollFailures,
-  int healThreshold = 2,
-  int maxFailovers = 3,
+  required int healThreshold,
+  required int maxFailovers,
+  required Duration quietFor,
   DateTime? lastStatusAt,
   DateTime? now,
-  Duration quietFor = const Duration(seconds: 15),
 }) =>
     autoFailoverAttempts < maxFailovers &&
     autoHealAttempts >= healThreshold &&
@@ -48,11 +55,8 @@ bool shouldEscalateToFailover({
 /// poll) or the last success is older than [quietFor].
 ///
 /// A null [now] (callers without a clock) disables the slow-track so the
-/// poll-failure gate stays the only signal. The default [quietFor] mirrors
-/// [ConnectionTuning.backendQuietFor] (kept as a literal: domain stays
-/// free of the state layer; the controller always passes the tuned value
-/// explicitly). It only stops a *recently proven* reachable backend from
-/// escalating, it never triggers extra polls.
+/// poll-failure gate stays the only signal. It only stops a *recently proven*
+/// reachable backend from escalating, it never triggers extra polls.
 bool _backendQuiet({
   required DateTime? lastStatusAt,
   required DateTime? now,
@@ -76,10 +80,10 @@ bool _backendQuiet({
 /// heal entirely instead of merely staying on same-server restarts.
 bool isBackendCorroborated({
   required int pollFailures,
-  int pollThreshold = 1,
+  required int pollThreshold,
+  required Duration quietFor,
   DateTime? lastStatusAt,
   DateTime? now,
-  Duration quietFor = const Duration(seconds: 15),
 }) =>
     pollFailures >= pollThreshold ||
     _backendQuiet(lastStatusAt: lastStatusAt, now: now, quietFor: quietFor);

@@ -52,10 +52,11 @@ extension ConnectionPoll on ConnectionController {
         // both the device and the dial generation after taking the lock.
         final release = await _mutex.acquire('status-404');
         try {
-          if (sessionEpoch != _sessionEpoch ||
-              epoch != _tunnelEpoch ||
-              snap.phase != ConnPhase.connected ||
-              !identical(snap.dial, pollDial)) {
+          if (!_sessionCurrent(
+            sessionEpoch: sessionEpoch,
+            epoch: epoch,
+            dial: pollDial,
+          )) {
             AppLog.info('status 404 superseded (not forgotten)');
             return;
           }
@@ -89,10 +90,11 @@ extension ConnectionPoll on ConnectionController {
         // A response — including 401/403/429/5xx — proves that the control
         // plane answered. Do not let an old transport-failure count or the
         // quiet-track timer turn that answered state into a heal trigger.
-        if (sessionEpoch != _sessionEpoch ||
-            epoch != _tunnelEpoch ||
-            snap.phase != ConnPhase.connected ||
-            !identical(snap.dial, pollDial)) {
+        if (!_sessionCurrent(
+          sessionEpoch: sessionEpoch,
+          epoch: epoch,
+          dial: pollDial,
+        )) {
           AppLog.info('status app error superseded (not recorded)');
           return;
         }
@@ -179,10 +181,11 @@ extension ConnectionPoll on ConnectionController {
       // tunnel.
       final release = await _mutex.acquire('status-suspended');
       try {
-        if (sessionEpoch != _sessionEpoch ||
-            epoch != _tunnelEpoch ||
-            snap.phase != ConnPhase.connected ||
-            !identical(snap.dial, pollDial)) {
+        if (!_sessionCurrent(
+          sessionEpoch: sessionEpoch,
+          epoch: epoch,
+          dial: pollDial,
+        )) {
           AppLog.info('status suspension superseded (not applied)');
           return;
         }
@@ -232,10 +235,11 @@ extension ConnectionPoll on ConnectionController {
     final hs = await _readHandshake();
     // The read above is an await: drop a snapshot a heal/failover just
     // superseded (same reason as the pre-status epoch check).
-    if (sessionEpoch != _sessionEpoch ||
-        epoch != _tunnelEpoch ||
-        snap.phase != ConnPhase.connected ||
-        !identical(snap.dial, pollDial)) {
+    if (!_sessionCurrent(
+      sessionEpoch: sessionEpoch,
+      epoch: epoch,
+      dial: pollDial,
+    )) {
       AppLog.info('status poll superseded by tunnel-restart (not counted)');
       return;
     }

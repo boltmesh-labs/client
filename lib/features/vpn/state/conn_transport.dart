@@ -96,8 +96,10 @@ extension ConnectionTransport on ConnectionController {
   /// a tunnel stop that a racing poll success has made unnecessary.
   bool _backendLooksReachable() => !isBackendCorroborated(
     pollFailures: snap.pollFailures,
+    pollThreshold: ConnectionTuning.handshakeStallPollThreshold,
     lastStatusAt: snap.lastStatusAt,
     now: _clock.now(),
+    quietFor: ConnectionTuning.backendQuietFor,
   );
 
   /// In-tunnel probe: [call] with [timeout] (defaulting to the shared

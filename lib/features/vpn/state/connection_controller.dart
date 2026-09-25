@@ -245,6 +245,41 @@ class ConnectionController extends Notifier<ConnState> {
   ConnState get snap => state;
   set snap(ConnState s) => state = s;
 
+  /// True while the session captured by [sessionEpoch]/[epoch] and dialing
+  /// [dial] is still the live one — the guard every post-await recovery path
+  /// re-checks before acting on a result.
+  ///
+  /// The four clauses are the whole contract, and they used to be spelled out
+  /// inline at a dozen call sites. Centralizing them is what keeps them
+  /// honest: a member added here (the `readerSupported` gate on
+  /// [isHandshakeStale] was silently missing from three of them) is added
+  /// everywhere at once, and a superseded path can no longer check a subset
+  /// and act on a stale result.
+  bool _sessionCurrent({
+    required int sessionEpoch,
+    required int epoch,
+    required DialParams? dial,
+  }) =>
+      sessionEpoch == _sessionEpoch &&
+      epoch == _tunnelEpoch &&
+      snap.phase == ConnPhase.connected &&
+      identical(snap.dial, dial);
+
+  /// [_sessionCurrent] for callers that captured only *some* of the anchors
+  /// (a lock-free discovery op that knows no tunnel epoch, or a public tick
+  /// that may run before any tunnel exists). A null anchor is not checked —
+  /// the check is skipped, never treated as a mismatch. Callers that do have
+  /// every anchor should prefer [_sessionCurrent]: it is one expression
+  /// rather than three independent early returns.
+  bool _sessionStillMatches({
+    int? sessionEpoch,
+    int? epoch,
+    DialParams? dial,
+  }) =>
+      (sessionEpoch == null || sessionEpoch == _sessionEpoch) &&
+      (epoch == null || epoch == _tunnelEpoch) &&
+      (dial == null || identical(snap.dial, dial));
+
   @override
   ConnState build() {
     ref.onDispose(() {

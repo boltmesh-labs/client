@@ -120,9 +120,11 @@ extension ConnectionRecovery on ConnectionController {
     final sessionEpoch = expectedSession ?? _sessionEpoch;
     final release = await _mutex.acquire('recovery-exhausted');
     try {
-      if (sessionEpoch != _sessionEpoch ||
-          (expectedEpoch != null && expectedEpoch != _tunnelEpoch) ||
-          (expectedDial != null && !identical(snap.dial, expectedDial)) ||
+      if (!_sessionStillMatches(
+            sessionEpoch: expectedSession,
+            epoch: expectedEpoch,
+            dial: expectedDial,
+          ) ||
           (!hardStalled && _lastStatusAnswered) ||
           snap.phase != ConnPhase.connected) {
         return;
@@ -179,9 +181,11 @@ extension ConnectionRecovery on ConnectionController {
     final sessionEpoch = expectedSession ?? _sessionEpoch;
     final release = await _mutex.acquire('auto-failover');
     try {
-      if (expectedSession != null && expectedSession != _sessionEpoch) return;
-      if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
-      if (expectedDial != null && !identical(snap.dial, expectedDial)) {
+      if (!_sessionStillMatches(
+        sessionEpoch: expectedSession,
+        epoch: expectedEpoch,
+        dial: expectedDial,
+      )) {
         return;
       }
       if (!hardStalled && _lastStatusAnswered) return;
@@ -228,9 +232,11 @@ extension ConnectionRecovery on ConnectionController {
     int? expectedEpoch,
     DialParams? expectedDial,
   }) async {
-    if (expectedSession != null && expectedSession != _sessionEpoch) return;
-    if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
-    if (expectedDial != null && !identical(snap.dial, expectedDial)) {
+    if (!_sessionStillMatches(
+      sessionEpoch: expectedSession,
+      epoch: expectedEpoch,
+      dial: expectedDial,
+    )) {
       return;
     }
     if (!hardStalled && _lastStatusAnswered) return;

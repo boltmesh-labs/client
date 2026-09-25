@@ -484,6 +484,10 @@ extension ConnectionColdStart on ConnectionController {
       final handshakeStaleConfirmed = isHandshakeStale(
         lastHandshakeAt: handshake,
         now: now,
+        // Without this a platform with no native handshake reader (Apple)
+        // would read its permanent null as "never handshook" and tear down a
+        // live tunnel. Absence of evidence never proves death.
+        readerSupported: _readerSupported,
         // A cold-anchored `_connectedAt` must not count as fresh here: it
         // was set minutes after the tunnel died (see
         // [_unknownHandshakeIsColdAnchored]). Full null window, same

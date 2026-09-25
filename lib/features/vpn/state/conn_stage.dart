@@ -174,8 +174,11 @@ extension ConnectionStage on ConnectionController {
   }) async {
     try {
       if (dial == null) return;
-      if (sessionEpoch != _sessionEpoch || _tunnelEpoch != epoch) return;
-      if (snap.phase != ConnPhase.connected || !identical(snap.dial, dial)) {
+      if (!_sessionCurrent(
+        sessionEpoch: sessionEpoch,
+        epoch: epoch,
+        dial: dial,
+      )) {
         return;
       }
       // 1. Server truth: an explicit dead peer tears down, an unreachable
@@ -201,10 +204,11 @@ extension ConnectionStage on ConnectionController {
         AppLog.error('external-stop verify failed', e);
         return;
       }
-      if (sessionEpoch != _sessionEpoch ||
-          _tunnelEpoch != epoch ||
-          snap.phase != ConnPhase.connected ||
-          !identical(snap.dial, dial)) {
+      if (!_sessionCurrent(
+        sessionEpoch: sessionEpoch,
+        epoch: epoch,
+        dial: dial,
+      )) {
         AppLog.info('external-stop verify superseded -> skip');
         return;
       }
@@ -229,6 +233,11 @@ extension ConnectionStage on ConnectionController {
         lastHandshakeAt: handshake,
         now: now,
         connectedAt: _connectedAt,
+        // Without this a platform with no native handshake reader (Apple)
+        // would read its permanent null as "never handshook", reach the
+        // "all dead" teardown below, and kill a live tunnel. Absence of
+        // evidence defers instead (see the unknown-read branch below).
+        readerSupported: _readerSupported,
         // Verification keeps the full null window: it only runs with OS
         // stage evidence in hand, so there is no reason to shorten the
         // 150s aging (the 45s never-handshook grace is a connected-stage
@@ -296,10 +305,11 @@ extension ConnectionStage on ConnectionController {
     VpnStage? restage, {
     required int sessionEpoch,
   }) {
-    if (sessionEpoch != _sessionEpoch ||
-        _tunnelEpoch != epoch ||
-        snap.phase != ConnPhase.connected ||
-        !identical(snap.dial, dial)) {
+    if (!_sessionCurrent(
+      sessionEpoch: sessionEpoch,
+      epoch: epoch,
+      dial: dial,
+    )) {
       return;
     }
     AppLog.info('external-stop uncorroborated ($why) -> adopted');
@@ -349,10 +359,11 @@ extension ConnectionStage on ConnectionController {
   }) async {
     final release = await _mutex.acquire('external-stop');
     try {
-      if (sessionEpoch != _sessionEpoch ||
-          _tunnelEpoch != epoch ||
-          snap.phase != ConnPhase.connected ||
-          !identical(snap.dial, dial)) {
+      if (!_sessionCurrent(
+        sessionEpoch: sessionEpoch,
+        epoch: epoch,
+        dial: dial,
+      )) {
         AppLog.info('corroborated teardown superseded -> skip');
         return;
       }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:boltmesh/core/clock.dart';
 import 'package:boltmesh/features/vpn/data/device_store.dart';
 import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
@@ -10,6 +11,7 @@ import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/domain/tunnel_policy.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
@@ -40,6 +42,7 @@ class ColdTunnel extends support.FakeTunnel {
   required ColdStore store,
   required ColdTunnel tunnel,
   required VpnApi api,
+  Clock? clock,
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -50,6 +53,7 @@ class ColdTunnel extends support.FakeTunnel {
       networkMonitorProvider.overrideWithValue(
         support.FakeNetworkMonitor(true),
       ),
+      if (clock != null) clockProvider.overrideWithValue(clock),
     ],
   );
   addTearDown(() async {
@@ -597,6 +601,64 @@ void main() {
     });
 
     test(
+      'down-read cold restore with a null handshake and no reader bounces',
+      () async {
+        // Sibling of the external-stop regression, for the cold-restore
+        // liveness read. `isHandshakeStale` defaults `readerSupported: true`,
+        // so a call site that forgets the argument counts a permanent null
+        // (no native handshake reader exists on any Apple platform) as
+        // "never handshook" and, with a terminal stage and a performed-dead
+        // gateway, ghost-kills a tunnel that may be perfectly alive.
+        //
+        // Apple is simulated by pointing the host handshake channel at a
+        // platform with no native handler and leaving the test seam unset, so
+        // the read resolves null. The gateway probe is the harness's
+        // immediate-dead double, so the remaining corroboration the
+        // corroborated-dead branch needs is already in hand.
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+        final events = <String>[];
+        final store = ColdStore();
+        await store.setDeviceId('dev-1');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        await store.setLastDialJson(jsonEncode(dialJson()));
+        // Terminal stage (the `disconnected` default) plus no traffic
+        // counters: only the unreadable handshake can vouch for liveness,
+        // and it cannot.
+        final tunnel = ColdTunnel(events, traffic: const {});
+        final clock = support.FakeClock();
+        final (container, ctl) = coldContainer(
+          store: store,
+          tunnel: tunnel,
+          clock: clock,
+          api: configApi(events, (o) {
+            if (o.path.endsWith('/config')) {
+              // The restore anchors `_connectedAt` before confirming, so a
+              // fast confirm leaves the never-handshook window closed and the
+              // reader-support argument unobservable. Age past it during the
+              // confirm to model a slow restore.
+              clock.advance(const Duration(minutes: 5));
+              return dialJson();
+            }
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+
+        await ctl.reconcileColdStart();
+
+        // Absence of evidence is unknown, not death: the restore bounces onto
+        // the server-confirmed peer rather than reporting an outside kill.
+        // The bounce's start itself fails (an iOS start needs the
+        // VPN_PROVIDER_BUNDLE_ID define this suite does not set), which does
+        // not change the decision under test.
+        final state = container.read(connectionProvider);
+        expect(state.dial?.serverId, 'srv-1');
+        expect(state.message, isNot(contains('outside the app')));
+      },
+    );
+
+    test(
       'post-restore grace ignores the replayed disconnected stage',
       () async {
         final events = <String>[];
@@ -676,6 +738,66 @@ void main() {
         // Ghost-kill downs the owning backend directly: no reclaim-start.
         expect(events, isNot(contains('tunnel:start')));
         expect(ctl.debugColdRestoreConfirmedAt, isNull);
+      },
+    );
+
+    test(
+      'external stop with a null handshake and no reader support defers',
+      () async {
+        // Regression: `isHandshakeStale` defaults `readerSupported: true`, so
+        // a call site that forgets the argument reads a permanent null — every
+        // Apple platform has no native handshake reader — as "never
+        // handshook". That stale-confirms the peer and, with a terminal stage
+        // and a performed-dead gateway, tears down a live tunnel. Absence of
+        // evidence must defer to the health/status machinery instead.
+        //
+        // Simulate Apple by pointing the host handshake channel at a platform
+        // with no native handler (so `handshakeReaderSupported` is false and
+        // the read resolves null) and leaving the test seam unset. Applied
+        // after the restore so the iOS-only bundle-id requirement does not
+        // fail the bounce that establishes the session.
+        final events = <String>[];
+        final store = ColdStore();
+        await store.setDeviceId('dev-1');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        await store.setLastDialJson(jsonEncode(dialJson()));
+        final tunnel = ColdTunnel(events);
+        // Age the session past the never-handshook grace so a null read is
+        // only ever *counted* if the call site believes a reader exists.
+        final clock = support.FakeClock();
+        final (container, ctl) = coldContainer(
+          store: store,
+          tunnel: tunnel,
+          clock: clock,
+          api: configApi(events, (o) {
+            if (o.path.endsWith('/config')) return dialJson();
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+
+        await ctl.reconcileColdStart();
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        // Past the cold-restore grace, so the outside stop is verified
+        // instead of ignored, and past the never-handshook window, so a null
+        // read is only counted if the call site believes a reader exists.
+        ctl.debugColdRestoreConfirmedAt = clock.now().subtract(
+          const Duration(minutes: 1),
+        );
+        clock.advance(const Duration(minutes: 5));
+        debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        events.clear();
+
+        tunnel.emit(VpnStage.disconnected);
+        await settleEvents(20);
+
+        // The handshake is unreadable, not stale: the session must survive
+        // and keep the tunnel it cannot prove is dead.
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.dial?.serverId, 'srv-1');
+        expect(events, isNot(contains('tunnel:stop')));
+        expect(events.where((e) => e.contains('/disconnect')), isEmpty);
       },
     );
 

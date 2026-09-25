@@ -16,6 +16,14 @@ DiscoveryServer server(String id, {int peers = 0}) => DiscoveryServer(
 );
 
 void main() {
+  // The policy functions take their thresholds as required arguments so the
+  // tuned values in `ConnectionTuning` are the single source. These mirror
+  // that class; a retune there is a retune in production.
+  const healThreshold = 2;
+  const maxFailovers = 3;
+  const pollThreshold = 1;
+  const quietFor = Duration(seconds: 15);
+
   group('shouldEscalateToFailover', () {
     test('false before the heal threshold', () {
       expect(
@@ -23,6 +31,9 @@ void main() {
           autoHealAttempts: 1,
           autoFailoverAttempts: 0,
           pollFailures: 3,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isFalse,
       );
@@ -34,6 +45,9 @@ void main() {
           autoHealAttempts: 2,
           autoFailoverAttempts: 0,
           pollFailures: 1,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isTrue,
       );
@@ -45,6 +59,9 @@ void main() {
           autoHealAttempts: 5,
           autoFailoverAttempts: 0,
           pollFailures: 0,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isFalse,
       );
@@ -56,6 +73,9 @@ void main() {
           autoHealAttempts: 9,
           autoFailoverAttempts: 3,
           pollFailures: 9,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isFalse,
       );
@@ -76,6 +96,8 @@ void main() {
           pollFailures: 0,
           lastStatusAt: stale,
           now: now,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isTrue,
       );
@@ -89,6 +111,9 @@ void main() {
           pollFailures: 0,
           lastStatusAt: fresh,
           now: now,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isFalse,
       );
@@ -101,6 +126,9 @@ void main() {
           autoFailoverAttempts: 0,
           pollFailures: 0,
           lastStatusAt: stale,
+          healThreshold: healThreshold,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
         ),
         isFalse,
       );
@@ -114,25 +142,51 @@ void main() {
 
     test('true on a poll failure even with a fresh backend', () {
       expect(
-        isBackendCorroborated(pollFailures: 1, lastStatusAt: fresh, now: now),
+        isBackendCorroborated(
+          pollFailures: 1,
+          lastStatusAt: fresh,
+          now: now,
+          pollThreshold: pollThreshold,
+          quietFor: quietFor,
+        ),
         isTrue,
       );
     });
 
     test('true on a quiet backend with zero poll failures', () {
       expect(
-        isBackendCorroborated(pollFailures: 0, lastStatusAt: stale, now: now),
+        isBackendCorroborated(
+          pollFailures: 0,
+          lastStatusAt: stale,
+          now: now,
+          pollThreshold: pollThreshold,
+          quietFor: quietFor,
+        ),
         isTrue,
       );
     });
 
     test('true when no poll ever succeeded', () {
-      expect(isBackendCorroborated(pollFailures: 0, now: now), isTrue);
+      expect(
+        isBackendCorroborated(
+          pollFailures: 0,
+          now: now,
+          pollThreshold: pollThreshold,
+          quietFor: quietFor,
+        ),
+        isTrue,
+      );
     });
 
     test('false when the backend just answered', () {
       expect(
-        isBackendCorroborated(pollFailures: 0, lastStatusAt: fresh, now: now),
+        isBackendCorroborated(
+          pollFailures: 0,
+          lastStatusAt: fresh,
+          now: now,
+          pollThreshold: pollThreshold,
+          quietFor: quietFor,
+        ),
         isFalse,
       );
     });
