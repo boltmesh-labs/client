@@ -32,6 +32,9 @@ repos:
         entry: shellcheck -x
         language: system
         types: [shell]
+        # Gradle's wrapper is vendored verbatim from the Flutter SDK's
+        # gradle_wrapper artifact; its warnings are upstream, not ours.
+        exclude: ^android/gradlew$
 
       # --- Go Fmt (boltmeshd) ---
       - id: go-fmt-boltmeshd

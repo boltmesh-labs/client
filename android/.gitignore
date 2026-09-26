@@ -1,8 +1,9 @@
-gradle-wrapper.jar
+# The Gradle wrapper is tracked, unlike the Flutter template: the CI
+# `validate-android` job runs ./gradlew without a prior `flutter build`,
+# which is what normally injects these files. They are byte-identical to
+# the Flutter SDK's gradle_wrapper artifact, so flutter never overrides them.
 /.gradle
 /captures/
-/gradlew
-/gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
 .cxx/

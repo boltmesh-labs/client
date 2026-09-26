@@ -249,6 +249,18 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # This job goes straight to ./gradlew instead of `flutter build`, so
+      # nothing has written android/local.properties yet. The Flutter Gradle
+      # plugin loader reads flutter.sdk from it unguarded (no FLUTTER_ROOT
+      # fallback), and setting sdk.dir keeps the SDK path explicit rather than
+      # relying on the $ANDROID_HOME fallback.
+      - name: Write android/local.properties
+        run: |
+          : "${FLUTTER_ROOT:?flutter-action did not export FLUTTER_ROOT}"
+          : "${ANDROID_HOME:?no Android SDK on PATH}"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_ROOT" "$ANDROID_HOME" \
+            > android/local.properties
+
       # GitHub's hosted Android images expose KVM for the emulator step.  The
       # rule is harmless on runners where /dev/kvm is already configured.
       - name: Enable Android emulator acceleration
