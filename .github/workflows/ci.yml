@@ -440,13 +440,23 @@ jobs:
 
       # Host-platform only, deliberately. deadcode resolves build tags for the
       # GOOS it runs under, so on Linux the macOS (and Windows) backends are
-      # invisible — and the UAPI translation layer they share would be reported
-      # as unreachable. The `go vet` steps above already type-check both tagged
+      # invisible. The `go vet` steps above already type-check both tagged
       # backends; this check exists to catch genuinely dead code in what the
       # host actually builds.
+      #
+      # -test is required, not cosmetic. internal/tunnel/uapi.go carries no
+      # build tag by design — the wg-quick <-> UAPI translation is the
+      # unit-testable part of the macOS backend and its tests run on every
+      # runner — yet its only production callers live in the darwin-tagged
+      # tunnel_darwin.go. Without the test packages as entry points the whole
+      # file reads as unreachable here, even though it is compiled and covered
+      # by uapi_test.go. This mirrors golangci-lint's `unused`, which also
+      # counts test usage, which is why the lint steps above report nothing
+      # where this step did. The trade is that a helper used only by tests is
+      # no longer reported as dead.
       - name: Check for unreachable functions (deadcode)
         run: |
-          out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)"
+          out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...)"
           if [ -n "$out" ]; then
             echo "Unreachable functions detected:"
             echo "$out"

@@ -82,27 +82,6 @@ func protectConfigDir(dir string) error {
 	return nil
 }
 
-// setConfigDACL is retained for package-level Windows callers that supplied
-// an ACL explicitly. New code uses setConfigSecurity, which also changes the
-// owner through a verified handle.
-//
-//nolint:unused // kept as a compatibility seam for Windows package tests.
-func setConfigDACL(path string, acl *windows.ACL) error {
-	owner, err := windows.StringToSid(localSystemSID)
-	if err != nil {
-		return fmt.Errorf("resolve SYSTEM SID: %w", err)
-	}
-	handle, err := openPathNoReparse(path, configSecurityAccess, configDirectoryShare)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = windows.CloseHandle(handle) }()
-	if err := setConfigSecurityOnHandle(handle, owner, acl); err != nil {
-		return fmt.Errorf("set security on %s: %w", path, err)
-	}
-	return nil
-}
-
 // setConfigSecurityOnHandle applies owner and DACL to an already-open object.
 func setConfigSecurityOnHandle(handle windows.Handle, owner *windows.SID, acl *windows.ACL) error {
 	restorePrivilege, canAssign, err := enableRestorePrivilege()
