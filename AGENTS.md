@@ -15,7 +15,7 @@ BoltMesh is a Flutter WireGuard client (`lib/`, root `pubspec.yaml`) plus a priv
 Run the CI validation order when changing Dart code:
 
 ```sh
-flutter pub get
+flutter pub get --enforce-lockfile
 bash tool/check_generated.sh
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
@@ -61,7 +61,7 @@ make build                # Linux + Windows helper binaries in ignored bin/
 
 - `lib/`: `app/` (auth/navigation/lifecycle), `core/` (HTTP, environment, errors, locale, logging, mutex, theme, storage), `features/auth/{data,state,ui}`, `features/vpn/{data,domain,state,ui}`, and `previews/`.
 - `test/` mirrors `lib/`; app-level suites such as `widget_test.dart` and `regions_refresh_test.dart` stay at the test root.
-- `.pre-commit-config.yaml` runs shellcheck, Go formatting/linting/tests/module checks for Linux and Windows, generated-code and Flutter lockfile checks, Dart formatting/analyze, actionlint, gitleaks, and repository hygiene hooks. Formatting hooks may modify files; inspect the diff.
+- `.pre-commit-config.yaml` runs shellcheck, Go formatting/linting/tests/module checks for Linux and Windows, generated-code and Flutter lockfile checks, Dart formatting/analyze, actionlint, gitleaks, and repository hygiene hooks. Formatting hooks may modify files; inspect the diff. `npx` tools are pinned in the hook entries; bump the pin in the same commit as any reformat. The CI `pre-commit` job sets `SKIP` for the hooks that need Flutter or golangci-lint, because `validate` and `validate-boltmeshd` already run those exact commands — add a new toolchain-dependent hook to that `SKIP` list, or it will run in a job that cannot satisfy it.
 - See `README.md` for runtime flags, platform behavior, backend flows, and handshake readers; `SETUP.md` for fresh-machine prerequisites; `boltmeshd/README.md` for the socket/pipe protocol and security model; `DEPLOYMENT.md` for releases.
 - Other boltmesh repos live in parent directory (backend, frontend, agent, client, infra)
 

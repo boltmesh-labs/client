@@ -132,13 +132,20 @@ repos:
       # --- Prettier ---
       - id: prettier
         name: prettier
-        entry: npx prettier --write
+        # Pinned deliberately: an unpinned `npx prettier` reformats the tree
+        # whenever a new release changes a default, which fails CI over files
+        # nobody touched. Bump this together with a formatting commit.
+        entry: npx --yes prettier@3.9.9 --write
         language: system
         types_or: [css, javascript, jsx, ts, tsx, json, yaml, html]
+        # Xcode owns the asset-catalog Contents.json files, so keep their
+        # Xcode-generated layout out of prettier's way.
+        exclude: ^(ios|macos)/Runner/Assets\.xcassets/
 
       # --- Markdown Lint ---
       - id: markdownlint
         name: markdownlint
-        entry: npx markdownlint-cli --fix
+        # Pinned for the same reason as prettier above.
+        entry: npx --yes markdownlint-cli@0.49.1 --fix
         language: system
         types: [markdown]

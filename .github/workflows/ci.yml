@@ -52,6 +52,18 @@ jobs:
 
       - name: Run pre-commit on all files
         uses: pre-commit/action@v3.0.1
+        # The hooks below shell out to toolchains this job deliberately does
+        # not install, and each is already enforced by a dedicated job running
+        # the same command: check-generated, flutter-lockfile, dart-format and
+        # flutter-analyze by `validate` (the lockfile via its
+        # `pub get --enforce-lockfile`); the three golangci-lint hooks by
+        # `validate-boltmeshd` (v2.13.2 for linux, windows and darwin). Every
+        # other hook here is toolchain-free, so this job stays a fast gate.
+        env:
+          SKIP: >-
+            check-generated,flutter-lockfile,dart-format,flutter-analyze,
+            golangci-lint-boltmeshd,golangci-lint-boltmeshd-windows,
+            golangci-lint-boltmeshd-darwin
 
   # Dependabot covers four ecosystems here, but nothing checked the actions
   # and build tooling a PR actually pulls in. This catches a newly introduced
@@ -90,7 +102,10 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        # --enforce-lockfile fails instead of silently rewriting pubspec.lock.
+        # This is now the only place the lockfile is enforced: the pre-commit
+        # job skips the flutter-lockfile hook (see that step's SKIP list).
+        run: flutter pub get --enforce-lockfile
 
       # Regenerates l10n/build_runner output and fails if it differs from the
       # committed tree: those files are excluded from analyze, so a stale one
