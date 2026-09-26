@@ -45,7 +45,7 @@ Non-vulnerability security questions may be raised as public GitHub issues with 
 
 ## Automated Security Controls
 
-CI runs on every push and pull request targeting `main`/`develop` through `.github/workflows/ci.yml`. Tagged releases (`.github/workflows/default.yml`) reuse that same validation suite via `workflow_call` before building and signing artifacts:
+CI runs on every push and pull request targeting `main`/`develop` through `.github/workflows/ci.yml`. Tagged releases (`.github/workflows/release.yml`) reuse that same validation suite via `workflow_call` before building and signing artifacts:
 
 - **Trivy filesystem scanning** (`security` job): fails the build on CRITICAL findings and ignores advisories without an available fix.
 - **Test coverage gate**: `flutter test --coverage` plus `tool/coverage_gate.sh 80` enforces a floor on hand-written Dart lines; `validate-boltmeshd` runs `gofmt`, golangci-lint, `deadcode` and `go test ./...` on the Go helper.

@@ -1,6 +1,6 @@
 name: "Client CI"
 
-# Validation only. The tag-driven release pipeline lives in `default.yml`,
+# Validation only. The tag-driven release pipeline lives in `release.yml`,
 # which reuses this workflow via `workflow_call` so a tagged release is built
 # on the same validated commit without duplicating every check.
 on:
@@ -19,7 +19,7 @@ permissions:
 
 # A superseded push must not keep burning the full fan-out (two emulators,
 # Windows + Go setups). Cancel-in-progress on PRs and pushes alike; a tagged
-# release is driven by `default.yml`, which calls this workflow in its own
+# release is driven by `release.yml`, which calls this workflow in its own
 # `release` context, where the same group is unique per run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

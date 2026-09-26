@@ -6,7 +6,7 @@ name: "Client Release"
 # boltmeshd checks as a PR — on this exact tagged commit — without duplicating
 # every step here. The signing jobs stay in this file because the keyless
 # cosign identity is bound to the workflow file path
-# (`.../.github/workflows/default.yml@refs/tags/v*`); renaming it would change
+# (`.../.github/workflows/release.yml@refs/tags/v*`); renaming it would change
 # the certificate identity consumers verify against (see DEPLOYMENT.md).
 on:
   push:

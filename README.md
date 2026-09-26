@@ -331,7 +331,7 @@ transitive AndroidX deps require >= 34, so `android/build.gradle.kts` bumps
 stale plugin modules to 36 (the `flutter.compileSdkVersion` default on
 Flutter 3.47) via a `gradle.beforeProject` hook — it must run before AGP's
 own afterEvaluate hook or AGP rejects the write as "too late". Delete the
-hook if the plugin ships a fixed release. CI (`default.yml` `build-android`
+hook if the plugin ships a fixed release. CI (`release.yml` `build-android`
 job, on tags) runs this same `flutter build appbundle --release`; the
 remaining KGP warning (`flutter_web_auth_2`, `wireguard_flutter_plus`
 apply their own Kotlin plugin) is upstream's to fix and doesn't fail

@@ -17,7 +17,7 @@ signing gates. For local development see [SETUP.md](SETUP.md); the run-time
 ## 1. Release versioning
 
 The git tag is the release source of truth. Every build job in
-`.github/workflows/default.yml` runs `dart run tool/set_release_version.dart`
+`.github/workflows/release.yml` runs `dart run tool/set_release_version.dart`
 first to derive `pubspec.yaml`'s `version:` from the `vX.Y.Z` tag (build number
 from `GITHUB_RUN_NUMBER`), because both the Android `versionName` and the
 fastforge package names/versions are read from pubspec. The checked-in
@@ -34,7 +34,7 @@ git push origin v1.2.3
 ## 2. CI/CD pipeline
 
 CI is split by lifecycle. `.github/workflows/ci.yml` runs the validation jobs on
-pushes and pull requests to `main`/`develop`; `.github/workflows/default.yml`
+pushes and pull requests to `main`/`develop`; `.github/workflows/release.yml`
 runs on `v*` tags, calls `ci.yml` as a reusable workflow (`workflow_call`) so a
 release is built on the same validated commit, then builds and publishes:
 
@@ -45,14 +45,14 @@ release is built on the same validated commit, then builds and publishes:
 | `validate-windows` | `ci.yml` | every push/PR, and the release gate | `flutter build windows --debug`, Windows-tagged `boltmeshd` tests |
 | `validate-boltmeshd` | `ci.yml` | every push/PR, and the release gate | `gofmt`, golangci-lint (Linux + `GOOS=windows`), `deadcode`, `GOOS=windows` build/vet, `go test ./...` under `boltmeshd/` |
 | `security` | `ci.yml` | every push/PR, and the release gate | Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
-| `build-android` | `default.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key |
-| `build-linux` | `default.yml` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
-| `build-windows` | `default.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
-| `release` | `default.yml` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
+| `build-android` | `release.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key |
+| `build-linux` | `release.yml` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
+| `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
+| `release` | `release.yml` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
 
-Each build job depends on `default.yml`'s single `validate` job — the whole
+Each build job depends on `release.yml`'s single `validate` job — the whole
 `ci.yml` suite above — so a failing test or scan blocks the release. The signing
-jobs stay in `default.yml` because the keyless cosign identity is bound to the
+jobs stay in `release.yml` because the keyless cosign identity is bound to the
 workflow file path at the tag (see [Verifying a release](#verifying-a-release)).
 Each host runs only its own fastforge jobs, which is why the same
 `--name=production` release works from both the Linux and Windows runners.
@@ -112,7 +112,7 @@ gh attestation verify <package>.deb --repo boltmesh-labs/client
 cosign verify-blob \
   --bundle <package>.deb.sigstore.json \
   --certificate-identity-regexp \
-    'https://github.com/boltmesh-labs/client/.github/workflows/default.yml@refs/tags/.*' \
+    'https://github.com/boltmesh-labs/client/.github/workflows/release.yml@refs/tags/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   <package>.deb
 ```
@@ -136,5 +136,5 @@ verify the same way (the latter hold the provenance and SBOM predicates).
   `id-token: write` and `attestations: write` permissions and a public
   repository (the public-good Sigstore instance). Fix and re-run — the job fails
   rather than publish assets nothing can verify.
-- **A tagged build is skipped**: `.github/workflows/default.yml` is gated on
+- **A tagged build is skipped**: `.github/workflows/release.yml` is gated on
   `refs/tags/v*`; confirm the pushed tag starts with `v`.
