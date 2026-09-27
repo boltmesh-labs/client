@@ -1,0 +1,41 @@
+# Normalize every text file to LF in the repository and check LF out on every
+# platform, so a CRLF/LF mix can never be committed and no developer sees a
+# whole-file diff just for having a different core.autocrlf.
+* text=auto eol=lf
+
+# Windows batch scripts are the one exception, and they opt out of conversion
+# entirely rather than asking for CRLF: `eol=crlf` would still store LF in the
+# repository and only write CRLF to the working tree, which is not enough for
+# `android/gradlew.bat` -- that file is vendored byte-for-byte from the Flutter
+# SDK's gradle_wrapper artifact and must stay byte-identical to upstream.
+# cmd.exe also mis-parses labels and `goto` in an LF-only file, so CRLF is the
+# correct storage form for these regardless.
+*.bat -text
+*.cmd -text
+
+# Never let text=auto guess about these; a false "text" verdict would corrupt
+# them in the repository.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.jar binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.o binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.mp4 binary
+*.mov binary
