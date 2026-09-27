@@ -78,6 +78,30 @@ postinstall_scripts:
   - install -Dm644 /usr/share/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket
   - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmesh-enroll-user /usr/libexec/boltmesh/boltmesh-enroll-user
   - install -Dm644 /usr/share/boltmesh/boltmeshd/99-boltmesh-unmanaged.conf /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+  # wg-quick needs net.ipv4.conf.all.src_valid_mark for a full-tunnel default
+  # route, but the helper cannot write it: the unit keeps
+  # ProtectKernelTunables, so /proc/sys is read-only in its namespace, and
+  # systemd >= 259 rejects a ReadWritePaths= entry inside that hierarchy with
+  # status=226/NAMESPACE. Set the tunable host-wide here, at install, where
+  # /proc/sys is still writable; wg-quick then skips its own write. A host that
+  # already sets it is left alone, and a failure to apply is not fatal to the
+  # install because it only affects full-tunnel routing.
+  - install -Dm644 /usr/share/boltmesh/boltmeshd/80-boltmesh-src-valid-mark.conf /usr/lib/sysctl.d/80-boltmesh-src-valid-mark.conf
+  # procps' `sysctl --load` only reads /etc/sysctl.conf and /etc/sysctl.d, so it
+  # exits 0 without ever applying a /usr/lib drop-in. systemd-sysctl searches the
+  # full path including /usr/lib/sysctl.d; fall back to writing the one key.
+  # Failing to apply is not fatal to the install: it only affects full-tunnel
+  # routing, and the admin warning names the key.
+  - |
+    rc=0
+    if command -v systemd-sysctl >/dev/null 2>&1; then
+      systemd-sysctl >/dev/null 2>&1 || rc=1
+    else
+      sysctl -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1 || rc=1
+    fi
+    if [ "$rc" -ne 0 ]; then
+      printf 'boltmesh: could not apply net.ipv4.conf.all.src_valid_mark=1; set it by hand for full-tunnel routing\n' >&2
+    fi
   # Create the group and enroll the unique active desktop user when the
   # helper validates SUDO_UID/PKEXEC_UID or loginctl identifies one.  If no
   # unambiguous user exists, the command prints an actionable warning and the
@@ -141,6 +165,11 @@ postuninstall_scripts:
     rm -f /usr/libexec/boltmesh/boltmeshd
     rm -f /usr/libexec/boltmesh/boltmesh-enroll-user
     rm -f /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+    rmdir /etc/NetworkManager/conf.d >/dev/null 2>&1 || true
+    # The sysctl is host-wide, so removing the drop-in stops BoltMesh from
+    # asserting it. Leave the live value alone: another package or the admin
+    # may now depend on it, and it is harmless without the helper.
+    rm -f /usr/lib/sysctl.d/80-boltmesh-src-valid-mark.conf
     rmdir /usr/libexec/boltmesh >/dev/null 2>&1 || true
     systemctl daemon-reload >/dev/null 2>&1 || true
     nmcli general reload conf >/dev/null 2>&1 || true

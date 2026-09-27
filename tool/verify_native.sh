@@ -38,25 +38,82 @@ else
   printf 'skip  systemd-analyze unavailable\n'
 fi
 
-# wg-quick enables policy routing for a full-tunnel AllowedIPs list by writing
-# src_valid_mark. Preserve ProtectKernelTunables for every other kernel setting,
-# but exempt exactly that file; otherwise strict mode cannot establish its
-# default route and wg-quick up aborts.
+# wg-quick enables policy routing for a full-tunnel AllowedIPs list and writes
+# src_valid_mark, but the helper must not be granted that write: the unit keeps
+# ProtectKernelTunables, so /proc/sys is read-only in the helper's namespace,
+# and systemd >= 259 fails the unit with status=226/NAMESPACE when a
+# ReadWritePaths= entry points inside that hierarchy. The tunable is therefore
+# set host-wide by the packaged sysctl.d drop-in, which also makes wg-quick
+# skip its own write. Assert both halves: no /proc/sys exception in the unit,
+# and the drop-in that replaces it is still shipped.
 read_write_paths="$(sed -n 's/^ReadWritePaths=//p' boltmeshd/deploy/boltmeshd.service)"
-src_valid_mark_writable=0
-proc_sys_fully_writable=0
+proc_sys_writable=0
 for path in $read_write_paths; do
   case "${path#-}" in
-    /proc/sys/net/ipv4/conf/all/src_valid_mark) src_valid_mark_writable=1 ;;
-    /proc/sys | /proc/sys/*) proc_sys_fully_writable=1 ;;
+    /proc/sys | /proc/sys/*) proc_sys_writable=1 ;;
   esac
 done
+src_valid_mark_conf=boltmeshd/deploy/80-boltmesh-src-valid-mark.conf
 if grep -qE '^ProtectKernelTunables=yes$' boltmeshd/deploy/boltmeshd.service &&
-  [[ "$src_valid_mark_writable" -eq 1 && "$proc_sys_fully_writable" -eq 0 ]]; then
-  ok 'Linux full-tunnel keeps a narrow src_valid_mark exception'
+  [[ "$proc_sys_writable" -eq 0 ]] &&
+  grep -qx 'net.ipv4.conf.all.src_valid_mark = 1' "$src_valid_mark_conf"; then
+  ok 'Linux full-tunnel sets src_valid_mark host-wide, not via a /proc/sys exception'
 else
   bad 'Linux full-tunnel cannot write wg-quick src_valid_mark safely'
 fi
+
+# Both packages have to ship that drop-in, or the helper loses full-tunnel.
+# Check each file separately: grep -q across several files succeeds on any one
+# match, which would let a package silently drop the drop-in.
+src_valid_mark_staged=0
+if grep -q '80-boltmesh-src-valid-mark.conf' boltmeshd/packaging/stage.sh; then
+  src_valid_mark_staged=1
+fi
+for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_config.yaml; do
+  grep -q 'sysctl.d/80-boltmesh-src-valid-mark.conf' "$config" || src_valid_mark_staged=0
+done
+if [[ "$src_valid_mark_staged" -eq 1 ]]; then
+  ok 'the deb and rpm packages stage and install the src_valid_mark drop-in'
+else
+  bad 'a Linux package does not install the src_valid_mark drop-in'
+fi
+
+# Fastforge reads postinstall_scripts/postuninstall_scripts as a list of
+# strings. A plain YAML scalar holding ": " (any printf message) parses as a
+# map instead and aborts the maker with a cast error, so every entry has to
+# stay a string. Block scalars keep their text verbatim, which is what the
+# enroll-user and teardown entries already rely on.
+for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_config.yaml; do
+  non_string="$(python3 - "$config" <<'PY'
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)
+for key in ("postinstall_scripts", "postuninstall_scripts"):
+    for item in yaml.safe_load(open(sys.argv[1])).get(key) or []:
+        if not isinstance(item, str):
+            print(f"{sys.argv[1]}: {key} entry is {type(item).__name__}, not a string")
+PY
+)"
+  if [[ -z "$non_string" ]]; then
+    ok "$config scriptlets are all strings"
+  else
+    bad "$non_string"
+  fi
+done
+
+# procps' `sysctl --load` reads only /etc/sysctl.conf and /etc/sysctl.d, so it
+# exits 0 while silently skipping a /usr/lib/sysctl.d drop-in. Applying through
+# systemd-sysctl (or a direct sysctl -w) is what actually reaches the file.
+for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_config.yaml; do
+  # Strip comment lines first: the entry above explains this trap by name.
+  if grep -v '^[[:space:]]*#' "$config" | grep -q 'sysctl --load'; then
+    bad "$config applies sysctl with procps 'sysctl --load', which skips /usr/lib/sysctl.d"
+  else
+    ok "$config applies the src_valid_mark drop-in through systemd-sysctl"
+  fi
+done
 
 # The daemon's signal path and the unit-level fallback must both tear down the
 # tunnel, and the service (not the socket) must own the runtime directory that

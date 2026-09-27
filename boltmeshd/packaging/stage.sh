@@ -36,6 +36,7 @@ mkdir -p "$stage"
 install -m 0644 "$here/../deploy/boltmeshd.service" "$stage/boltmeshd.service"
 install -m 0644 "$here/../deploy/boltmeshd.socket" "$stage/boltmeshd.socket"
 install -m 0644 "$here/../deploy/99-boltmesh-unmanaged.conf" "$stage/99-boltmesh-unmanaged.conf"
+install -m 0644 "$here/../deploy/80-boltmesh-src-valid-mark.conf" "$stage/80-boltmesh-src-valid-mark.conf"
 install -m 0755 "$here/enroll-user.sh" "$stage/boltmesh-enroll-user"
 
 echo "staged boltmeshd ($goarch) into $stage"

@@ -52,10 +52,15 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 SystemCallArchitectures=native
-# wg-quick writes src_valid_mark when AllowedIPs installs a default route.
-# Keep every other kernel tunable read-only while allowing full-tunnel mode to
-# create the interface's policy-routing table.
-ReadWritePaths=/run -/etc/resolv.conf /proc/sys/net/ipv4/conf/all/src_valid_mark
+# wg-quick needs net.ipv4.conf.all.src_valid_mark for a full-tunnel default
+# route, but it must not write it here: ProtectKernelTunables makes /proc/sys
+# read-only in this namespace, and systemd >= 259 rejects a ReadWritePaths=
+# entry inside that hierarchy with status=226/NAMESPACE, so the unit would
+# never start. The package instead ships
+# /usr/lib/sysctl.d/80-boltmesh-src-valid-mark.conf and sets the tunable
+# host-wide at install; wg-quick skips its own write when it is already 1.
+# Every other kernel tunable stays read-only to the helper.
+ReadWritePaths=/run -/etc/resolv.conf
 UMask=0077
 
 [Install]
