@@ -212,6 +212,18 @@ sudo dnf install clang cmake ninja-build pkg-config gtk3-devel libX11-devel \
 required by the tray plugin the desktop build links; without them
 `flutter build linux` fails in `pkg_check_modules`.
 
+Packaging needs two more, which nothing installs for you:
+
+```bash
+sudo dnf install rpm-build patchelf
+```
+
+`fastforge release` builds the rpm through `rpmbuild` and rewrites the bundled
+plugin's RUNPATH with `patchelf`. Both are hard requirements of the rpm job, and
+the packager declares neither: it fails with a bare `MakeError`, and a missing
+`patchelf` surfaces as an unrelated-looking process error. The deb job needs
+neither. The `build-linux` CI job installs both explicitly.
+
 ### 2. Flutter SDK
 
 ```bash
