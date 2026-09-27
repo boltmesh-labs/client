@@ -520,7 +520,8 @@ extension ConnectionConnect on ConnectionController {
           best.servers.any((s) => s.id == currentServer)) {
         AppLog.info('quick connect auto: already on best region ${best.id}');
         snap = snap.copyWith(
-          message: 'Already on ${snap.dial?.serverName ?? 'the best server'}.',
+          message:
+              'Already connected to ${snap.dial?.serverName ?? 'the best server'}.',
         );
         return;
       }

@@ -49,8 +49,11 @@ void main() {
   testWidgets('stays silent on a benign same-target no-op', (tester) async {
     await trigger(
       tester,
-      const ConnState(phase: ConnPhase.connected, message: 'Already on one.'),
+      const ConnState(
+        phase: ConnPhase.connected,
+        message: 'Already connected to one.',
+      ),
     );
-    expect(find.text('Already on one.'), findsNothing);
+    expect(find.text('Already connected to one.'), findsNothing);
   });
 }

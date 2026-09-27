@@ -1733,7 +1733,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-1');
       expect(state.regionId, isNull);
       expect(state.serverId, isNull);
-      expect(state.message, contains('Already on'));
+      expect(state.message, contains('Already connected to'));
     });
 
     test('connected auto switches one-shot without pinning', () async {
