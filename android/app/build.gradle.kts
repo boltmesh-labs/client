@@ -110,7 +110,7 @@ flutter {
 dependencies {
     // MainActivity's handshake reader (CompletableDeferred/await against the
     // wireguard_flutter_plus plugin's backend).
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // androidx.test:runner calls androidx.tracing.Trace from
     // AndroidJUnitRunner.onCreate. When the androidTest APK is minified it
     // treats androidx.tracing as a library provided by the app, so R8 must not
@@ -123,7 +123,7 @@ dependencies {
     // (GoBackend/Tunnel/Config). Must stay on the exact version the plugin
     // bundles so both load the same classes.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
-    androidTestImplementation("androidx.test:core:1.6.1")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }
