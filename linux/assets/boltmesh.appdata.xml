@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 BoltMesh Team. Licensed under CC0-1.0 for the metadata. -->
+<component type="desktop-application">
+  <!-- The id is reverse-DNS, as appstreamcli requires for a desktop
+       application, and matches the application ID the GTK window reports
+       (see startup_wm_class in the packaging configs). It deliberately does not
+       match the installed filename: the generated spec hardcodes
+       /usr/share/metainfo/%{name}.appdata.xml, and the component is linked to
+       the launcher by <launchable> rather than by filename. -->
+  <id>com.boltmesh.boltmesh</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>BoltMesh</name>
+  <summary>WireGuard VPN client</summary>
+  <description>
+    <p>
+      BoltMesh is a WireGuard VPN client. It provisions a tunnel on a BoltMesh
+      region, brings it up with a single action, and routes your traffic through
+      it.
+    </p>
+    <p>
+      The application itself is unprivileged. A small systemd service, installed
+      alongside the app and activated on demand, performs the operations that
+      need root: creating the WireGuard interface, installing routes, and
+      applying firewall rules for full-tunnel routing. The app talks to it over
+      a local socket, so the GUI never needs elevation.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>One-click connect to the available regions</li>
+      <li>Switch regions without leaving the tunnel</li>
+      <li>Full-tunnel routing with DNS through the tunnel</li>
+      <li>Live transfer and handshake status</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">boltmesh.desktop</launchable>
+  <url type="homepage">https://github.com/boltmesh-labs/client</url>
+  <url type="bugtracker">https://github.com/boltmesh-labs/client/issues</url>
+  <developer id="com.boltmesh">
+    <name>BoltMesh Team</name>
+  </developer>
+  <categories>
+    <category>Network</category>
+    <category>Security</category>
+  </categories>
+  <keywords>
+    <keyword>VPN</keyword>
+    <keyword>WireGuard</keyword>
+  </keywords>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <!-- No <releases>: the package version comes from the git tag at release
+       time, so any version checked in here would be stale on the first tag. -->
+</component>

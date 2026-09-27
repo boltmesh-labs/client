@@ -1,5 +1,10 @@
 display_name: BoltMesh
 icon: linux/assets/boltmesh.png
+# AppStream metadata. The generated spec copies it to
+# /usr/share/metainfo/boltmesh.appdata.xml and %files already owns that
+# directory, so the entry is all it takes to ship real metadata instead of an
+# empty one. The deb maker has no metainfo equivalent, so this is rpm-only.
+metainfo: linux/assets/boltmesh.appdata.xml
 summary: BoltMesh WireGuard VPN client
 group: Applications/Internet
 vendor: BoltMesh Team
