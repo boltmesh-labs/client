@@ -354,6 +354,16 @@ not on `PATH` and only fails once it tries to pack the installer:
 $env:INNO_SETUP_PATH = 'C:\Program Files\Inno Setup 7'
 ```
 
+**Stop the helper service before packaging.** The staging hook builds
+`boltmeshd.exe` into the bundle, and Windows will not let a running image be
+overwritten. If the `boltmeshd` service is running from that same bundle
+directory — which is what a dev loop usually leaves behind — the hook now fails
+loudly instead of quietly packing the *previous* helper:
+
+```powershell
+sc stop boltmeshd
+```
+
 **`sh` has to be on `PATH`.** fastforge runs *every* packaging hook through
 `sh -c`, on Windows too (`flutter_app_packager._runHooks`), so the `windows-exe`
 pre/post hooks cannot run without it. CI gets it from Git for Windows, which

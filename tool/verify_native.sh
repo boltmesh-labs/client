@@ -429,6 +429,18 @@ if grep -F "go build -trimpath -ldflags \$ldflags" "$stage_ps1" >/dev/null &&
 else
   bad "windows/packaging/stage_boltmeshd.ps1 ships a helper with no version metadata"
 fi
+# `go build -o` cannot replace a running image. When the helper service runs from
+# the bundle, go leaves boltmeshd.exe~ behind, exits 0, and the bundle keeps the
+# OLD helper while the hook claims success -- so the installer ships a stale
+# privileged binary. Stage to a scratch name, move it in, and clear the
+# leftovers; a mere Test-Path cannot catch this.
+if grep -qF 'boltmeshd.staging.exe' "$stage_ps1" &&
+  grep -qF "Filter 'boltmeshd.exe~'" "$stage_ps1" &&
+  grep -qF "Move-Item -LiteralPath \$staged" "$stage_ps1"; then
+  ok "Windows staging cannot ship a helper locked by a running service"
+else
+  bad "windows/packaging/stage_boltmeshd.ps1 can stage a stale helper when its service is running"
+fi
 # The package is Inno Setup 7. fastforge's default ISCC path is hardcoded to
 # 'Inno Setup 6', so the release job has to both install 7 and export
 # INNO_SETUP_PATH, or packing fails on a bare `iscc` that is not on PATH.
