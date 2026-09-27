@@ -1674,6 +1674,108 @@ void main() {
       expect(saved.explicitTarget, isFalse);
     });
 
+    test(
+      'auto quickConnect drops a stored pin its own read could not act on',
+      () async {
+        final events = <String>[];
+        final store = FakeStore();
+        await store.setDeviceId('dev-1');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        // A pin an earlier session left in storage. Normally the saved-target
+        // read below redials it stickily, so the Auto branch is only reached
+        // when that read fails (locked keychain) — the one state where a stale
+        // pin could otherwise outlive the Auto connect and be rehydrated by
+        // the next cold restore.
+        await store.setLastTarget(
+          regionId: null,
+          serverId: 'srv-old',
+          explicitTarget: true,
+        );
+        store.lastTargetHook = () async => throw StateError('keychain locked');
+        final api = VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/vpn-regions')) {
+              return [regionJson('r-best', 'srv-b', 2)];
+            }
+            if (o.path.endsWith('/config')) {
+              return dialJson(serverId: 'srv-b', serverName: 'b');
+            }
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+        final container = makeContainer(
+          store: store,
+          keys: FakeKeys([const Keypair('AUTO-PRIV', 'AUTO-PUB')]),
+          api: api,
+        );
+        container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+          events,
+        );
+
+        await container.read(connectionProvider.notifier).quickConnect();
+
+        expect(events, [
+          'GET:/vpn-regions',
+          'GET:/vpn-devices/dev-1/config',
+          'tunnel:start',
+        ]);
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.dial?.serverId, 'srv-b');
+        expect(state.serverId, isNull);
+        final saved = await store.lastTarget();
+        expect(saved.regionId, isNull);
+        expect(saved.serverId, isNull);
+        expect(saved.explicitTarget, isFalse);
+      },
+    );
+
+    test(
+      'auto switch while connected also drops the stale stored pin',
+      () async {
+        final events = <String>[];
+        final store = FakeStore();
+        final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
+        final api = VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/vpn-regions')) {
+              return [regionJson('r-best', 'srv-b', 1)];
+            }
+            if (o.path.endsWith('/config')) {
+              return dialJson(serverId: 'srv-old', serverName: 'old');
+            }
+            if (o.path.endsWith('/switch')) {
+              return dialJson(serverId: 'srv-b', serverName: 'b');
+            }
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+        final container = makeContainer(store: store, keys: keys, api: api);
+        final tunnel = FakeTunnel(events);
+        await seedConnected(container, store, tunnel);
+        await store.setLastTarget(
+          regionId: null,
+          serverId: 'srv-old',
+          explicitTarget: true,
+        );
+        // Same one-shot read failure as above, so the connected Auto branch
+        // (a one-shot switch, no bind) is the path under test.
+        store.lastTargetHook = () async => throw StateError('keychain locked');
+        events.clear();
+
+        await container.read(connectionProvider.notifier).quickConnect();
+
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.dial?.serverId, 'srv-b');
+        expect(state.serverId, isNull);
+        final saved = await store.lastTarget();
+        expect(saved.regionId, isNull);
+        expect(saved.serverId, isNull);
+        expect(saved.explicitTarget, isFalse);
+      },
+    );
+
     test('releaseDevice surfaces a failed identity wipe', () async {
       final events = <String>[];
       final store = FakeStore();

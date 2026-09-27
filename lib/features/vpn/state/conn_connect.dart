@@ -365,14 +365,12 @@ extension ConnectionConnect on ConnectionController {
         oneShotRegionId: best.id,
         expectedTeardown: teardownEpoch,
       );
-      await _clearPersistedPin();
       return;
     }
     // Promote for the closure below (`live` is a nullable local).
     final peer = live;
     if (best.servers.any((s) => s.id == peer.serverId)) {
       await _connectOp(knownDial: peer, expectedTeardown: teardownEpoch);
-      await _clearPersistedPin();
       return;
     }
     await _switchServerOp(
@@ -382,20 +380,32 @@ extension ConnectionConnect on ConnectionController {
       pinTarget: false,
       expectedTeardown: teardownEpoch,
     );
-    await _clearPersistedPin();
   }
 
-  /// Clears any persisted pin from a previous session after an Auto connect.
+  /// Drops a leftover persisted pin once Quick Connect commits to Auto.
   ///
-  /// The cold-start restore ([_restoreColdSession]) rehydrates the persisted
-  /// target into [snap] so the Regions tab can highlight it. Auto Quick Connect
-  /// deliberately stays unpinned, but the restored pin lingers in both the
-  /// in-memory state and secure storage. Without this clear, tapping the
-  /// stale-pinned server later trips the same-target skip in [_switchServerOp]
-  /// ("Already on X") even though Auto never actually pinned it.
-  Future<void> _clearPersistedPin() async {
-    snap = snap.copyWith(regionId: null, serverId: null, explicitTarget: false);
+  /// Both sticky branches above normally make this a no-op: a pin in [snap]
+  /// is redialed as-is, and a pin only in storage is rehydrated by the
+  /// saved-target read. So the Auto branch is reached with a pin still in
+  /// storage only when that read failed (a locked keychain) — and a pin left
+  /// behind there is the one shape that outlives the session: the next cold
+  /// start rehydrates it through [_restoreColdSession] and the app sticks to
+  /// a target the user has since left behind.
+  ///
+  /// Deliberately independent of how the connect that follows ends: the
+  /// decision to be in Auto mode, not that connect's outcome, is what a
+  /// persisted pin has to agree with. In-memory state is already unpinned
+  /// here (the sticky branches return first, and the Auto path never pins),
+  /// so only storage is touched. [isSuperseded] guards the read and the write:
+  /// a Disconnect or a newer session landing in between may have re-pinned,
+  /// and an abandoned op must not clear that. An already-unpinned store is
+  /// left alone (no needless secure-storage write).
+  Future<void> _clearPersistedPin(bool Function() isSuperseded) async {
+    if (isSuperseded()) return;
     try {
+      final saved = await _device.lastTarget();
+      if (saved.regionId == null && saved.serverId == null) return;
+      if (isSuperseded()) return;
       await _device.setLastTarget(
         regionId: null,
         serverId: null,
@@ -422,7 +432,10 @@ extension ConnectionConnect on ConnectionController {
   /// [_autoConnectRegion] (which probes then reuses/switches/connects).
   /// Never pre-pins before a switch: that would trip the same-target skip
   /// check. A stale pin surfaces the backend error with the pin kept (no
-  /// silent auto-pick fallback). The whole discovery/probe sequence is
+  /// silent auto-pick fallback). Committing to Auto also drops any pin left
+  /// in storage by an earlier session ([_clearPersistedPin]) — before the
+  /// connected one-shot switch and the already-on-best-region no-op, not just
+  /// the first connect of a session. The whole discovery/probe sequence is
   /// lock-free by design, so it snapshots [_teardownEpoch] up front and
   /// aborts the moment a Disconnect (or reset/revocation) has landed: the
   /// later teardown must win even though the connect started first.
@@ -509,6 +522,13 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Discovery awaited above: another op may have taken over meanwhile.
+    if (superseded() || snap.phase == ConnPhase.working) {
+      return;
+    }
+    // Committing to Auto, so any pin the saved-target read could not act on
+    // is stale — clear it before the connect below, and do so regardless of
+    // how that connect ends.
+    await _clearPersistedPin(superseded);
     if (superseded() || snap.phase == ConnPhase.working) {
       return;
     }

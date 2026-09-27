@@ -281,13 +281,27 @@ class FakeDeviceStore extends DeviceStore {
   @override
   Future<void> setProvisionTarget(String v) async => _m['idem_target'] = v;
 
+  /// Test hook run inside the *next* [lastTarget] read only (later reads
+  /// succeed): models a secure-storage read that fails once — a locked
+  /// keychain — so a caller reacting to a failed read can still be
+  /// observed reading the stored value afterwards.
+  Future<void> Function()? lastTargetHook;
+  bool _lastTargetHookSpent = false;
+
   @override
   Future<({String? regionId, String? serverId, bool explicitTarget})>
-  lastTarget() async => (
-    regionId: _m['last_region'],
-    serverId: _m['last_server'],
-    explicitTarget: _m['last_explicit'] == '1',
-  );
+  lastTarget() async {
+    final hook = lastTargetHook;
+    if (hook != null && !_lastTargetHookSpent) {
+      _lastTargetHookSpent = true;
+      await hook();
+    }
+    return (
+      regionId: _m['last_region'],
+      serverId: _m['last_server'],
+      explicitTarget: _m['last_explicit'] == '1',
+    );
+  }
 
   @override
   Future<void> setLastTarget({
