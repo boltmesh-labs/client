@@ -132,6 +132,50 @@ void main() {
       expect(events, isNot(contains('tunnel:stop')));
     });
 
+    test(
+      'a pin the live dial contradicts does not swallow a tap on it',
+      () async {
+        final events = <String>[];
+        final store = ColdStore();
+        await store.setDeviceId('dev-1');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        // The pin outlived the peer: the restored tunnel is on srv-1 while
+        // storage still names srv-2.
+        await store.setLastDialJson(jsonEncode(dialJson()));
+        await store.setLastTarget(
+          regionId: null,
+          serverId: 'srv-2',
+          explicitTarget: true,
+        );
+        final tunnel = ColdTunnel(events, stage: VpnStage.connected);
+        final (container, ctl) = coldContainer(
+          store: store,
+          tunnel: tunnel,
+          api: configApi(events, (o) {
+            if (o.path.endsWith('/config')) return dialJson();
+            if (o.path.endsWith('/switch')) {
+              return dialJson(serverId: 'srv-2', serverName: 'two');
+            }
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+
+        await ctl.reconcileColdStart();
+        expect(container.read(connectionProvider).serverId, 'srv-2');
+        events.clear();
+
+        // Tapping the pinned server must switch, not report a no-op: the
+        // tunnel is on srv-1.
+        await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.dial?.serverId, 'srv-2');
+        expect(state.message, isNot(contains('Already connected to')));
+        expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      },
+    );
+
     test('restore without a saved pin stays on Auto', () async {
       final events = <String>[];
       final store = ColdStore();

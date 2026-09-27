@@ -407,6 +407,46 @@ void main() {
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
   });
 
+  test(
+    'a pinned target with no tunnel is switched, not called connected',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/switch')) {
+            return dialJson();
+          }
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final tunnel = FakeTunnel(events);
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]),
+        api: api,
+      );
+      container.read(connectionProvider.notifier).debugTunnel = tunnel;
+      // Pin restored, nothing running: the old skip answered this with
+      // "Already connected to ..." and did nothing at all.
+      container
+          .read(connectionProvider.notifier)
+          .selectTarget(regionId: null, serverId: 'srv-1');
+
+      await container
+          .read(connectionProvider.notifier)
+          .switchServer(regionId: null, serverId: 'srv-1');
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-1');
+      expect(state.message, isNot(contains('Already connected to')));
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    },
+  );
+
   test('fresh connect stays unpinned (Auto)', () async {
     final events = <String>[];
     final store = FakeStore();
@@ -1277,9 +1317,13 @@ void main() {
       final events = <String>[];
       final store = FakeStore();
       final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
+      // The live dial is srv-2 while the server-side peer already sits on
+      // srv-1 (a switch whose response was lost): the local dial is stale, so
+      // no skip-check can see it and the POST is what reports the truth.
+      var configDial = dialJson(serverId: 'srv-2', serverName: 'two');
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/config')) return configDial;
           if (o.path.endsWith('/switch')) throw alreadyConnected(o);
           throw StateError('unexpected ${o.path}');
         }),
@@ -1289,9 +1333,7 @@ void main() {
       await seedConnected(container, store, tunnel);
       final ctl = container.read(connectionProvider.notifier);
       ctl.debugForceThroughTunnel = true;
-      // Desync the pin so the skip-check misses and the POST 409s, as after
-      // a restart that lost the pinned target.
-      ctl.selectTarget(regionId: 'r-9', serverId: null);
+      configDial = dialJson();
       events.clear();
 
       await ctl.switchServer(regionId: null, serverId: 'srv-1');

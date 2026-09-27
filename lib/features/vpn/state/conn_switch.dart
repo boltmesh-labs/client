@@ -17,11 +17,26 @@ extension ConnectionSwitch on ConnectionController {
     // Clear any previous failure signal first: only an actual failure below
     // sets it again, so the benign same-target no-op never snacks.
     snap = snap.copyWith(opFailed: false);
-    // Both sides compare against the same source (the pinned target): the
-    // target always holds exactly one side, so a stale value on the other
-    // side can never leak into a switch or suppress a legitimate one.
-    final sameServer = serverId != null && serverId == snap.serverId;
-    final sameRegion = regionId != null && regionId == snap.regionId;
+    // Skip only against a target the tunnel is actually on. A pin outlives
+    // the peer it names — it is restored from storage on every cold start —
+    // so a restored pin can name a server the live dial is not on, and
+    // skipping there would swallow a real tap while reporting "already
+    // connected" for a tunnel that is somewhere else. A server request
+    // therefore compares against the live dial, and only while one is up;
+    // nothing is "already connected" below that, and the backend's
+    // already-bound 409 is answered with a config reload in the catch, so a
+    // missed skip costs one request rather than a stranded tunnel.
+    //
+    // A region request keeps comparing against the pin: the dial names a
+    // server, so live truth cannot answer it, and the pin is exactly the
+    // "I picked this region" intent that a switch back to it would 409 on.
+    // Both sides still read the same source, and a target always holds
+    // exactly one side, so a stale value on the other side can never leak
+    // into a switch.
+    final live = snap.phase == ConnPhase.connected ? snap.dial?.serverId : null;
+    final sameServer = serverId != null && serverId == live;
+    final sameRegion =
+        live != null && regionId != null && regionId == snap.regionId;
     if (sameServer || sameRegion) {
       AppLog.info(
         'switch skipped: already on ${serverId ?? 'region=$regionId'}',
