@@ -220,8 +220,43 @@ jobs:
           cache: true
           cache-dependency-path: boltmeshd/go.sum
 
+      # Inno Setup 7, not 6: it adds extended-length path support and a
+      # 64-bit compiler. Chocolatey publishes no 7.x package, so install the
+      # pinned upstream release directly and verify it before running it. The
+      # Authenticode check is the vendor's signature; the hash pins the exact
+      # artifact, so a swapped or truncated download fails before anything runs.
       - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
+        shell: pwsh
+        run: |
+          $version = '7.1.0'
+          $sha256 = '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f'
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$version-x64.exe"
+          $tag = $version.Replace('.', '_')
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-$tag/innosetup-$version-x64.exe" -OutFile $installer
+
+          $actual = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $sha256) {
+            Write-Host "::error::Inno Setup $version hash mismatch: expected $sha256, got $actual"
+            exit 1
+          }
+          $sig = Get-AuthenticodeSignature $installer
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Pyrsys B\.') {
+            Write-Host "::error::Inno Setup $version is not vendor-signed (Pyrsys B.V.): $($sig.Status) / $($sig.SignerCertificate.Subject)"
+            exit 1
+          }
+
+          Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS', '/SP-' -Wait
+          $iscc = 'C:\Program Files\Inno Setup 7\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            Write-Host "::error::Inno Setup 7 did not install: $iscc is missing"
+            exit 1
+          }
+          Write-Host "ISCC reports: $(& $iscc --version)"
+
+          # fastforge's default path is hardcoded to 'Inno Setup 6', so without
+          # this it falls through to a bare `iscc` that is not on PATH and only
+          # fails once it tries to pack the installer.
+          "INNO_SETUP_PATH=C:\Program Files\Inno Setup 7" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install fastforge
         run: |

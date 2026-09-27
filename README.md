@@ -340,9 +340,27 @@ the build.
 ## Windows release build
 
 Prereqs: Visual Studio 2022 with the "Desktop development with C++" workload,
-[Inno Setup 6](https://jrsoftware.org/isinfo.php) (the `iscc` compiler;
-fastforge resolves `%ProgramFiles(x86)%\Inno Setup 6` or `INNO_SETUP_PATH`),
-and Go 1.26 (to build `boltmeshd.exe`; the `windows-exe` pre hook does this).
+[Inno Setup 7](https://jrsoftware.org/isdl.php) (the `iscc` compiler; use the
+64-bit edition, which installs to `C:\Program Files\Inno Setup 7`), and Go 1.26
+(to build `boltmeshd.exe`; the `windows-exe` pre hook does this).
+
+**Inno Setup 7 needs `INNO_SETUP_PATH`.** `flutter_app_packager` resolves
+`ISCC.exe` as `INNO_SETUP_PATH`, then the hardcoded
+`C:\Program Files (x86)\Inno Setup 6`, then `iscc` on `PATH`. It knows nothing
+about Inno 7, so without the variable it falls through to a bare `iscc` that is
+not on `PATH` and only fails once it tries to pack the installer:
+
+```powershell
+$env:INNO_SETUP_PATH = 'C:\Program Files\Inno Setup 7'
+```
+
+Chocolatey publishes no 7.x package, so `choco install innosetup` still yields
+6.x. Install 7 from the [downloads page][inno] or with
+`winget install --id JRSoftware.InnoSetup.7`. The `build-windows` job pins
+7.1.0 by SHA-256 and checks the vendor's Authenticode signature before running
+it.
+
+[inno]: https://jrsoftware.org/isdl.php
 
 ```powershell
 flutter config --enable-windows-desktop

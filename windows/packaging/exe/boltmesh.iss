@@ -25,6 +25,13 @@ DefaultDirName={{INSTALL_DIR_NAME}}
 ; escapes the protected Program Files tree.
 DisableDirPage=yes
 DisableProgramGroupPage=yes
+; Inno Setup 7 builds a 32-bit Setup by default even from the 64-bit compiler.
+; Build the 64-bit one: the payload is x64-only (see the architecture pins
+; below), so a 32-bit Setup could only ever install onto 32-bit Windows, which
+; this package does not support. It also gets high-entropy ASLR and a larger
+; LZMA dictionary. ArchitecturesAllowed/ArchitecturesInstallIn64BitMode stay
+; pinned below, so this does not depend on the 64-bit-mode default.
+SetupArchitecture=x64
 OutputDir=.
 OutputBaseFilename={{OUTPUT_BASE_FILENAME}}
 Compression=lzma

@@ -429,6 +429,24 @@ if grep -F "go build -trimpath -ldflags \$ldflags" "$stage_ps1" >/dev/null &&
 else
   bad "windows/packaging/stage_boltmeshd.ps1 ships a helper with no version metadata"
 fi
+# The package is Inno Setup 7. fastforge's default ISCC path is hardcoded to
+# 'Inno Setup 6', so the release job has to both install 7 and export
+# INNO_SETUP_PATH, or packing fails on a bare `iscc` that is not on PATH.
+release_yml='.github/workflows/release.yml'
+if grep -qF 'INNO_SETUP_PATH=C:\Program Files\Inno Setup 7' "$release_yml" &&
+  ! grep -qF 'choco install innosetup' "$release_yml"; then
+  ok "Windows release installs Inno Setup 7 and points fastforge at it"
+else
+  bad "the Windows release job does not install Inno Setup 7 via INNO_SETUP_PATH"
+fi
+# Inno 7 builds a 32-bit Setup by default even from the 64-bit compiler. The
+# payload is x64-only, so ask for the 64-bit Setup explicitly rather than
+# relying on the edition default.
+if grep -qE '^[[:space:]]*SetupArchitecture=x64[[:space:]]*$' windows/packaging/exe/boltmesh.iss; then
+  ok "Windows installer builds a 64-bit Setup"
+else
+  bad "windows/packaging/exe/boltmesh.iss does not set SetupArchitecture=x64"
+fi
 inno_config='windows/packaging/exe/make_config.yaml'
 if grep -qE '^[[:space:]]*architectures_allowed:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config" &&
   grep -qE '^[[:space:]]*architectures_install_in_64bit_mode:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config"; then

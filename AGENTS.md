@@ -4,7 +4,7 @@ BoltMesh is a Flutter WireGuard client (`lib/`, root `pubspec.yaml`) plus a priv
 
 ## Toolchain and entry points
 
-- Use Flutter 3.47.x stable (Dart `^3.13.0`) and Go 1.26. Android builds use JDK 21 plus Android platform/build-tools 36; Windows native/release builds need Visual Studio 2022 C++ and Inno Setup 6.
+- Use Flutter 3.47.x stable (Dart `^3.13.0`) and Go 1.26. Android builds use JDK 21 plus Android platform/build-tools 36; Windows native/release builds need Visual Studio 2022 C++ and Inno Setup 7 (the 64-bit edition, at `C:\Program Files\Inno Setup 7`).
 - `lib/main.dart` is the composition root; `lib/app/root_shell.dart` is the auth gate, and `lib/features/vpn/state/connection_controller.dart` orchestrates provisioning, connect/switch, polling, and recovery through its `conn_*.dart` part files.
 - The Flutter app is unprivileged: Linux uses `/run/boltmesh/boltmeshd.sock`; Windows uses `\\.\pipe\boltmesh\boltmeshd`. `boltmeshd` owns `wg-quick`/WireGuard service work and privileged reads; never add `sudo`, `wg`, `wg-quick`, or GUI elevation to the app.
 
