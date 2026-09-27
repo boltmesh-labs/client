@@ -1,0 +1,31 @@
+# Vendored and generated trees, ignored so a whole-tree run
+# (`prettier --write .`) behaves the same in every boltmesh repo. The
+# pre-commit hooks are file-scoped and would not reach most of these
+# anyway; this matters for the ad-hoc whole-tree runs.
+#
+# The first block is identical across the repos; anything below it is
+# specific to this one.
+# Scope note: in this repo markdown is markdownlint's job, not prettier's, so
+# a bare `prettier --write .` will still want to rewrap the .md files. Use the
+# pre-commit hook (or the npm script where one exists) rather than a whole-tree
+# write.
+node_modules/
+dist/
+build/
+coverage/
+
+# client-specific generated trees
+/.dart_tool/
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/.pub-cache/
+/.idea/
+/.vscode/
+/android/.gradle/
+/ios/Pods/
+/macos/Pods/
+
+# Xcode owns these; the pre-commit hook excludes them too, but a whole-tree
+# run reaches them without going through the hook.
+ios/Runner/Assets.xcassets/
+macos/Runner/Assets.xcassets/
