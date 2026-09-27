@@ -78,7 +78,12 @@ func overrideToolDirs(t *testing.T, dirs []string) {
 
 func writeTool(t *testing.T, dir, name string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	writeToolMode(t, dir, name, 0o755)
+}
+
+func writeToolMode(t *testing.T, dir, name string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), mode); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -102,6 +107,32 @@ func TestFindToolMissingIsAnError(t *testing.T) {
 
 	if _, err := findTool(wgQuickBinary); err == nil {
 		t.Fatal("findTool(missing) = nil, want error")
+	}
+}
+
+func TestFindToolSkipsNonExecutableCandidate(t *testing.T) {
+	unusable := t.TempDir()
+	writeToolMode(t, unusable, wgQuickBinary, 0o644)
+	usable := t.TempDir()
+	writeTool(t, usable, wgQuickBinary)
+	overrideToolDirs(t, []string{unusable, usable})
+
+	got, err := findTool(wgQuickBinary)
+	if err != nil {
+		t.Fatalf("findTool(%q) = %v", wgQuickBinary, err)
+	}
+	if want := filepath.Join(usable, wgQuickBinary); got != want {
+		t.Fatalf("findTool = %q, want the executable candidate %q", got, want)
+	}
+}
+
+func TestFindToolRejectsNonExecutableDirectoryEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeToolMode(t, dir, wgQuickBinary, 0o644)
+	overrideToolDirs(t, []string{dir})
+
+	if _, err := findTool(wgQuickBinary); err == nil {
+		t.Fatal("findTool(non-executable) = nil, want error")
 	}
 }
 

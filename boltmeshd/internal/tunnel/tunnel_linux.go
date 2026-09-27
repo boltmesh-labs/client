@@ -55,15 +55,19 @@ const (
 var toolDirs = []string{"/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 
 // findTool returns the absolute path of name under [toolDirs], or an error
-// when it is not installed there. Tests replace [toolDirs] with a temp dir.
+// when it is not installed there. A candidate must be a regular file with at
+// least one execute bit set: the daemon runs the resolved path as root, so a
+// non-executable match (a stray data file in a system directory) must fall
+// through to the error instead of being reported as a usable tool. Tests
+// replace [toolDirs] with a temp dir.
 func findTool(name string) (string, error) {
 	for _, dir := range toolDirs {
 		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("%s not found under %v (is wireguard-tools installed?)", name, toolDirs)
+	return "", fmt.Errorf("%s not found (or not executable) under %v (is wireguard-tools installed?)", name, toolDirs)
 }
 
 type runFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
