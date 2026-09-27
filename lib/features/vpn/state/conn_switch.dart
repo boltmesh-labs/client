@@ -27,7 +27,8 @@ extension ConnectionSwitch on ConnectionController {
         'switch skipped: already on ${serverId ?? 'region=$regionId'}',
       );
       snap = snap.copyWith(
-        message: 'Already on ${snap.dial?.serverName ?? 'this server'}.',
+        message:
+            'Already connected to ${snap.dial?.serverName ?? 'this server'}.',
       );
       return;
     }

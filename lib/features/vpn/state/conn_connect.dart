@@ -365,12 +365,14 @@ extension ConnectionConnect on ConnectionController {
         oneShotRegionId: best.id,
         expectedTeardown: teardownEpoch,
       );
+      await _clearPersistedPin();
       return;
     }
     // Promote for the closure below (`live` is a nullable local).
     final peer = live;
     if (best.servers.any((s) => s.id == peer.serverId)) {
       await _connectOp(knownDial: peer, expectedTeardown: teardownEpoch);
+      await _clearPersistedPin();
       return;
     }
     await _switchServerOp(
@@ -380,6 +382,28 @@ extension ConnectionConnect on ConnectionController {
       pinTarget: false,
       expectedTeardown: teardownEpoch,
     );
+    await _clearPersistedPin();
+  }
+
+  /// Clears any persisted pin from a previous session after an Auto connect.
+  ///
+  /// The cold-start restore ([_restoreColdSession]) rehydrates the persisted
+  /// target into [snap] so the Regions tab can highlight it. Auto Quick Connect
+  /// deliberately stays unpinned, but the restored pin lingers in both the
+  /// in-memory state and secure storage. Without this clear, tapping the
+  /// stale-pinned server later trips the same-target skip in [_switchServerOp]
+  /// ("Already on X") even though Auto never actually pinned it.
+  Future<void> _clearPersistedPin() async {
+    snap = snap.copyWith(regionId: null, serverId: null, explicitTarget: false);
+    try {
+      await _device.setLastTarget(
+        regionId: null,
+        serverId: null,
+        explicitTarget: false,
+      );
+    } catch (e) {
+      AppLog.error('auto connect clear persisted pin failed', e);
+    }
   }
 
   /// Quick Connect shared by the Home power button and the Regions
