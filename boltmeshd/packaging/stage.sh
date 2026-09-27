@@ -15,6 +15,11 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bundle="${BUILD_OUTPUT_DIRECTORY:?BUILD_OUTPUT_DIRECTORY is set by the packager}"
+# fastforge exports this relative to the project root, but the helper is
+# compiled with boltmeshd/ as the working directory below. Resolve the bundle
+# to an absolute path now so the -o target cannot land inside the Go module,
+# where git ignores it and the package would ship without the binary.
+bundle="$(cd "$bundle" && pwd)"
 stage="$bundle/boltmeshd"
 
 case "$bundle" in
