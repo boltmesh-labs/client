@@ -35,6 +35,11 @@ class HelperTunnelAdapter implements TunnelAdapter {
   @override
   Stream<VpnStage> get stages => const Stream.empty();
 
+  /// The helper runs the tunnel through a privileged daemon, so there is no
+  /// OS consent dialog to answer before the first `up`.
+  @override
+  Future<bool> requestConsent() async => true;
+
   @override
   bool get handshakeReaderSupported => true;
 

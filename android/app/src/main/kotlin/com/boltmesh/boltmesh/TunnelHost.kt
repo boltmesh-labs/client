@@ -1,6 +1,7 @@
 package com.boltmesh.boltmesh
 
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -16,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import orban.group.wireguard_flutter.WireguardFlutterPlugin
+import java.util.concurrent.atomic.AtomicReference
 
 /// Process-level host for the app's own native tunnel channels.
 ///
@@ -43,6 +45,12 @@ internal object TunnelHost {
   private const val HANDSHAKE_TIMEOUT_MS = 2_000L
   private const val BACKEND_TIMEOUT_MS = 2_000L
 
+  /// Backstop for a consent round-trip whose Activity died without delivering
+  /// a result. [detachConsentHost] normally completes the waiter first, so this
+  /// only bounds an unexpected death — it must stay generous, because the wait
+  /// is a human reading a system dialog, not a wedged driver.
+  private const val CONSENT_TIMEOUT_MS = 5 * 60_000L
+
   /// Process-lifetime scope: must outlive every Activity so a detached
   /// Activity cannot cancel in-flight handshake/tunnel work the cached
   /// engine still depends on.
@@ -52,6 +60,48 @@ internal object TunnelHost {
   /// Application context captured on the first [register]; used only to read
   /// the plugin's persisted `vpn_prefs` config.
   @Volatile private var appContext: Context? = null
+
+  /// The Activity currently able to service a VPN consent round-trip. Set and
+  /// cleared by [MainActivity] because `startActivityForResult` needs an
+  /// Activity and this object deliberately outlives every one of them (see the
+  /// class docs).
+  @Volatile private var consentHost: VpnConsentHost? = null
+
+  /// The single in-flight consent round-trip. Android shows one VPN consent
+  /// dialog at a time, so a concurrent request is rejected rather than queued:
+  /// queueing would need a second deferred and buy nothing.
+  private val pendingConsent = AtomicReference<CompletableDeferred<Boolean>?>(null)
+
+  /// Hosts the OS VPN consent dialog. Implemented by [MainActivity]; kept as an
+  /// interface so this object never holds an Activity reference itself.
+  internal interface VpnConsentHost {
+    /// The system consent Intent, or null when this app's VPN service is
+    /// already authorized (or the platform has no consent step).
+    fun prepareConsentIntent(): Intent?
+
+    /// Shows [intent]. False when no Activity can show it, so the caller can
+    /// fail fast instead of leaving a result nobody will deliver.
+    fun launchConsent(intent: Intent): Boolean
+  }
+
+  /// Registers the Activity that can service consent requests. Called from
+  /// every [MainActivity] instance, so a re-created Activity re-arms this.
+  fun attachConsentHost(host: VpnConsentHost) {
+    consentHost = host
+  }
+
+  /// Detaches [host] and fails any waiter it would have completed: the
+  /// Activity dying takes the `startActivityForResult` result with it, so
+  /// leaving the deferred pending would hang Dart's consent step forever.
+  fun detachConsentHost(host: VpnConsentHost) {
+    if (consentHost === host) consentHost = null
+    pendingConsent.getAndSet(null)?.complete(false)
+  }
+
+  /// Delivers the user's answer to the consent dialog.
+  fun onConsentResult(granted: Boolean) {
+    pendingConsent.getAndSet(null)?.complete(granted)
+  }
 
   /// Registers (or re-registers) the app's channels on [engine]. Idempotent:
   /// `configureFlutterEngine` runs on every Activity attach, so this may be
@@ -129,6 +179,9 @@ internal object TunnelHost {
             main.post { result.success(killed) }
           }
         }
+        "requestVpnConsent" -> {
+          requestVpnConsent(result)
+        }
         else -> result.notImplemented()
       }
     }
@@ -140,6 +193,79 @@ internal object TunnelHost {
 
   private fun pluginOf(engine: FlutterEngine): WireguardFlutterPlugin? =
     engine.plugins.get(WireguardFlutterPlugin::class.java) as? WireguardFlutterPlugin
+
+  /// Obtains this app's OS VPN consent *before* the plugin's `start` runs.
+  ///
+  /// `wireguard_flutter_plus` asks for consent from inside `connect()` and
+  /// only settles its Dart future once the user answers, but Dart bounds `start`
+  /// with `TunnelTuning.opTimeout` (10s) to catch a wedged driver. A human
+  /// reading the system dialog outlasts that budget, so the first connect after
+  /// every fresh install failed with a bogus timeout and only worked on a
+  /// second tap. Consenting here keeps the dialog out of the timed section: the
+  /// plugin re-checks `VpnService.prepare` on every start and short-circuits
+  /// once consent exists, so the user still sees exactly one dialog.
+  ///
+  /// The plugin's own `checkVpnPermission` is unusable here — it stores its
+  /// pending `MethodChannel.Result` in a field `onActivityResult` never
+  /// completes, so that future hangs whenever consent is actually missing.
+  private fun requestVpnConsent(result: MethodChannel.Result) {
+    val host = consentHost
+    if (host == null) {
+      // Fail fast rather than hang: without an Activity there is no way to
+      // show the dialog, and a pending deferred would never be completed.
+      result.error(
+        "NO_ACTIVITY",
+        "No Activity is attached, so VPN consent cannot be requested",
+        null,
+      )
+      return
+    }
+    val prepare = try {
+      host.prepareConsentIntent()
+    } catch (t: Throwable) {
+      Log.w(LOG_TAG, "vpn consent prepare failed", t)
+      null
+    }
+    // Already authorized (or nothing to authorize): answer immediately so Dart
+    // never spends a round-trip on the common case.
+    if (prepare == null) {
+      result.success(true)
+      return
+    }
+    val waiter = CompletableDeferred<Boolean>()
+    if (!pendingConsent.compareAndSet(null, waiter)) {
+      result.error(
+        "CONSENT_BUSY",
+        "A VPN consent request is already awaiting the user",
+        null,
+      )
+      return
+    }
+    val launched = try {
+      host.launchConsent(prepare)
+    } catch (t: Throwable) {
+      Log.w(LOG_TAG, "vpn consent launch failed", t)
+      false
+    }
+    if (!launched) {
+      pendingConsent.compareAndSet(waiter, null)
+      result.error(
+        "NO_ACTIVITY",
+        "No Activity is available to show the VPN consent dialog",
+        null,
+      )
+      return
+    }
+    Log.i(LOG_TAG, "vpn consent dialog shown, awaiting user")
+    ioScope.launch {
+      // No timeout on the normal path: the user decides how long this takes.
+      // The bound only catches an Activity death that skipped
+      // `detachConsentHost`.
+      val granted = withTimeoutOrNull(CONSENT_TIMEOUT_MS) { waiter.await() } ?: false
+      pendingConsent.compareAndSet(waiter, null)
+      main.post { result.success(granted) }
+    }
+  }
 
   /// Latest peer handshake across the owning tunnel, in epoch seconds, or
   /// null when the tunnel has no completed handshake yet (the "never

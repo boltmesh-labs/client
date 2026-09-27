@@ -67,6 +67,22 @@ abstract class TunnelAdapter {
   /// Graceful teardown with an automated hard-kill retry. Never throws.
   Future<void> stop(String reason);
 
+  /// Ensures the OS has authorized this app to run a VPN tunnel, showing the
+  /// system consent dialog when consent has not been granted yet. False when
+  /// the user declines.
+  ///
+  /// Split from [start] deliberately. Consent is an unbounded human
+  /// interaction with a system dialog, while [start] is bounded by
+  /// `TunnelTuning.opTimeout` to catch a wedged driver. Folding the two
+  /// together makes a slow "OK" tap indistinguishable from a driver hang, so
+  /// the first connect after every fresh install reports a bogus timeout
+  /// failure and only succeeds on a second tap.
+  ///
+  /// Platforms with no consent step — Linux/Windows (privileged `boltmeshd`
+  /// helper) and Apple (Network Extension negotiation) — return true without
+  /// doing anything. Never throws: a denial is a user decision, not a fault.
+  Future<bool> requestConsent() async => true;
+
   /// Current OS stage, or null when unreadable.
   Future<VpnStage?> readStage();
 
@@ -147,7 +163,8 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   @visibleForTesting
   static const handshakeChannel = MethodChannel('com.boltmesh/handshake');
 
-  /// Ghost-aware tunnel helpers (Android `MainActivity`/`TunnelHost`).
+  /// Tunnel helpers on the app's own host channel (Android
+  /// `MainActivity`/`TunnelHost`): ghost-aware tunnel control and VPN consent.
   @visibleForTesting
   static const ghostChannel = MethodChannel('com.boltmesh/tunnel');
 
@@ -212,6 +229,38 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
           providerBundleIdentifier: providerBundleId,
         )
         .timeout(TunnelTuning.opTimeout);
+  }
+
+  /// Asks the OS for VPN consent through the app's own `com.boltmesh/tunnel`
+  /// host channel, so the system dialog is answered *before* [start]'s
+  /// wedged-driver budget applies.
+  ///
+  /// Must run before [ensureInitialized]: the plugin's `initialize()` calls
+  /// `VpnService.prepare` itself and pops the dialog from there, and its
+  /// `startVpn` then blocks until the user answers — inside the very timeout
+  /// this split exists to keep clear. Once consent exists, both of the
+  /// plugin's own `prepare` calls return null and show nothing, so the user
+  /// still sees exactly one dialog.
+  ///
+  /// The plugin's own `checkVpnPermission()` is deliberately not used: it
+  /// stores its pending `MethodChannel.Result` in a field that
+  /// `onActivityResult` never completes, so that future hangs forever
+  /// whenever consent is actually missing.
+  @override
+  Future<bool> requestConsent() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return true;
+    try {
+      return await ghostChannel.invokeMethod<bool>('requestVpnConsent') ?? true;
+    } on MissingPluginException {
+      // No native host (plain `flutter test`): there is nothing to consent
+      // to, and `start` will fail on its own terms if the platform is wrong.
+      return true;
+    } catch (e) {
+      // Fail closed. Guessing "granted" would push the dialog back inside
+      // `start`'s timeout, which is the exact failure this split avoids.
+      AppLog.error('vpn consent request failed', e);
+      return false;
+    }
   }
 
   @override

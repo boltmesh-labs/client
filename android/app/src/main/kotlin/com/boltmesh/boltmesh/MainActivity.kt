@@ -1,6 +1,9 @@
 package com.boltmesh.boltmesh
 
 import android.content.Context
+import android.content.Intent
+import android.net.VpnService
+import android.os.Bundle
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -22,6 +25,48 @@ import io.flutter.plugins.GeneratedPluginRegistrant
 /// The app's own native channels live in [TunnelHost], not here, precisely so
 /// that a detached Activity's `cleanUpFlutterEngine` cannot tear them down.
 class MainActivity : FlutterActivity() {
+
+  /// Services the OS VPN consent round-trip on behalf of [TunnelHost], which
+  /// cannot hold an Activity (see [TunnelHost]'s docs). Uses the legacy
+  /// `startActivityForResult` because `FlutterActivity` extends plain
+  /// `android.app.Activity`, not `ComponentActivity`, so the
+  /// `ActivityResultLauncher` APIs are unavailable here.
+  private val consentHost = object : TunnelHost.VpnConsentHost {
+    override fun prepareConsentIntent(): Intent? =
+      VpnService.prepare(this@MainActivity)
+
+    override fun launchConsent(intent: Intent): Boolean {
+      // A finishing/destroyed Activity would drop the result on the floor,
+      // stranding the waiter; report it instead so Dart fails fast.
+      if (isFinishing || isDestroyed) return false
+      startActivityForResult(intent, CONSENT_REQUEST_CODE)
+      return true
+    }
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    // Every Activity instance re-arms the host: the cached engine outlives the
+    // Activity, but a new one must be able to service the next request.
+    TunnelHost.attachConsentHost(consentHost)
+  }
+
+  override fun onDestroy() {
+    TunnelHost.detachConsentHost(consentHost)
+    super.onDestroy()
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    // super first: FlutterActivity forwards this to the plugins, and
+    // `wireguard_flutter_plus` still needs its own PERMISSIONS_REQUEST_CODE
+    // result to settle its consent continuation.
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode == CONSENT_REQUEST_CODE) {
+      Log.i(LOG_TAG, "vpn consent answered granted=${resultCode == RESULT_OK}")
+      TunnelHost.onConsentResult(resultCode == RESULT_OK)
+    }
+  }
+
   override fun provideFlutterEngine(context: Context): FlutterEngine? {
     FlutterEngineCache.getInstance().get(ENGINE_ID)?.let { return it }
     // Carry the launch shell args (debug VM service, tracing, …) the same way
@@ -64,5 +109,10 @@ class MainActivity : FlutterActivity() {
   private companion object {
     const val LOG_TAG = "BoltMeshTunnel"
     const val ENGINE_ID = "boltmesh_main"
+
+    /// Deliberately distinct from `wireguard_flutter_plus`'s
+    /// PERMISSIONS_REQUEST_CODE (10014) so the two consent round-trips can
+    /// never be confused for one another.
+    const val CONSENT_REQUEST_CODE = 0xB017
   }
 }

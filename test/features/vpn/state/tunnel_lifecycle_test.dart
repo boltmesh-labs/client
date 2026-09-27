@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:boltmesh/features/vpn/data/device_store.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
+import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
@@ -1926,6 +1927,105 @@ void main() {
 
       expect(events, isEmpty);
       expect(container.read(connectionProvider).phase, ConnPhase.working);
+    });
+  });
+
+  // The OS VPN consent dialog is asked for before `start`, so a slow "OK" tap
+  // can never be mistaken for a wedged driver inside `start`'s 10s budget.
+  group('VPN consent', () {
+    /// Answers the app's `com.boltmesh/tunnel` host channel with [granted] for
+    /// the consent request, leaving the other methods on the global stub.
+    void stubConsent(bool granted) {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        WireGuardTunnelAdapter.ghostChannel,
+        (call) async => switch (call.method) {
+          'requestVpnConsent' => granted,
+          'killGhost' => false,
+          _ => null,
+        },
+      );
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          WireGuardTunnelAdapter.ghostChannel,
+          (call) async => call.method == 'killGhost' ? false : null,
+        ),
+      );
+    }
+
+    Future<ProviderContainer> consentContainer(List<String> events) async {
+      final store = FakeStore();
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/config')) return dialJson();
+            throw StateError('unexpected ${o.path}');
+          }),
+        ),
+      );
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      return container;
+    }
+
+    test('a denial returns to idle and never starts the tunnel', () async {
+      final events = <String>[];
+      final container = await consentContainer(events);
+      final tunnel = FakeTunnel(events);
+      addTearDown(tunnel.close);
+      stubConsent(false);
+
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      await ctl.connect();
+
+      final snap = container.read(connectionProvider);
+      // A denial is a user decision, not a fault: idle and re-armed, so the
+      // button works again — never the error state, which the user cannot act
+      // on, and never `connected`.
+      expect(snap.phase, ConnPhase.idle);
+      expect(snap.message, contains('permission denied'));
+      // Nothing was brought up: no wgQuick config ever reached the driver.
+      expect(tunnel.configs, isEmpty);
+    });
+
+    test('granted consent proceeds to the tunnel start', () async {
+      final events = <String>[];
+      final container = await consentContainer(events);
+      final tunnel = FakeTunnel(events);
+      addTearDown(tunnel.close);
+      stubConsent(true);
+
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      await ctl.connect();
+
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(tunnel.configs, hasLength(1));
+    });
+
+    test('a denial leaves the op mutex free for a retry', () async {
+      final events = <String>[];
+      final container = await consentContainer(events);
+      final tunnel = FakeTunnel(events);
+      addTearDown(tunnel.close);
+      stubConsent(false);
+
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = tunnel;
+      await ctl.connect();
+      expect(container.read(connectionProvider).phase, ConnPhase.idle);
+
+      // The second tap must reach the tunnel, so the consent step released the
+      // mutex instead of leaving the op wedged mid-flight.
+      stubConsent(true);
+      await ctl.connect();
+
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(tunnel.configs, hasLength(1));
     });
   });
 }

@@ -154,6 +154,29 @@ extension ConnectionTunnel on ConnectionController {
       dns: dial.wgDns,
       allowLocal: allowLocal,
     );
+    // Android needs the OS VPN consent before the plugin will bring the TUN
+    // up, and the user answers a system dialog: an unbounded wait that must
+    // not sit inside `start`'s wedged-driver budget (see
+    // `TunnelAdapter.requestConsent`). Asked before [_ensureTunnelInit] on
+    // purpose — the plugin's `initialize()` runs `VpnService.prepare` itself
+    // and pops the dialog from there, so once consent exists that call is a
+    // silent no-op and the user still sees exactly one dialog. By the time
+    // this returns, `start` below can no longer block on a human.
+    //
+    // Placed after the config is resolved, so a decline leaves nothing
+    // half-built. No-op on every other platform.
+    if (!await _tunnel.requestConsent()) {
+      if (!sessionCurrent()) return;
+      // A denial is a decision, not a fault: back to idle and re-armed so the
+      // button works again, rather than an error the user cannot act on.
+      AppLog.info('vpn consent denied, connect abandoned');
+      snap = snap.copyWith(
+        phase: ConnPhase.idle,
+        message: 'VPN permission denied. Tap Connect to try again.',
+      );
+      return;
+    }
+    if (!sessionCurrent()) return;
     await _ensureTunnelInit();
     if (!sessionCurrent()) return;
     if (snap.phase == ConnPhase.connected) {

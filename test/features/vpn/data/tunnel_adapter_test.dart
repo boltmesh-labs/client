@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
@@ -245,6 +246,80 @@ void main() {
 
       expect(await adapter.killGhost(), isTrue);
       expect(adapter.ghostKills, 1);
+    });
+
+    group('requestConsent', () {
+      tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+      test('returns the host answer on Android', () async {
+        for (final granted in [true, false]) {
+          var calls = 0;
+          messenger.setMockMethodCallHandler(
+            WireGuardTunnelAdapter.ghostChannel,
+            (call) async {
+              expect(call.method, 'requestVpnConsent');
+              calls++;
+              return granted;
+            },
+          );
+          final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+
+          expect(await adapter.requestConsent(), granted);
+          expect(calls, 1, reason: 'consent must be asked exactly once');
+        }
+      });
+
+      test('no-op off Android, without touching the host channel', () async {
+        messenger.setMockMethodCallHandler(
+          WireGuardTunnelAdapter.ghostChannel,
+          (call) async => fail('must not ask for consent on ${call.method}'),
+        );
+        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+
+        for (final platform in [
+          TargetPlatform.linux,
+          TargetPlatform.windows,
+          TargetPlatform.iOS,
+          TargetPlatform.macOS,
+        ]) {
+          debugDefaultTargetPlatformOverride = platform;
+          expect(await adapter.requestConsent(), isTrue, reason: '$platform');
+        }
+      });
+
+      test('a missing host answers granted, deferring to start', () async {
+        // The group's tearDown cleared the mock, so this is the real
+        // MissingPluginException path. There is no dialog to show without a
+        // native host, and `start` fails on its own terms if the platform is
+        // genuinely wrong.
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+
+        expect(await adapter.requestConsent(), isTrue);
+      });
+
+      test('a null host answer counts as granted', () async {
+        // Android with no VpnService to consent to must not read as denied.
+        messenger.setMockMethodCallHandler(
+          WireGuardTunnelAdapter.ghostChannel,
+          (call) async => null,
+        );
+        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+
+        expect(await adapter.requestConsent(), isTrue);
+      });
+
+      test('a failing host answers denied rather than throwing', () async {
+        // Fail closed: reporting "granted" would push the dialog back inside
+        // `start`'s 10s budget, the exact failure this split exists to avoid.
+        messenger.setMockMethodCallHandler(
+          WireGuardTunnelAdapter.ghostChannel,
+          (call) async => throw PlatformException(code: 'NO_ACTIVITY'),
+        );
+        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+
+        expect(await adapter.requestConsent(), isFalse);
+      });
     });
   });
 
