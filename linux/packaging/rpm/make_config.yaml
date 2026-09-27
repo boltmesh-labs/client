@@ -64,11 +64,30 @@ postinstall_scripts:
   # its units are installed by this script rather than owned by the RPM, so RPM
   # cannot stop the old process for us. Quiesce both units before overwriting
   # the helper, and refuse the upgrade if a process still owns the old binary.
+  # A unit that is not installed has to be tolerated: `systemctl stop` on one
+  # returns non-zero, which under `set -e` aborted the whole scriptlet and left
+  # the package half-staged on the first upgrade from a build that shipped no
+  # units. This mirrors stop_unit() in the uninstall script below.
   - |
     if [ "${1:-1}" -gt 1 ]; then
-      systemctl stop boltmeshd.service boltmeshd.socket
-      main_pid="$(systemctl show --property=MainPID --value boltmeshd.service)"
-      if [ "$main_pid" != 0 ]; then
+      stop_unit() {
+        unit="$1"
+        if ! command -v systemctl >/dev/null 2>&1; then
+          return 0
+        fi
+        load_state="$(systemctl show --property=LoadState --value "$unit")" || return 1
+        if [ "$load_state" = "not-found" ]; then
+          return 0
+        fi
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+        active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
+        main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
+        if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
+          return 1
+        fi
+        [ -z "$main_pid" ] || [ "$main_pid" = 0 ] || return 1
+      }
+      if ! stop_unit boltmeshd.service || ! stop_unit boltmeshd.socket; then
         printf 'boltmesh: failed to stop the privileged helper during upgrade\n' >&2
         exit 1
       fi
@@ -126,11 +145,23 @@ postuninstall_scripts:
   # in this set -e block so a failed teardown leaves the helper installed and
   # retryable.
   - |
+    # %postun runs on every version removal, and $1 is how many copies of the
+    # package remain afterwards: 0 on a final erase, 1 both on a fresh install
+    # and when an upgrade retires the old version. Only a final erase may tear
+    # down, because on an upgrade the incoming %post has already quiesced the
+    # old service and staged the replacement; removing the helper, its units and
+    # the NetworkManager drop-in here left an upgraded system with no helper.
+    if [ "${1:-0}" -ne 0 ]; then
+      exit 0
+    fi
     set -e
     if command -v systemctl >/dev/null 2>&1; then
       systemctl daemon-reload >/dev/null 2>&1
       systemctl disable boltmeshd.service boltmeshd.socket >/dev/null 2>&1 || true
     fi
+    # A unit reports MainPID=0 once a service is stopped, but a socket unit has
+    # no MainPID at all and prints an empty value, so a bare `= 0` test failed
+    # for boltmeshd.socket and aborted the scriptlet on every uninstall.
     stop_unit() {
       unit="$1"
       if ! command -v systemctl >/dev/null 2>&1; then
@@ -140,25 +171,24 @@ postuninstall_scripts:
       if [ "$load_state" = "not-found" ]; then
         return 0
       fi
-      if ! systemctl stop "$unit" >/dev/null 2>&1; then
-        active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
-        main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
-        if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
-          return 1
-        fi
-        [ "$main_pid" = 0 ] || return 1
-        return 0
-      fi
+      systemctl stop "$unit" >/dev/null 2>&1 || true
       active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
       main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
       if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
         return 1
       fi
-      [ "$main_pid" = 0 ] || return 1
+      [ -z "$main_pid" ] || [ "$main_pid" = 0 ] || return 1
     }
     stop_unit boltmeshd.service
     stop_unit boltmeshd.socket
-    /usr/libexec/boltmesh/boltmeshd --cleanup --config-dir=/run/boltmesh --interface=boltmesh0
+    # Only tear the tunnel down when the helper is actually installed. A failed
+    # or interrupted %post leaves it absent, and invoking it then exits 127
+    # under `set -e`, which skipped every removal below and left the package
+    # permanently half-removed. A real teardown failure still aborts here, so
+    # the helper is only removed once the tunnel is down.
+    if [ -x /usr/libexec/boltmesh/boltmeshd ]; then
+      /usr/libexec/boltmesh/boltmeshd --cleanup --config-dir=/run/boltmesh --interface=boltmesh0
+    fi
     rm -f /run/boltmesh/boltmeshd.sock /run/boltmesh/boltmesh0.conf
     rmdir /run/boltmesh >/dev/null 2>&1 || true
     rm -f /usr/lib/systemd/system/boltmeshd.service /usr/lib/systemd/system/boltmeshd.socket

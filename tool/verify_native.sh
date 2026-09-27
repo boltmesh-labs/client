@@ -62,6 +62,23 @@ else
   bad 'Linux full-tunnel cannot write wg-quick src_valid_mark safely'
 fi
 
+# Print one YAML scriptlet list from a packaging config, one entry per block.
+# Grepping the raw file is not enough: fastforge merges these lists into single
+# %post and %postun sections, so the same command can legitimately appear in
+# both, and a raw `grep -n | cut -d: -f1` then yields two line numbers and
+# breaks any ordering arithmetic.
+yaml_scriptlets() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)
+for item in yaml.safe_load(open(sys.argv[1])).get(sys.argv[2]) or []:
+    print(item)
+PY
+}
+
 # Both packages have to ship that drop-in, or the helper loses full-tunnel.
 # Check each file separately: grep -q across several files succeeds on any one
 # match, which would let a package silently drop the drop-in.
@@ -115,6 +132,49 @@ for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_conf
   fi
 done
 
+# Unit teardown, shared by the upgrade and uninstall scriptlets. Two mistakes
+# here are silent: a socket unit has no MainPID and prints an empty value, so a
+# bare `= 0` test failed for boltmeshd.socket and aborted %postun on every
+# uninstall; and `systemctl stop` on a unit that is not installed returns
+# non-zero, which under `set -e` aborted %post on the first upgrade from a
+# build that shipped no units. Require the LoadState probe and the empty-tolerant
+# MainPID test wherever a scriptlet stops units, and require the absent-helper
+# guard before the teardown that runs ahead of the removals.
+for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_config.yaml; do
+  teardown_ok=1
+  postun="$(yaml_scriptlets "$config" postuninstall_scripts)"
+  # Only the rpm %post quiesces units, and only on upgrade ($1 -gt 1); dpkg has
+  # no equivalent hook here. Key off that guard, not off the unit name, which
+  # also appears in the deb's plain install lines.
+  post="$(yaml_scriptlets "$config" postinstall_scripts)"
+  if grep -q -- '-gt 1' <<<"$post"; then
+    grep -q 'LoadState' <<<"$post" || teardown_ok=0
+    # shellcheck disable=SC2016  # literal match against the emitted script
+    grep -q '\[ -z "\$main_pid" \] || \[ "\$main_pid" = 0 \]' <<<"$post" || teardown_ok=0
+  fi
+  grep -q 'LoadState' <<<"$postun" || teardown_ok=0
+  # shellcheck disable=SC2016  # literal match against the emitted script
+  grep -q '\[ -z "\$main_pid" \] || \[ "\$main_pid" = 0 \]' <<<"$postun" || teardown_ok=0
+  # An absent helper must not abort the removals that follow it.
+  grep -q '\[ -x /usr/libexec/boltmesh/boltmeshd \]' <<<"$postun" || teardown_ok=0
+  # The teardown must also be skipped unless this is a final erase. rpm passes
+  # %postun the number of remaining copies: 0 on a final erase, but 1 both on a
+  # fresh install and when an upgrade retires the old version. dpkg passes
+  # postrm the action word. Tearing down on an upgrade deleted the helper and
+  # units the incoming %post had just staged, leaving no helper at all.
+  if [[ "$config" == *rpm* ]]; then
+    # shellcheck disable=SC2016  # literal match against the emitted script
+    grep -qF '[ "${1:-0}" -ne 0 ]' <<<"$postun" || teardown_ok=0
+  else
+    grep -qF 'remove | purge' <<<"$postun" || teardown_ok=0
+  fi
+  if [[ "$teardown_ok" -eq 1 ]]; then
+    ok "$config unit teardown tolerates not-found units and an empty MainPID"
+  else
+    bad "$config unit teardown can abort %post/%postun on a stopped or absent unit"
+  fi
+done
+
 # The daemon's signal path and the unit-level fallback must both tear down the
 # tunnel, and the service (not the socket) must own the runtime directory that
 # contains the wg-quick config during shutdown. The unit deliberately uses
@@ -142,13 +202,17 @@ else
 fi
 
 for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/make_config.yaml; do
-  reload_line="$(grep -n 'systemctl daemon-reload' "$package_config" | sed -n '2p' | cut -d: -f1)"
-  service_line="$(grep -n 'stop_unit boltmeshd.service' "$package_config" | cut -d: -f1)"
-  socket_line="$(grep -n 'stop_unit boltmeshd.socket' "$package_config" | cut -d: -f1)"
-  cleanup_line="$(grep -n -- '--cleanup --config-dir=/run/boltmesh --interface=boltmesh0' "$package_config" | cut -d: -f1)"
+  # Scope to the uninstall scriptlet: the rpm %post also stops units on upgrade,
+  # so grepping the whole file matches stop_unit twice and the line arithmetic
+  # below breaks.
+  postun_text="$(yaml_scriptlets "$package_config" postuninstall_scripts)"
+  reload_line="$(grep -n 'systemctl daemon-reload' <<<"$postun_text" | sed -n '1p' | cut -d: -f1)"
+  service_line="$(grep -n 'stop_unit boltmeshd.service' <<<"$postun_text" | sed -n '1p' | cut -d: -f1)"
+  socket_line="$(grep -n 'stop_unit boltmeshd.socket' <<<"$postun_text" | sed -n '1p' | cut -d: -f1)"
+  cleanup_line="$(grep -n -- '--cleanup --config-dir=/run/boltmesh --interface=boltmesh0' <<<"$postun_text" | sed -n '1p' | cut -d: -f1)"
   if [[ -n "$reload_line" && -n "$service_line" && -n "$socket_line" && -n "$cleanup_line" &&
     "$reload_line" -lt "$service_line" && "$service_line" -lt "$socket_line" && "$socket_line" -lt "$cleanup_line" ]] &&
-    grep -q 'MainPID' "$package_config" &&
+    grep -q 'MainPID' <<<"$postun_text" &&
     ! grep -q 'rm -rf /run/boltmesh' "$package_config"; then
     ok "Linux package cleanup ordering: $package_config"
   else
@@ -177,23 +241,22 @@ fi
 # Fastforge puts these scripts in RPM's %post. Because the helper and units
 # are not package-owned, an upgrade must stop the old service before replacing
 # its binary, verify no process remains, and only then install the new payload.
-rpm_postinstall_section="$(
-  sed -n '/^postinstall_scripts:/,/^postuninstall_scripts:/p' "$rpm_config"
-)"
-rpm_upgrade_guard="if [ \"\${1:-1}\" -gt 1 ]; then"
-rpm_upgrade_stop='systemctl stop boltmeshd.service boltmeshd.socket'
-rpm_upgrade_pid="main_pid=\"\$(systemctl show --property=MainPID --value boltmeshd.service)\""
-rpm_upgrade_pid_guard="if [ \"\$main_pid\" != 0 ]; then"
-rpm_upgrade_guard_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_guard" | cut -d: -f1)"
-rpm_upgrade_stop_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_stop" | cut -d: -f1)"
-rpm_upgrade_pid_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF "$rpm_upgrade_pid" | cut -d: -f1)"
-rpm_helper_install_line="$(printf '%s\n' "$rpm_postinstall_section" | grep -nF '  - install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd' | cut -d: -f1)"
+# Match the shape of the corrected upgrade block rather than one spelling of it,
+# and never let a failed grep abort the run: under `set -e` a missing match used
+# to kill this script mid-way and report success for every check after it.
+rpm_postinstall_text="$(yaml_scriptlets "$rpm_config" postinstall_scripts)"
+line_of() { grep -nF -- "$1" <<<"$2" | sed -n '1p' | cut -d: -f1 || true; }
+# shellcheck disable=SC2016  # literal match against the emitted script
+rpm_upgrade_guard_line="$(line_of 'if [ "${1:-1}" -gt 1 ]; then' "$rpm_postinstall_text")"
+rpm_upgrade_stop_line="$(line_of 'if ! stop_unit boltmeshd.service || ! stop_unit boltmeshd.socket; then' "$rpm_postinstall_text")"
+rpm_helper_install_line="$(line_of 'install -Dm755 /usr/share/boltmesh/boltmeshd/boltmeshd ' "$rpm_postinstall_text")"
+# A unit that will not stop must still abort the upgrade rather than let the
+# payload overwrite a binary the running helper still maps.
+rpm_upgrade_fail_closed="$(grep -cF 'exit 1' <<<"$rpm_postinstall_text" || true)"
 if [[ -n "$rpm_upgrade_guard_line" && -n "$rpm_upgrade_stop_line" &&
-  -n "$rpm_upgrade_pid_line" && -n "$rpm_helper_install_line" &&
+  -n "$rpm_helper_install_line" && -n "$rpm_upgrade_fail_closed" &&
   "$rpm_upgrade_guard_line" -lt "$rpm_upgrade_stop_line" &&
-  "$rpm_upgrade_stop_line" -lt "$rpm_upgrade_pid_line" &&
-  "$rpm_upgrade_pid_line" -lt "$rpm_helper_install_line" ]] &&
-  printf '%s\n' "$rpm_postinstall_section" | grep -qF "$rpm_upgrade_pid_guard"; then
+  "$rpm_upgrade_stop_line" -lt "$rpm_helper_install_line" ]]; then
   ok 'RPM upgrades stop and verify the old privileged helper before replacement'
 else
   bad 'RPM upgrade can replace the helper binary while the old process is active'
@@ -257,10 +320,17 @@ for package_config in linux/packaging/deb/make_config.yaml linux/packaging/rpm/m
   daemon_reload_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - systemctl daemon-reload' | cut -d: -f1)"
   socket_enable_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - systemctl enable --now boltmeshd.socket' | cut -d: -f1)"
   nmcli_line="$(printf '%s\n' "$postinstall_section" | grep -nF '  - nmcli general reload conf >/dev/null 2>&1 || true' | cut -d: -f1)"
+  # NetworkManager's reload is optional by contract. The unit-stop suppression
+  # inside the upgrade teardown is deliberate too: `systemctl stop` reports
+  # non-zero for a unit that is already gone or was never installed, and the
+  # LoadState/ActiveState/MainPID assertions that follow are the real gate, so
+  # nothing is masked.
+  unit_stop_literal="$(printf 'systemctl stop "$%s"' unit)"
   unexpected_suppression="$(
     printf '%s\n' "$postinstall_section" |
       grep -F '|| true' |
-      grep -vF 'nmcli general reload conf' || true
+      grep -vF 'nmcli general reload conf' |
+      grep -vF "$unit_stop_literal" || true
   )"
 
   if [[ -z "$prior_status_line" || -z "$fail_fast_line" || -z "$helper_install_line" ||
