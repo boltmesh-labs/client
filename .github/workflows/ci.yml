@@ -44,7 +44,7 @@ jobs:
 
       # pre-commit/action installs pre-commit itself via pip; pinning the
       # interpreter keeps that resolution off whatever ships on the image.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -53,7 +53,7 @@ jobs:
       # `language: golang`, so pre-commit compiles them into isolated
       # environments and needs a Go toolchain to do so. Pinning it keeps that
       # build reproducible.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: false
@@ -98,7 +98,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
@@ -220,7 +220,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: "temurin"
           java-version: "21"
@@ -265,7 +265,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: "temurin"
           java-version: "21"
