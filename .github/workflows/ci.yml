@@ -171,29 +171,6 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Compiles the native runner (helper_pipe.cpp) so a Windows-only C++
-      # break is caught even though the platform ships no installer yet.
-      - name: Build Windows runner (debug)
-        run: flutter build windows --debug
-
-      # Compiles and runs the Flutter-free named-pipe transport test. The test
-      # target is EXCLUDE_FROM_ALL so it never lands in the app bundle (Flutter
-      # builds INSTALL, fastforge copies the whole runner directory into the
-      # installer), so it must be built explicitly here.
-      - name: Build Windows helper pipe tests
-        run: cmake --build build/windows/x64 --config Debug --target helper_pipe_io_tests
-
-      - name: Run Windows helper pipe tests
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path build/windows -Recurse -Filter helper_pipe_io_tests.exe |
-            Select-Object -First 1
-          if ($null -eq $exe) { throw 'helper_pipe_io_tests.exe was not built' }
-          & $exe.FullName
-          if ($LASTEXITCODE -ne 0) {
-            throw "helper_pipe_io_tests.exe failed (exit $LASTEXITCODE)"
-          }
-
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -201,11 +178,21 @@ jobs:
           cache: true
           cache-dependency-path: boltmeshd/go.sum
 
-      # Runs the Windows-tagged boltmeshd tests (SCM/DLL-layout seams), which
-      # cannot run on the Linux validate job.
-      - name: Test boltmeshd (Windows)
-        working-directory: boltmeshd
-        run: go test ./... -count=1
+      # The Windows half of the validation, in one command: compiles the native
+      # runner (helper_pipe.cpp), builds and runs the Flutter-free named-pipe
+      # transport test (EXCLUDE_FROM_ALL, so `flutter build` never produces it
+      # and it must be built by name), runs the Windows-tagged boltmeshd tests
+      # (SCM/DLL-layout seams, which the Linux validate job cannot execute), and
+      # asserts the bundle carries the WireGuard files the helper loads from
+      # beside itself.
+      #
+      # This is the same script a developer runs locally
+      # (pwsh -File tool/verify_windows.ps1) so the two cannot drift: change the
+      # script, not the steps here. It re-runs the pub get above, which is
+      # cheap and keeps the script self-contained for local use.
+      - name: Verify Windows runner
+        shell: pwsh
+        run: pwsh -File tool/verify_windows.ps1
 
   # The minified release build and the lint result are identical on every API
   # level, so they run once here rather than once per emulator leg. The

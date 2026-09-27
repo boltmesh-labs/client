@@ -50,10 +50,30 @@ $env:CGO_ENABLED = '0'
 $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'
 
-$output = Join-Path $BuildDir 'boltmeshd.exe'
+# Stamp the build metadata the Makefile injects for local builds, so an
+# installed helper reports its version and commit through `boltmeshd -version`
+# instead of the placeholder `dev (unknown, built unknown)`. Git metadata is
+# best-effort: a source tarball or a checkout without git still builds.
+$version = 'dev'
+$commit = 'unknown'
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $described = (& git -C $repoRoot describe --tags --always --dirty 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $described) { $version = $described.Trim() }
+    $rev = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $rev) { $commit = $rev.Trim() }
+}
+$buildTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+# One argument: go splits the value on spaces itself.
+$ldflags = "-s -w -X main.Version=$version -X main.GitCommit=$commit -X main.BuildTime=$buildTime"
+
+# The output path must be the resolved absolute one. go build runs after
+# Push-Location $helperDir, so a relative -BuildDir (as in the .EXAMPLE above)
+# would write the helper into boltmeshd/<BuildDir> instead of the bundle while
+# still reporting success, and the installer would then ship without it.
+$output = Join-Path $buildPath 'boltmeshd.exe'
 Push-Location $helperDir
 try {
-    & go build -trimpath -ldflags '-s -w' -o $output ./cmd/boltmeshd
+    & go build -trimpath -ldflags $ldflags -o $output ./cmd/boltmeshd
     if ($LASTEXITCODE -ne 0) {
         throw "go build for boltmeshd failed (exit $LASTEXITCODE)"
     }
@@ -61,4 +81,11 @@ try {
     Pop-Location
 }
 
-Write-Host "Staged boltmeshd.exe into $BuildDir"
+# Fail loudly rather than leave a half-staged bundle: fastforge copies the
+# runner output directory verbatim, so a missing helper here means an installer
+# whose privileged tunnel service cannot be installed.
+if (-not (Test-Path -LiteralPath $output)) {
+    throw "boltmeshd.exe was not staged into $buildPath"
+}
+
+Write-Host "Staged boltmeshd.exe into $buildPath ($version, $commit)"

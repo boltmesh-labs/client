@@ -407,6 +407,28 @@ if grep -qF 'Windows arm64 is not supported' "$stage_ps1" &&
 else
   bad "windows/packaging/stage_boltmeshd.ps1 no longer enforces the x64-only contract"
 fi
+# go build runs after Push-Location $helperDir, so the output path must be the
+# resolved absolute one. A relative -BuildDir (the hook's own .EXAMPLE) wrote the
+# helper into boltmeshd/<BuildDir>, still printed success, and left the
+# installer shipping without the privileged helper. The Windows verify script
+# exercises the hook end to end; this keeps the regression visible on Linux.
+if grep -qF "Join-Path \$buildPath 'boltmeshd.exe'" "$stage_ps1" &&
+  ! grep -qF "Join-Path \$BuildDir 'boltmeshd.exe'" "$stage_ps1"; then
+  ok "Windows staging writes the helper to the resolved bundle path"
+else
+  bad "windows/packaging/stage_boltmeshd.ps1 stages the helper through a relative path"
+fi
+# A staged helper is what a user runs `boltmeshd -version` on, so the go build
+# itself must pass the metadata the Makefile injects. Checking the go build line
+# rather than the whole file matters: an earlier version computed $ldflags and
+# then still called go build with a bare '-s -w', so the helper shipped as
+# `dev (unknown, built unknown)` while the assignment sat unused in the file.
+if grep -F "go build -trimpath -ldflags \$ldflags" "$stage_ps1" >/dev/null &&
+  grep -qF -- '-X main.Version=' "$stage_ps1"; then
+  ok "Windows staging stamps the helper's version metadata"
+else
+  bad "windows/packaging/stage_boltmeshd.ps1 ships a helper with no version metadata"
+fi
 inno_config='windows/packaging/exe/make_config.yaml'
 if grep -qE '^[[:space:]]*architectures_allowed:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config" &&
   grep -qE '^[[:space:]]*architectures_install_in_64bit_mode:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config"; then

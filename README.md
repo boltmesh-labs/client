@@ -352,6 +352,10 @@ fastforge release --name=production
 # dist/<version>/boltmesh-<version>-windows-setup.exe
 ```
 
+To check the Windows build and its privileged helper without packaging
+anything, run `pwsh -File tool/verify_windows.ps1` (see [Tests](#tests)); it is
+the script the `validate-windows` CI job runs.
+
 The Windows package is an Inno Setup `.exe`, not MSIX. The pre-packing hook
 `windows/packaging/stage_boltmeshd.ps1` builds `boltmeshd.exe` into the
 bundle, so the installer ships the helper next to `boltmesh.exe` (and the
@@ -593,6 +597,10 @@ bash tool/check_generated.sh
 # Android manifest the background tunnel needs, the Windows helper channel and
 # a mingw-w64 cross-compile of the Windows runner C++ test):
 bash tool/verify_native.sh
+# The Windows half, which only a Windows host can run (native runner build, the
+# named-pipe transport test, the Windows-tagged boltmeshd tests, and the
+# packaging staging hook). Same script the validate-windows CI job runs:
+pwsh -File tool/verify_windows.ps1
 # Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
 ```

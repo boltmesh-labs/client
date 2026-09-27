@@ -17,6 +17,7 @@ Run the CI validation order when changing Dart code:
 ```sh
 flutter pub get --enforce-lockfile
 bash tool/check_generated.sh
+pwsh -File tool/verify_windows.ps1   # Windows host only; the validate-windows job
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 flutter test --coverage
@@ -28,7 +29,7 @@ bash tool/verify_native.sh
 - For a local backend, run `podman-compose up -d` from the `infra` repository, then use `flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1`. The default API is production HTTPS; release builds reject `http://`.
 - Android validation is `flutter build apk --debug` followed by `(cd android && ./gradlew :app:lintDebug)`; the build must run first so Gradle has `android/local.properties`.
 - The Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/gradle-wrapper.jar`) is committed, unlike the Flutter template, so any job or fresh clone can run Gradle before a `flutter build`. Those files are the Flutter SDK's `gradle_wrapper` artifact byte-for-byte; never hand-edit them. `android/local.properties` stays ignored, and anything that invokes Gradle without `flutter build` must write it (see the `validate-android` job in `.github/workflows/ci.yml`).
-- Windows native validation (`flutter build windows --debug` and the named-pipe C++ test) must run on Windows; `tool/verify_native.sh` additionally cross-compiles that C++ test with mingw-w64 on Linux (compile-only — Wine does not emulate its overlapped named-pipe I/O faithfully), and the helper’s Windows-tagged Go tests run only on the Windows CI runner.
+- Windows native validation must run on Windows: `tool/verify_windows.ps1` is the single entry point (native runner build, the `helper_pipe_io_tests` named-pipe C++ test, the Windows-tagged `boltmeshd` Go tests, and the `stage_boltmeshd.ps1` staging hook), and the `validate-windows` job runs that same script so the two cannot drift — change the script, not the job steps. `tool/verify_native.sh` additionally cross-compiles the C++ test with mingw-w64 on Linux (compile-only — Wine does not emulate its overlapped named-pipe I/O faithfully). `cmake` is often absent from a developer `PATH` on Windows, so the script falls back to the copy Visual Studio ships.
 
 ### `boltmeshd` (run from `boltmeshd/`)
 
