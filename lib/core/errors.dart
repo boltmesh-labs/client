@@ -131,11 +131,15 @@ bool looksLikeHtmlBody(String body) {
         );
       }
     case 409:
-      // Key reuse first and by code: the backend's PUBLIC_KEY_IN_USE detail
-      // ("This WireGuard public key is already registered to another
-      // device.") also contains "already", so a text-only `already` check
-      // would shadow it and kill the fresh-key retry. Idempotency next: its
-      // payloads contain "already" too.
+      // Idempotency first and by code. Both 409 kinds get described with
+      // "already", so neither is separable by text alone and the order is
+      // load-bearing only when a payload carries both markers: an idempotency
+      // conflict is answered by a same-key replay, so letting the key-reuse
+      // branch shadow it would burn a fresh key per 409. Key reuse next, by
+      // code and by text: the backend's PUBLIC_KEY_IN_USE detail ("This
+      // WireGuard public key is already registered to another device.") also
+      // contains "already", so a text-only `already` check would shadow it
+      // and kill the fresh-key retry.
       if ((code != null && code.contains('IDEMPOT')) ||
           lower.contains('idempot')) {
         result = (

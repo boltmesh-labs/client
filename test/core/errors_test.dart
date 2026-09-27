@@ -80,6 +80,17 @@ void main() {
       friendlyMessage(409, 'Idempotency-Key already used'),
       contains('in flight'),
     );
+    // Precedence when one payload carries both markers: an idempotency
+    // conflict is answered by a same-key replay, so the key-reuse branch
+    // (which would burn a fresh key per 409) must not shadow it.
+    expect(
+      kindFor(
+        409,
+        'Idempotency-Key was already used with a different public key body.',
+        'IDEMPOTENCY_KEY_BODY_CONFLICT',
+      ),
+      ApiErrorKind.idempotencyConflict,
+    );
   });
 
   test('409 unknown detail stays unknown', () {
