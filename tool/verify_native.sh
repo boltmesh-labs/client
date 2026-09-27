@@ -447,6 +447,40 @@ if grep -qE '^[[:space:]]*SetupArchitecture=x64[[:space:]]*$' windows/packaging/
 else
   bad "windows/packaging/exe/boltmesh.iss does not set SetupArchitecture=x64"
 fi
+# ISPP reads any line whose first non-blank character is '[' as a section tag,
+# including inside [Code]. A wrapped Pascal argument list like
+#     Log(Format('... %d.',
+#       [ResultCode]));
+# therefore fails to compile with "Invalid section tag" on both Inno 6 and 7.
+# Nothing caught it: build-windows only runs on a release tag, so this template
+# had never been compiled. Keep such continuations on one line.
+if grep -qE '^[[:space:]]+\[[A-Za-z]' windows/packaging/exe/boltmesh.iss; then
+  bad "boltmesh.iss has an indented line starting with '[' that ISPP reads as a section tag"
+else
+  ok "Windows installer has no ISPP-confusable section tags"
+fi
+# [Code] must open with a declaration. Pascal Scripting reads a leading comment
+# as the start of the program body and fails with "'BEGIN' expected" pointing at
+# that comment, which reads like a line-ending problem, not a syntax one.
+iss_first_code_line="$(
+  awk '/^\[Code\][[:space:]]*$/ { seen = 1; next } seen && NF { print; exit }' \
+    windows/packaging/exe/boltmesh.iss
+)"
+# Inside [Code] the comments must not use ';'. Pascal Scripting fails the whole
+# compile with "'BEGIN' expected" pointing at the comment line, whether the
+# comment is before, between or after declarations, and the message names the
+# comment rather than the cause. '//', '{ }' and '(* *)' all compile.
+iss_code_semicolon_comments="$(
+  awk '/^\[Code\][[:space:]]*$/ { seen = 1; next } seen && /^[[:space:]]*;/ { print NR }' \
+    windows/packaging/exe/boltmesh.iss | paste -sd, -
+)"
+if [[ -z "$iss_first_code_line" ]]; then
+  bad "boltmesh.iss has no [Code] body"
+elif [[ -n "$iss_code_semicolon_comments" ]]; then
+  bad "boltmesh.iss uses ';' comments inside [Code] (line(s) $iss_code_semicolon_comments); use // instead"
+else
+  ok "Windows installer [Code] avoids ';' comments and opens with a declaration"
+fi
 inno_config='windows/packaging/exe/make_config.yaml'
 if grep -qE '^[[:space:]]*architectures_allowed:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config" &&
   grep -qE '^[[:space:]]*architectures_install_in_64bit_mode:[[:space:]]*x64compatible[[:space:]]*$' "$inno_config"; then

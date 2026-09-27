@@ -88,17 +88,27 @@ Name: "{userstartup}\{{DISPLAY_NAME}}"; Filename: "{app}\{{EXECUTABLE_NAME}}"; W
 ; whose helper failed to install cannot connect; HelperInstalled keeps the app
 ; from starting in that state.
 Filename: "{app}\{{EXECUTABLE_NAME}}"; Description: "{cm:LaunchProgram,{{DISPLAY_NAME}}}"; Flags: {% if PRIVILEGES_REQUIRED == 'admin' %}runascurrentuser{% endif %} nowait postinstall skipifsilent; Check: HelperInstalled
-[Code]
-; The privileged helper is installed here rather than as a [Run] entry: Inno
-; only logs a [Run] program's exit code, so a failed boltmeshd -install would
-; otherwise be followed by the app launch and a "successful" install with no
-; working tunnel. Installing it during ssPostInstall also runs it before the
+; The privileged helper is installed from [Code] rather than as a [Run] entry:
+; Inno only logs a [Run] program's exit code, so a failed boltmeshd -install
+; would otherwise be followed by the app launch and a "successful" install with
+; no working tunnel. Installing it during ssPostInstall also runs it before the
 ; postinstall app launch. A failure suppresses that launch and is reported
 ; through the setup exit code.
+;
+; NOTE: inside [Code] the comments use `//`, not `;`. A `;` comment line
+; anywhere in [Code] -- before, between or after declarations -- fails the
+; Pascal Scripting compile with "'BEGIN' expected" pointing at the comment
+; rather than at the real cause; `//`, `{ }` and `(* *)` all compile. Every
+; other section keeps the usual `;` form.
+;
+; NOTE: no `Format(..., [x])`. Inno Script has no Delphi open-array
+; constructor, so `[ResultCode]` is a syntax error, and passing the argument
+; bare is a type mismatch. Build these strings with IntToStr concatenation.
+[Code]
 var
   HelperInstallFailed: Boolean;
 
-; Gates the postinstall app launch; a bundle whose helper failed must not start.
+// Gates the postinstall app launch; a bundle whose helper failed must not start.
 function HelperInstalled(): Boolean;
 begin
   Result := not HelperInstallFailed;
@@ -119,8 +129,8 @@ begin
   else if ResultCode <> 0 then
   begin
     HelperInstallFailed := True;
-    Log(Format('The BoltMesh helper could not be installed (exit code %d).',
-      [ResultCode]));
+    Log('The BoltMesh helper could not be installed (exit code ' +
+      IntToStr(ResultCode) + ').');
   end;
 
   if HelperInstallFailed and not WizardSilent then
@@ -135,9 +145,9 @@ begin
     InstallHelperService();
 end;
 
-; A failed helper install means the install did not achieve its purpose. Report
-; a nonzero exit code so silent and automated installs see the failure instead
-; of success.
+// A failed helper install means the install did not achieve its purpose. Report
+// a nonzero exit code so silent and automated installs see the failure instead
+// of success.
 function GetCustomSetupExitCode(): Integer;
 begin
   if HelperInstallFailed then
@@ -146,11 +156,11 @@ begin
     Result := 0;
 end;
 
-; The privileged helper and tunnel services run as LocalSystem and load their
-; binaries from {app}. DisableDirPage hides the directory page, but the /DIR
-; command line can still override DefaultDirName, so verify the destination is
-; inside the protected Program Files tree before any service is registered.
-; Reject '..' as well so a non-canonical path cannot escape after expansion.
+// The privileged helper and tunnel services run as LocalSystem and load their
+// binaries from {app}. DisableDirPage hides the directory page, but the /DIR
+// command line can still override DefaultDirName, so verify the destination is
+// inside the protected Program Files tree before any service is registered.
+// Reject '..' as well so a non-canonical path cannot escape after expansion.
 function InstallDirIsProtected(): Boolean;
 var
   AppDir: String;
@@ -165,8 +175,8 @@ begin
       (CompareText(Copy(AppDir, 1, Length(Prefix)), Prefix) = 0));
 end;
 
-; Run cleanup from an uninstall event rather than [UninstallRun] so a
-; non-zero helper exit aborts before installed files are removed.
+// Run cleanup from an uninstall event rather than [UninstallRun] so a
+// non-zero helper exit aborts before installed files are removed.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
@@ -192,15 +202,16 @@ begin
     end
     else if ResultCode <> 0 then
     begin
-      Result := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+      Result := 'The BoltMesh helper could not be removed (exit code ' +
+        IntToStr(ResultCode) + ').';
     end;
   end;
 end;
 
-; Reports whether a Windows service is registered. `sc query` exits 0 when the
-; service exists and 1060 (ERROR_SERVICE_DOES_NOT_EXIST) when it does not. Any
-; other outcome, including a failed launch, is reported as still present so an
-; undetermined state fails closed rather than silently skipping cleanup.
+// Reports whether a Windows service is registered. `sc query` exits 0 when the
+// service exists and 1060 (ERROR_SERVICE_DOES_NOT_EXIST) when it does not. Any
+// other outcome, including a failed launch, is reported as still present so an
+// undetermined state fails closed rather than silently skipping cleanup.
 function ServiceExists(ServiceName: String): Boolean;
 var
   ResultCode: Integer;
@@ -212,16 +223,16 @@ begin
     Result := True;
 end;
 
-; Run cleanup from an uninstall event rather than [UninstallRun] so a failed
-; cleanup aborts before installed files are removed. The privileged helper owns
-; the service and tunnel teardown, so it is the only complete cleanup. When its
-; binary is missing (a damaged, manually deleted, or partially removed
-; installation) the uninstall must not silently complete while a service or the
-; private-key config survives: probe for them and abort with remediation.
-;
-; The service names are the daemon's defaults (boltmeshd and the boltmesh0
-; tunnel interface) and the config lives under ProgramData; the installer never
-; overrides -interface or -config-dir, so these are exactly the names in play.
+// Run cleanup from an uninstall event rather than [UninstallRun] so a failed
+// cleanup aborts before installed files are removed. The privileged helper owns
+// the service and tunnel teardown, so it is the only complete cleanup. When its
+// binary is missing (a damaged, manually deleted, or partially removed
+// installation) the uninstall must not silently complete while a service or the
+// private-key config survives: probe for them and abort with remediation.
+//
+// The service names are the daemon's defaults (boltmeshd and the boltmesh0
+// tunnel interface) and the config lives under ProgramData; the installer never
+// overrides -interface or -config-dir, so these are exactly the names in play.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   CleanupError: String;
@@ -240,7 +251,8 @@ begin
     if not Exec(HelperPath, '-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       CleanupError := 'The BoltMesh helper could not be started for uninstall.'
     else if ResultCode <> 0 then
-      CleanupError := Format('The BoltMesh helper could not be removed (exit code %d).', [ResultCode]);
+      CleanupError := 'The BoltMesh helper could not be removed (exit code ' +
+        IntToStr(ResultCode) + ').';
   end
   else if ServiceExists('boltmeshd') or ServiceExists('boltmesh0') or
           FileExists(ExpandConstant('{commonappdata}\BoltMesh\boltmesh0.conf')) then

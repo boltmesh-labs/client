@@ -354,6 +354,17 @@ not on `PATH` and only fails once it tries to pack the installer:
 $env:INNO_SETUP_PATH = 'C:\Program Files\Inno Setup 7'
 ```
 
+**`sh` has to be on `PATH`.** fastforge runs *every* packaging hook through
+`sh -c`, on Windows too (`flutter_app_packager._runHooks`), so the `windows-exe`
+pre/post hooks cannot run without it. CI gets it from Git for Windows, which
+installs `sh.exe` under `bin\` and `usr\bin\` but adds neither to `PATH` — so a
+plain developer shell fails with `'sh' is not recognized` part-way into
+`fastforge release`. Put Git's `bin` on `PATH` for the session:
+
+```powershell
+$env:PATH = "C:\Program Files\Git\bin;$env:PATH"
+```
+
 Chocolatey publishes no 7.x package, so `choco install innosetup` still yields
 6.x. Install 7 from the [downloads page][inno] or with
 `winget install --id JRSoftware.InnoSetup.7`. The `build-windows` job pins

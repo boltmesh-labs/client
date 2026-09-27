@@ -13,6 +13,14 @@
 *.bat -text
 *.cmd -text
 
+# Inno Setup's ISPP mis-parses an LF-only script. Given CRLF the same script
+# compiles; given LF a [Code] section that merely starts with a comment fails
+# with "'BEGIN' expected", and an indented line starting with '[' is read as a
+# section tag. fastforge renders the .iss from this file byte-for-byte, so the
+# working-tree form is exactly what the compiler sees. Stored LF like every
+# other text file, checked out CRLF.
+*.iss text eol=crlf
+
 # Never let text=auto guess about these; a false "text" verdict would corrupt
 # them in the repository.
 *.png binary
