@@ -55,6 +55,48 @@ postinstall_scripts:
       exit "$postinstall_status"
     fi
     set -e
+  # dpkg owns only the /opt payload staged above; this script owns the installed
+  # helper, so dpkg neither stops it nor replaces it and the first install line
+  # below overwrites a possibly running binary. boltmeshd.service is socket
+  # activated and Type=simple, so a helper left running by the previous version
+  # keeps serving every client connection, and daemon-reload plus `enable --now`
+  # further below cannot replace it: the socket unit is already active and hands
+  # new connections to the service that is already up. An upgrade therefore
+  # completed "successfully" while the pre-upgrade binary kept answering, with
+  # /proc/<pid>/exe reading (deleted) so the running version was unobservable.
+  # Quiesce both units before overwriting the helper, exactly as the rpm %post
+  # does. No dpkg action word is tested to decide this: dpkg says "upgrade" only
+  # when the old package was configured, and "configure" both when the old
+  # package was left unconfigured by an interrupted install and when this is a
+  # first install over purged configuration files, so a test for a word skips
+  # the interrupted-install case that matters most. stop_unit() is a no-op for a
+  # unit that is not installed, which makes running this unconditionally correct
+  # on a clean first install and in every other case. The units on disk are still
+  # the outgoing ones at this point, so no daemon-reload is wanted before the
+  # stop; the reload at the end of this script picks the new ones up. This mirrors
+  # stop_unit() in the uninstall script below.
+  - |
+    stop_unit() {
+      unit="$1"
+      if ! command -v systemctl >/dev/null 2>&1; then
+        return 0
+      fi
+      load_state="$(systemctl show --property=LoadState --value "$unit")" || return 1
+      if [ "$load_state" = "not-found" ]; then
+        return 0
+      fi
+      systemctl stop "$unit" >/dev/null 2>&1 || true
+      active_state="$(systemctl show --property=ActiveState --value "$unit")" || return 1
+      main_pid="$(systemctl show --property=MainPID --value "$unit")" || return 1
+      if [ "$active_state" != inactive ] && [ "$active_state" != failed ]; then
+        return 1
+      fi
+      [ -z "$main_pid" ] || [ "$main_pid" = 0 ] || return 1
+    }
+    if ! stop_unit boltmeshd.service || ! stop_unit boltmeshd.socket; then
+      printf 'boltmesh: failed to stop the privileged helper during upgrade\n' >&2
+      exit 1
+    fi
   - install -Dm755 /opt/boltmesh/boltmeshd/boltmeshd /usr/libexec/boltmesh/boltmeshd
   - install -Dm644 /opt/boltmesh/boltmeshd/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
   - install -Dm644 /opt/boltmesh/boltmeshd/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket

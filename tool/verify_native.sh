@@ -143,11 +143,11 @@ done
 for config in linux/packaging/rpm/make_config.yaml linux/packaging/deb/make_config.yaml; do
   teardown_ok=1
   postun="$(yaml_scriptlets "$config" postuninstall_scripts)"
-  # Only the rpm %post quiesces units, and only on upgrade ($1 -gt 1); dpkg has
-  # no equivalent hook here. Key off that guard, not off the unit name, which
-  # also appears in the deb's plain install lines.
+  # Both postinstall scriptlets stop units before replacing the helper. Key off
+  # the stop_unit calls, which only a teardown spells that way, not off the unit
+  # name, which also appears in the plain install lines.
   post="$(yaml_scriptlets "$config" postinstall_scripts)"
-  if grep -q -- '-gt 1' <<<"$post"; then
+  if grep -q 'stop_unit boltmeshd.service' <<<"$post"; then
     grep -q 'LoadState' <<<"$post" || teardown_ok=0
     # shellcheck disable=SC2016  # literal match against the emitted script
     grep -q '\[ -z "\$main_pid" \] || \[ "\$main_pid" = 0 \]' <<<"$post" || teardown_ok=0
@@ -260,6 +260,39 @@ if [[ -n "$rpm_upgrade_guard_line" && -n "$rpm_upgrade_stop_line" &&
   ok 'RPM upgrades stop and verify the old privileged helper before replacement'
 else
   bad 'RPM upgrade can replace the helper binary while the old process is active'
+fi
+
+# dpkg has the same upgrade hazard, and it needs no extra maintainer script: it
+# owns only the /opt payload, while the installed helper is created by postinst
+# itself, so the first install -Dm755 is what overwrites a possibly running
+# binary. A socket-activated Type=simple service that is left running keeps
+# serving every client connection, and `enable --now` cannot replace it because
+# the socket unit is already active, so the upgrade reported success while the
+# pre-upgrade binary answered. There is deliberately no test for a dpkg action
+# word: dpkg says "upgrade" only when the old package was configured, and
+# "configure" both when it was left unconfigured and on a first install over
+# purged configuration files, so a word-based guard skips exactly the
+# interrupted-install case. Require both stop_unit calls, a fail-closed abort, and
+# that all of it precedes the helper install. `sh -n` catches a mangled block
+# scalar, which is the realistic way this entry breaks; it is a syntax check only
+# and cannot reject a bashism, because /bin/sh is bash on the hosts that run this
+# script.
+deb_postinstall_text="$(yaml_scriptlets "$deb_config" postinstall_scripts)"
+# shellcheck disable=SC2016  # literal match against the emitted script
+deb_upgrade_stop_line="$(line_of 'if ! stop_unit boltmeshd.service || ! stop_unit boltmeshd.socket; then' "$deb_postinstall_text")"
+deb_helper_install_line="$(line_of 'install -Dm755 /opt/boltmesh/boltmeshd/boltmeshd ' "$deb_postinstall_text")"
+# A unit that will not stop must still abort the upgrade rather than let the
+# payload overwrite a binary the running helper still maps.
+deb_upgrade_fail_closed="$(grep -cF 'exit 1' <<<"$deb_postinstall_text" || true)"
+deb_postinstall_syntax=0
+sh -n <<<"$deb_postinstall_text" || deb_postinstall_syntax=1
+if [[ -n "$deb_upgrade_stop_line" && -n "$deb_helper_install_line" &&
+  -n "$deb_upgrade_fail_closed" &&
+  "$deb_upgrade_stop_line" -lt "$deb_helper_install_line" &&
+  "$deb_postinstall_syntax" -eq 0 ]]; then
+  ok 'deb upgrades stop and verify the old privileged helper before replacement'
+else
+  bad 'deb upgrade can leave the pre-upgrade helper serving every connection'
 fi
 
 # The package must not infer authorization solely from SUDO_USER or discard a
