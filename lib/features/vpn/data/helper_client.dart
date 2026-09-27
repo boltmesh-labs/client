@@ -264,8 +264,13 @@ class HelperClient {
         }
         // Do not release the slot yet: a timed-out waiter must not let a
         // later mutation bypass the still-running raw exchange ahead of it.
-        // But bound the wait so a wedged transport (one that never settles)
-        // cannot permanently block the mutation queue.
+        // Bound the wait anyway (this queueTimeout is the caller's own call
+        // budget, so the lane frees after twice it) because a transport that
+        // never settles would otherwise block every later mutation for the
+        // life of the process. The trade-off is deliberate: past that bound a
+        // later mutation may overlap a still-running exchange, which is
+        // strictly better than a permanently wedged queue — the abandoned
+        // waiter already told its caller the exchange was given up on.
         unawaited(
           previous
               .timeout(queueTimeout * 2)
