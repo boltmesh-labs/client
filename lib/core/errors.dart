@@ -136,18 +136,18 @@ bool looksLikeHtmlBody(String body) {
       // device.") also contains "already", so a text-only `already` check
       // would shadow it and kill the fresh-key retry. Idempotency next: its
       // payloads contain "already" too.
-      if (code == 'PUBLIC_KEY_IN_USE' ||
+      if ((code != null && code.contains('IDEMPOT')) ||
+          lower.contains('idempot')) {
+        result = (
+          kind: ApiErrorKind.idempotencyConflict,
+          message: 'Provision already in flight. Retrying with the same key.',
+        );
+      } else if (code == 'PUBLIC_KEY_IN_USE' ||
           lower.contains('public key') ||
           lower.contains('in use')) {
         result = (
           kind: ApiErrorKind.keyInUse,
           message: 'Key already in use. Generating a fresh key…',
-        );
-      } else if ((code != null && code.contains('IDEMPOT')) ||
-          lower.contains('idempot')) {
-        result = (
-          kind: ApiErrorKind.idempotencyConflict,
-          message: 'Provision already in flight. Retrying with the same key.',
         );
       } else if (lower.contains('already') || lower.contains('connected')) {
         result = (

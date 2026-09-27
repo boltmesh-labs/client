@@ -59,7 +59,7 @@ var toolDirs = []string{"/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 func findTool(name string) (string, error) {
 	for _, dir := range toolDirs {
 		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
 			return path, nil
 		}
 	}

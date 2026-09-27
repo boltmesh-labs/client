@@ -514,7 +514,9 @@ extension ConnectionColdStart on ConnectionController {
     try {
       final raw = await _device.lastDialJson();
       if (raw == null || raw.isEmpty) return null;
-      final dial = DialParams.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      final dial = DialParams.fromJson(decoded);
       if (dial.deviceId != deviceId) return null;
       return dial;
     } catch (e) {

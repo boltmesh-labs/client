@@ -212,7 +212,9 @@ class _DesktopTrayHostState extends ConsumerState<DesktopTrayHost> {
 
   @override
   void dispose() {
-    unawaited(_tray?.dispose());
+    final tray = _tray;
+    _tray = null;
+    if (tray != null) unawaited(tray.dispose());
     super.dispose();
   }
 

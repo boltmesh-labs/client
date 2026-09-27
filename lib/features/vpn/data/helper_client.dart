@@ -264,11 +264,15 @@ class HelperClient {
         }
         // Do not release the slot yet: a timed-out waiter must not let a
         // later mutation bypass the still-running raw exchange ahead of it.
+        // But bound the wait so a wedged transport (one that never settles)
+        // cannot permanently block the mutation queue.
         unawaited(
-          previous.then<void>(
-            (_) => slot.release(),
-            onError: (_, _) => slot.release(),
-          ),
+          previous
+              .timeout(queueTimeout * 2)
+              .then<void>(
+                (_) => slot.release(),
+                onError: (_, _) => slot.release(),
+              ),
         );
       } catch (e, st) {
         if (!result.isCompleted) result.completeError(e, st);
