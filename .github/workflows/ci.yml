@@ -72,8 +72,9 @@ jobs:
         #                        `go mod tidy -diff` step)
         # What remains runs against no repo toolchain at all: the
         # pre-commit-hooks hygiene guards, actionlint, gitleaks, shellcheck,
-        # prettier and markdownlint. shellcheck and node (for the two npx
-        # hooks) come from the ubuntu-latest image.
+        # prettier and markdownlint. shellcheck and node (for pre-commit to
+        # build the two `language: node` envs) come from the ubuntu-latest
+        # image.
         env:
           SKIP: >-
             check-generated,flutter-lockfile,dart-format,flutter-analyze,

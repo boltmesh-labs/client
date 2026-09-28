@@ -148,8 +148,15 @@ repos:
         # break the workflow that defines CI. Bump by hand (Dependabot has no
         # `npm` ecosystem here and does not read versions out of this file) and
         # land the resulting reformat in its own commit.
-        entry: npx --yes prettier@3.9.9 --write
-        language: system
+        #
+        # `language: node` with the pin in `additional_dependencies`, for the
+        # same reason as markdownlint below: pre-commit installs the version
+        # once into `~/.cache/pre-commit`, which the `pre-commit` CI job caches,
+        # instead of `npx --yes` fetching it into an uncached `~/.npm/_npx` on
+        # every run.
+        entry: prettier --write
+        language: node
+        additional_dependencies: ["prettier@3.9.9"]
         types_or: [css, javascript, jsx, ts, tsx, json, yaml, html]
         # Xcode owns the asset-catalog Contents.json files, so keep their
         # Xcode-generated layout out of prettier's way.
@@ -165,6 +172,21 @@ repos:
         # .markdownlint.json are untouched and nothing reformats. It took over
         # from markdownlint-cli after a 2026-09-26 micromark release broke that
         # entry's install with a missing ESM export.
-        entry: npx --yes markdownlint-cli2@0.23.3 --fix
-        language: system
+        #
+        # `language: node` with the pin in `additional_dependencies`, not an
+        # `npx` entry. The version is still pinned to 0.23.3 and still resolves
+        # the same tree, so the rules and .markdownlint.json are unchanged. The
+        # difference is where that tree lives: `npx --yes` re-resolved and
+        # re-downloaded all ~80 packages into `~/.npm/_npx` on every run, on
+        # every machine, including CI, where nothing caches that directory. A
+        # truncated extraction there (observed as a half-written
+        # `katex/dist/katex.mjs`, which markdownlint pulls in via
+        # micromark-extension-math) killed the hook with a bare ESM SyntaxError
+        # before it read a file, and re-running reproduced it. pre-commit
+        # installs this tree once into `~/.cache/pre-commit`, which the
+        # `pre-commit` CI job already caches and restores, so the download
+        # happens on a cache miss rather than on every run.
+        entry: markdownlint-cli2 --fix
+        language: node
+        additional_dependencies: ["markdownlint-cli2@0.23.3"]
         types: [markdown]
