@@ -655,6 +655,12 @@ make test-darwin       # go vet: type-checks the darwin files AND their tests
 make build-darwin      # cross-compiles darwin/amd64 + darwin/arm64
 ```
 
+`make lint`, `lint-windows` and `lint-darwin` (and their pre-commit hooks) need
+**golangci-lint v2** — the v1 line is EOL and cannot target Go 1.26. Install it
+with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`
+(matching the version the `validate-boltmeshd` job pins); a different v2 release
+can report differently from CI.
+
 `make test-darwin` type-checks the darwin-tagged tests but cannot **run** them:
 they need a macOS host with a `utun` interface and root. There is no Apple CI
 runner, so the macOS data plane has no executed test.

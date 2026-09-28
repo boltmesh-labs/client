@@ -116,16 +116,25 @@ repos:
         pass_filenames: false
 
       # --- Dart Format ---
+      # `lib`/`test` is the scope the `validate` job gates
+      # (`dart format --set-exit-if-changed lib test`), so the hook formats
+      # exactly that and stays skipped for a `.dart` change outside it. The
+      # formatter exits 0 even when it rewrites files; pre-commit fails the
+      # commit because the hook modified them, which is what makes this a gate.
       - id: dart-format
         name: dart format
-        entry: dart format .
+        entry: dart format lib test
         language: system
-        types: [dart]
+        files: ^(lib|test)/.*\.dart$
+        pass_filenames: false
 
       # --- Flutter Analyze ---
+      # `--fatal-infos` is the form the `validate` job runs and AGENTS.md
+      # documents: without it an info-level diagnostic passes here and fails
+      # there.
       - id: flutter-analyze
         name: flutter analyze
-        entry: flutter analyze
+        entry: flutter analyze --fatal-infos
         language: system
         pass_filenames: false
 
