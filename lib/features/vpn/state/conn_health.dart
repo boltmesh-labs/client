@@ -5,6 +5,12 @@ part of 'connection_controller.dart';
 const _noNetworkNote =
     'Waiting for network… Reconnecting when connection returns.';
 
+/// Banner shown while the health tick holds local stall evidence and is about
+/// to attempt recovery. Cleared again when the tick suppresses recovery (a
+/// live gateway echo proves the data path), so a healthy tunnel never wears a
+/// "checking recovery" banner.
+const _checkingRecoveryNote = 'Connection issue detected. Checking recovery…';
+
 extension ConnectionHealth on ConnectionController {
   bool _healthSessionCurrent(int sessionEpoch, int epoch, DialParams dial) =>
       _sessionCurrent(sessionEpoch: sessionEpoch, epoch: epoch, dial: dial);
@@ -241,9 +247,7 @@ extension ConnectionHealth on ConnectionController {
       return;
     }
     if (localEvidence && snap.healthNote == null) {
-      snap = snap.copyWith(
-        healthNote: 'Connection issue detected. Checking recovery…',
-      );
+      snap = snap.copyWith(healthNote: _checkingRecoveryNote);
     }
     final String why;
     if (handshakeStalled) {
@@ -277,6 +281,13 @@ extension ConnectionHealth on ConnectionController {
     // proves the data path, so the stall is a transient flap.
     if (gateway == true) {
       AppLog.info('health suppressed ($why) gateway echo alive');
+      // Nothing will run, so the recovery banner would outlive the tick on a
+      // proven-alive tunnel. Only this tick's own note is dropped: a note from
+      // elsewhere (an outside-stop verification) still owns the snapshot.
+      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+      if (snap.healthNote == _checkingRecoveryNote) {
+        snap = snap.copyWith(healthNote: null);
+      }
       return;
     }
     // Nothing left to try: the move budget is spent and the trailing
