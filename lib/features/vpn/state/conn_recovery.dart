@@ -2,7 +2,8 @@ part of 'connection_controller.dart';
 
 /// Heal/failover escalation ladder for the connected tunnel.
 ///
-/// A corroborated stall restarts the cached config offline ([_autoHeal]);
+/// Locally confirmed or backend-corroborated stalls restart the cached config
+/// offline ([_autoHeal]);
 /// a stall that survives that escalates straight to moving servers
 /// ([_autoFailover]) — there is no same-server config refresh in between.
 extension ConnectionRecovery on ConnectionController {
@@ -22,6 +23,7 @@ extension ConnectionRecovery on ConnectionController {
   Future<void> _autoHeal(
     String why, {
     bool hardStalled = false,
+    bool localConfirmed = false,
     int? expectedSession,
     int? expectedEpoch,
     DialParams? expectedDial,
@@ -35,7 +37,7 @@ extension ConnectionRecovery on ConnectionController {
       }
       final dial = snap.dial;
       if (dial == null || snap.phase != ConnPhase.connected) return;
-      if (!hardStalled && _lastStatusAnswered) return;
+      if (!hardStalled && !localConfirmed && _lastStatusAnswered) return;
       final sessionEpoch = _sessionEpoch;
       final attempt = snap.autoHealAttempts + 1;
       // [_startWith] resets the failover budget; a same-server restart must
@@ -57,7 +59,7 @@ extension ConnectionRecovery on ConnectionController {
       // consuming the heal budget — unless the handshake is hard-stalled, in
       // which case the reachable backend was out-of-band and the tunnel path
       // is still dead.
-      if (_backendLooksReachable() && !hardStalled) {
+      if (_backendLooksReachable() && !hardStalled && !localConfirmed) {
         AppLog.info('auto-heal suppressed ($why) backend reachable');
         snap = snap.copyWith(
           phase: ConnPhase.connected,
@@ -94,6 +96,10 @@ extension ConnectionRecovery on ConnectionController {
         autoHealAttempts: attempt,
         autoFailoverAttempts: prevFailovers,
         pollFailures: prevPollFailures,
+        // Keep the connected phase from presenting a false healthy state
+        // during the post-restart handshake deadline. A successful handshake
+        // clears this note through the normal fresh-tunnel path.
+        healthNote: 'Recovery in progress…',
       );
       AppLog.info('auto-heal ok ($why) attempt=$attempt');
     } finally {
@@ -113,6 +119,7 @@ extension ConnectionRecovery on ConnectionController {
   Future<void> _surfaceRecoveryExhausted(
     String why, {
     bool hardStalled = false,
+    bool localConfirmed = false,
     int? expectedSession,
     int? expectedEpoch,
     DialParams? expectedDial,
@@ -125,7 +132,7 @@ extension ConnectionRecovery on ConnectionController {
             epoch: expectedEpoch,
             dial: expectedDial,
           ) ||
-          (!hardStalled && _lastStatusAnswered) ||
+          (!hardStalled && !localConfirmed && _lastStatusAnswered) ||
           snap.phase != ConnPhase.connected) {
         return;
       }
@@ -188,7 +195,10 @@ extension ConnectionRecovery on ConnectionController {
       )) {
         return;
       }
-      if (!hardStalled && _lastStatusAnswered) return;
+      // Positive local path-dead evidence is stronger than an older status
+      // response: that response may have travelled out-of-band while the
+      // WireGuard path was already dead.
+      if (!hardStalled && !tunnelPathDead && _lastStatusAnswered) return;
       await _autoFailoverBody(
         why,
         tunnelPathDead: tunnelPathDead,
@@ -239,7 +249,7 @@ extension ConnectionRecovery on ConnectionController {
     )) {
       return;
     }
-    if (!hardStalled && _lastStatusAnswered) return;
+    if (!hardStalled && !tunnelPathDead && _lastStatusAnswered) return;
     final oldDial = snap.dial;
     if (oldDial == null) return;
     if (snap.phase != ConnPhase.connected) return;

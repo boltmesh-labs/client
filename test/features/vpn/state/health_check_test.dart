@@ -1606,10 +1606,11 @@ void main() {
     expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
   });
 
-  test('fresh poll successes suppress heals entirely', () async {
-    // Same dead peer, but the backend keeps answering: the quiet slow-track
-    // stays shut and — since a stale handshake needs backend corroboration —
-    // no heal fires at all.
+  test('fresh poll successes do not suppress confirmed local path death', () async {
+    // Same dead peer, but the backend keeps answering out-of-band. Two
+    // performed-dead gateway echoes are now sufficient local evidence for an
+    // offline restart; backend corroboration is no longer required to begin
+    // recovery.
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
       if (o.path.endsWith('/config')) return dialJson();
@@ -1621,8 +1622,8 @@ void main() {
 
     staleHandshake(ctl);
 
-    // Every poll proves the backend reachable, so corroboration never
-    // opens — repeated stale ticks stay put.
+    // Every poll proves the backend reachable, but it cannot vouch for the
+    // WireGuard path when the gateway echo is dead.
     await ctl.pollStatusOnce(); // backend proven reachable
     await ctl.checkHealthOnce();
     await ctl.checkHealthOnce();
@@ -1635,11 +1636,12 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 0);
+    expect(state.autoHealAttempts, greaterThan(0));
     expect(state.autoFailoverAttempts, 0);
+    // The redesign restarts the cached config, so no config refresh is needed.
     expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     expect(events, isNot(contains('GET:/vpn-regions')));
-    expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
+    expect(events.where((e) => e.startsWith('tunnel:')), isNotEmpty);
   });
 
   test('status poll racing a heal stop is skipped, not counted', () async {

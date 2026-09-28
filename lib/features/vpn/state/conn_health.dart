@@ -213,13 +213,37 @@ extension ConnectionHealth on ConnectionController {
       now: now,
       connectedAt: _connectedAt,
       readerSupported: _readerSupported,
-      graceAfter: ConnectionTuning.hardFirstHandshakeCeiling,
+      // Keep this explicit so the recovery-only first-handshake ceiling stays
+      // independently tunable from the policy function's general default.
+      graceAfter: Duration(
+        seconds: ConnectionTuning.hardFirstHandshakeCeiling.inSeconds,
+      ),
       staleAfter: ConnectionTuning.hardHandshakeStaleAfter,
     );
-    final handshakeStalled = standardStalled || hardStalled;
-    if ((!stageStalled && !handshakeStalled) ||
-        (backendAnswered() && !hardStalled)) {
+    // Two performed-dead echoes are sufficient local evidence to restart the
+    // cached tunnel. Do not wait for the 60s backend poll in a total outage:
+    // the backend is precisely the thing that may be unavailable. The API
+    // probe below still decides whether this evidence can safely fast-track a
+    // server move.
+    final localEchoStalled =
+        echoShortens &&
+        isHandshakeStale(
+          lastHandshakeAt: handshake,
+          now: now,
+          connectedAt: _connectedAt,
+          readerSupported: _readerSupported,
+          graceAfter: ConnectionTuning.firstHandshakeGrace,
+          staleAfter: ConnectionTuning.echoStallHandshakeAge,
+        );
+    final localEvidence = stageStalled || localEchoStalled || hardStalled;
+    final handshakeStalled = standardStalled || localEchoStalled || hardStalled;
+    if (!localEvidence && !handshakeStalled) {
       return;
+    }
+    if (localEvidence && snap.healthNote == null) {
+      snap = snap.copyWith(
+        healthNote: 'Connection issue detected. Checking recovery…',
+      );
     }
     final String why;
     if (handshakeStalled) {
@@ -265,6 +289,7 @@ extension ConnectionHealth on ConnectionController {
       await _surfaceRecoveryExhausted(
         why,
         hardStalled: hardStalled,
+        localConfirmed: localEvidence,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,
@@ -273,7 +298,9 @@ extension ConnectionHealth on ConnectionController {
     }
     final apiReachable = await _apiReachable();
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-    if (backendAnswered() && !hardStalled) return;
+    // A fresh application response is not enough to suppress local evidence:
+    // the response may have arrived out-of-band while the tunnel is dead.
+    // The API probe below is the current reachability decision.
     final cause = classifyFailure(
       hasNetwork: true,
       gatewayAlive: gateway,
@@ -332,6 +359,7 @@ extension ConnectionHealth on ConnectionController {
       await _autoHeal(
         why,
         hardStalled: hardStalled,
+        localConfirmed: localEvidence,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,

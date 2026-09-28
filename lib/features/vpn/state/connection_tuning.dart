@@ -26,10 +26,9 @@ abstract final class ConnectionTuning {
   /// Observed-handshake age past which a stale handshake acts *without*
   /// backend corroboration. The standard [handshakeStaleAfter] still needs a
   /// poll failure or a quiet backend, which a reachable out-of-band control
-  /// plane never provides (WG UDP blocked while the API stays up): polls then
-  /// keep resetting the recovery budgets and the ladder can be suppressed
-  /// forever. Roughly 1.5 rekey cycles keeps a merely-late rekey from
-  /// bypassing corroboration while making recovery deterministic.
+  /// plane never provides (WG UDP blocked while the API stays up). Local echo
+  /// confirmation now handles the earlier restart path; this ceiling remains
+  /// the deterministic fallback when the echo cannot be performed.
   /// The bypass only *enters* the stall; the fast-track rung still requires a
   /// reachable control plane (see [classifyFailure]).
   static const hardHandshakeStaleAfter = Duration(seconds: 180);
@@ -38,9 +37,9 @@ abstract final class ConnectionTuning {
   /// has happened: the fresh tunnel has no handshake, so the standard
   /// [firstHandshakeGrace] stays corroboration-gated and the ladder could
   /// never progress past the first restart while out-of-band polls succeed.
-  /// 60s (2× the grace, ~12 WG retries) is ample even on slow links, and
+  /// 45s (~9 WG retries) is ample even on slow links, and
   /// unsupported readers never enter this branch at all.
-  static const hardFirstHandshakeCeiling = Duration(seconds: 60);
+  static const hardFirstHandshakeCeiling = Duration(seconds: 45);
 
   /// Observed-handshake age beyond which a performed-dead in-tunnel gateway
   /// echo shortens the dead-peer window (see [_deadEchoStrikes] and
