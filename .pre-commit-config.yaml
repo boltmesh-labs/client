@@ -149,8 +149,13 @@ repos:
       # --- Markdown Lint ---
       - id: markdownlint
         name: markdownlint
-        # Pinned for the same reason as prettier above. markdownlint-cli bundles
-        # the engine, so this pins both.
-        entry: npx --yes markdownlint-cli@0.49.1 --fix
+        # Pinned for the same reason as prettier above. markdownlint-cli2 is the
+        # maintained CLI, it bundles the engine so this pins both, and it pins
+        # its whole top-level tree exactly where markdownlint-cli floated it in
+        # `~` ranges. It resolves the same markdownlint 0.41.1, so the rules and
+        # .markdownlint.json are untouched and nothing reformats. It took over
+        # from markdownlint-cli after a 2026-09-26 micromark release broke that
+        # entry's install with a missing ESM export.
+        entry: npx --yes markdownlint-cli2@0.23.3 --fix
         language: system
         types: [markdown]
