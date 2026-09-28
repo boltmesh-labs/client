@@ -23,15 +23,14 @@ This README is the entry point; the deeper docs live alongside it:
 ## Contents
 
 - [Prereqs](#prereqs)
-- [First-time platform scaffolding](#first-time-platform-scaffolding)
 - [Run](#run)
 - [Project layout](#project-layout)
 - [Platform status](#platform-status)
-- [Platform notes](#platform-notes-after-flutter-create)
+- [Platform notes](#platform-notes)
 - [Release versioning](#release-versioning)
 - [Android release build](#android-release-build)
 - [Windows release build](#windows-release-build)
-- [Flows (backend truth)](#flows-backend-truth)
+- [Flows](#flows)
 - [Handshake readers](#handshake-readers)
 - [Tests](#tests)
 
@@ -44,18 +43,6 @@ loop): see [SETUP.md](SETUP.md).
 - Running backend (`podman-compose up -d` from the
   [`infra`](https://github.com/boltmesh-labs/infra) repo) + a user account
   (`POST /v1/auth/register`, then log in from the app's login screen).
-
-## First-time platform scaffolding
-
-`lib/` + `pubspec.yaml` are checked in; native shells are generated once:
-
-```sh
-flutter create --org com.boltmesh --project-name boltmesh .
-flutter pub get
-```
-
-`flutter create .` only fills in missing `android/ ios/ macos/ windows/ linux/`
-folders and never overwrites `lib/`.
 
 ## Run
 
@@ -187,7 +174,7 @@ Not everything was blocked, and the parts that were not are landed and tested:
   with `GOOS=darwin` in CI, and shares its platform-independent UAPI
   translation with the other backends. **It has never been run on a Mac.**
 
-### Known macOS gaps, stated plainly
+### Known macOS gaps
 
 - The **client does not talk to the macOS helper yet.** `lib/features/vpn/data/`
   still routes macOS to the VPN plugin, not to `boltmeshd`. The helper side is
@@ -199,7 +186,7 @@ Not everything was blocked, and the parts that were not are landed and tested:
 - **No Apple CI job, no release job, and no notarization.** `flutter build
   macos` is never run anywhere, and `DEPLOYMENT.md` lists no Apple artifact.
 
-## Platform notes (after `flutter create`)
+## Platform notes
 
 - **Android**: supports **API 30 (Android 11) and newer**, and builds against
   **compile/target SDK 36 (Android 16)**. The floor is pinned in
@@ -524,7 +511,7 @@ the provider's tool/action — [Azure Trusted Signing](https://learn.microsoft.c
 (`azure/trusted-signing-action`), DigiCert KeyLocker or SSL.com eSigner. The
 rest of the pipeline (which files, when, verify) is unchanged.
 
-## Flows (backend truth)
+## Flows
 
 - Auth: `POST /auth/login` (form: `grant_type=password`, `username`,
   `password`, always-persistent `remember_me=true`) → access JWT (15 min)
