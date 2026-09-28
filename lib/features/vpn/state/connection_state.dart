@@ -54,12 +54,10 @@ abstract class ConnState with _$ConnState {
     /// snack without parsing its (localizable, controller-owned) wording.
     @Default(false) bool opFailed,
 
-    /// Auto-heal restarts for this connected session. Retries on every
-    /// corroborated stall (the health-tick cadence is the backoff), so a
-    /// flaky tunnel recovers without user action — until the move budget is
-    /// spent and the trailing retries are used up, at which point recovery
-    /// surfaces an actionable error. Same reset points as
-    /// [autoFailoverAttempts].
+    /// Auto-heal restarts for the current failure incident. At most one
+    /// cached-tunnel restart is attempted before recovery waits for the
+    /// control plane or escalates to failover. The counter is cleared by a
+    /// healthy status poll or a fresh session.
     @Default(0) int autoHealAttempts,
 
     /// Automatic dead-server moves for this connected session. Incremented

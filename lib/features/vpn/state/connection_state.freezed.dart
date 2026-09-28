@@ -32,12 +32,10 @@ mixin _$ConnState {
 /// failed. Set by the shared failure surfacing and cleared when a new
 /// operation starts, so the UI can decide whether [message] warrants a
 /// snack without parsing its (localizable, controller-owned) wording.
- bool get opFailed;/// Auto-heal restarts for this connected session. Retries on every
-/// corroborated stall (the health-tick cadence is the backoff), so a
-/// flaky tunnel recovers without user action — until the move budget is
-/// spent and the trailing retries are used up, at which point recovery
-/// surfaces an actionable error. Same reset points as
-/// [autoFailoverAttempts].
+ bool get opFailed;/// Auto-heal restarts for the current failure incident. At most one
+/// cached-tunnel restart is attempted before recovery waits for the
+/// control plane or escalates to failover. The counter is cleared by a
+/// healthy status poll or a fresh session.
  int get autoHealAttempts;/// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the
 /// controller's max so two dead servers can't ping-pong forever.
@@ -330,12 +328,10 @@ class _ConnState implements ConnState {
 /// operation starts, so the UI can decide whether [message] warrants a
 /// snack without parsing its (localizable, controller-owned) wording.
 @override@JsonKey() final  bool opFailed;
-/// Auto-heal restarts for this connected session. Retries on every
-/// corroborated stall (the health-tick cadence is the backoff), so a
-/// flaky tunnel recovers without user action — until the move budget is
-/// spent and the trailing retries are used up, at which point recovery
-/// surfaces an actionable error. Same reset points as
-/// [autoFailoverAttempts].
+/// Auto-heal restarts for the current failure incident. At most one
+/// cached-tunnel restart is attempted before recovery waits for the
+/// control plane or escalates to failover. The counter is cleared by a
+/// healthy status poll or a fresh session.
 @override@JsonKey() final  int autoHealAttempts;
 /// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the

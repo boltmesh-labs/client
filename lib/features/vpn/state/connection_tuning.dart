@@ -100,14 +100,12 @@ abstract final class ConnectionTuning {
   /// while two servers are down; the health-tick cadence is the backoff.
   static const maxAutoFailovers = 3;
 
-  /// Same-server restarts allowed *after* the move budget is spent. Once
-  /// there is nowhere left to move, a dead server can only be redialed in
-  /// place; a couple of cheap retries cover a transient stall, then the
-  /// ladder is surfaced as an actionable error instead of restarting a
-  /// proven-dead config on every tick forever (see
-  /// [ConnectionRecovery._surfaceRecoveryExhausted]). A successful status
-  /// poll or a fresh connect restores the budget.
-  static const maxHealsAfterMoveBudget = 2;
+  /// Same-server restarts allowed *after* the move budget is spent. A single
+  /// bounded retry covers a local/native tunnel wedge; another health tick
+  /// must wait for the control plane or surface an actionable error instead of
+  /// restarting a proven-dead config forever (see
+  /// [ConnectionRecovery._surfaceRecoveryExhausted]).
+  static const maxHealsAfterMoveBudget = 1;
 
   /// Attempt-1 budget for an in-tunnel switch/rotate POST: shorter than
   /// Dio's 15s receive timeout so the direct-network fallback stays snappy.

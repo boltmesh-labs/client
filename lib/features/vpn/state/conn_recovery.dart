@@ -8,10 +8,10 @@ part of 'connection_controller.dart';
 /// ([_autoFailover]) — there is no same-server config refresh in between.
 extension ConnectionRecovery on ConnectionController {
   /// Offline restart on the cached config: zero API calls, so it works
-  /// with no network or a dead control plane. Retries on every corroborated
-  /// stall while connected — capped once the move budget is spent (see
-  /// [ConnectionTuning.maxHealsAfterMoveBudget] and
-  /// [_surfaceRecoveryExhausted]); the health-tick cadence is the backoff.
+  /// with no network or a dead control plane. It runs once per failure
+  /// incident; a persistent stall then waits for the control plane or
+  /// escalates to failover (see [ConnectionTuning.maxHealsAfterMoveBudget]
+  /// and [_surfaceRecoveryExhausted]).
   /// Never runs for auth/subscription failures: those leave `connected` via
   /// `pollStatusOnce`/the session listener, and the guards below return
   /// early outside `connected`.
@@ -99,7 +99,7 @@ extension ConnectionRecovery on ConnectionController {
         // Keep the connected phase from presenting a false healthy state
         // during the post-restart handshake deadline. A successful handshake
         // clears this note through the normal fresh-tunnel path.
-        healthNote: 'Recovery in progress…',
+        healthNote: _recoveryInProgressNote,
       );
       AppLog.info('auto-heal ok ($why) attempt=$attempt');
     } finally {
@@ -108,9 +108,8 @@ extension ConnectionRecovery on ConnectionController {
   }
 
   /// Terminal state when the automatic ladder has nothing left to try: the
-  /// move budget is spent and the trailing same-server restarts
-  /// ([ConnectionTuning.maxHealsAfterMoveBudget]) did not restore the
-  /// tunnel. Without this a corroborated stall would keep healing the same
+  /// move budget is spent and the bounded same-server restart did not restore
+  /// the tunnel. Without this a corroborated stall would keep healing the same
   /// config every tick forever, with no user-visible signal. Stops the
   /// proven-dead tunnel, stops the ticks, clears the session budgets and
   /// surfaces an actionable error; the next Connect starts from a clean

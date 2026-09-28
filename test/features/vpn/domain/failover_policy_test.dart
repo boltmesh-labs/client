@@ -31,6 +31,7 @@ void main() {
           autoHealAttempts: 1,
           autoFailoverAttempts: 0,
           pollFailures: 3,
+          controlPlaneReachable: true,
           healThreshold: healThreshold,
           maxFailovers: maxFailovers,
           quietFor: quietFor,
@@ -45,6 +46,7 @@ void main() {
           autoHealAttempts: 2,
           autoFailoverAttempts: 0,
           pollFailures: 1,
+          controlPlaneReachable: true,
           healThreshold: healThreshold,
           maxFailovers: maxFailovers,
           quietFor: quietFor,
@@ -59,6 +61,7 @@ void main() {
           autoHealAttempts: 5,
           autoFailoverAttempts: 0,
           pollFailures: 0,
+          controlPlaneReachable: true,
           healThreshold: healThreshold,
           maxFailovers: maxFailovers,
           quietFor: quietFor,
@@ -73,11 +76,62 @@ void main() {
           autoHealAttempts: 9,
           autoFailoverAttempts: 3,
           pollFailures: 9,
+          controlPlaneReachable: true,
           healThreshold: healThreshold,
           maxFailovers: maxFailovers,
           quietFor: quietFor,
         ),
         isFalse,
+      );
+    });
+
+    test('false when the control plane is not positively reachable', () {
+      expect(
+        shouldEscalateToFailover(
+          autoHealAttempts: 2,
+          autoFailoverAttempts: 0,
+          pollFailures: 3,
+          controlPlaneReachable: false,
+          healThreshold: 1,
+          maxFailovers: maxFailovers,
+          quietFor: quietFor,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('canAttemptAutoHeal', () {
+    test('allows one restart per incident', () {
+      expect(
+        canAttemptAutoHeal(
+          autoHealAttempts: 0,
+          autoFailoverAttempts: 0,
+          maxFailovers: maxFailovers,
+          maxHealsAfterMoveBudget: 1,
+        ),
+        isTrue,
+      );
+      expect(
+        canAttemptAutoHeal(
+          autoHealAttempts: 1,
+          autoFailoverAttempts: 0,
+          maxFailovers: maxFailovers,
+          maxHealsAfterMoveBudget: 1,
+        ),
+        isFalse,
+      );
+    });
+
+    test('allows the bounded post-budget retry when configured', () {
+      expect(
+        canAttemptAutoHeal(
+          autoHealAttempts: 0,
+          autoFailoverAttempts: maxFailovers,
+          maxFailovers: maxFailovers,
+          maxHealsAfterMoveBudget: 1,
+        ),
+        isTrue,
       );
     });
   });
@@ -94,6 +148,7 @@ void main() {
           healThreshold: 1,
           autoFailoverAttempts: 0,
           pollFailures: 0,
+          controlPlaneReachable: true,
           lastStatusAt: stale,
           now: now,
           maxFailovers: maxFailovers,
@@ -109,6 +164,7 @@ void main() {
           autoHealAttempts: 9,
           autoFailoverAttempts: 0,
           pollFailures: 0,
+          controlPlaneReachable: true,
           lastStatusAt: fresh,
           now: now,
           healThreshold: healThreshold,
@@ -125,6 +181,7 @@ void main() {
           autoHealAttempts: 2,
           autoFailoverAttempts: 0,
           pollFailures: 0,
+          controlPlaneReachable: true,
           lastStatusAt: stale,
           healThreshold: healThreshold,
           maxFailovers: maxFailovers,

@@ -7,9 +7,9 @@ import '../data/models.dart';
 /// functions live here.
 ///
 /// The policy parameters ([healThreshold], [maxFailovers],
-/// [pollThreshold], [quietFor]) are required rather than defaulted: a
-/// silent default would be a second copy of the tuned value in
-/// `ConnectionTuning`, and the two drifting apart is exactly how a retune
+/// [pollThreshold], [quietFor], [controlPlaneReachable]) are required rather
+/// than defaulted: a silent default would be a second copy of the tuned value
+/// in `ConnectionTuning`, and the two drifting apart is exactly how a retune
 /// stops taking effect. Callers pass the constant; tests pass an explicit
 /// value.
 
@@ -23,6 +23,11 @@ import '../data/models.dart';
 /// - fewer than [maxFailovers] automatic moves may have run this session
 ///   (bounds ping-ponging between dead servers; the health-tick cadence is
 ///   the backoff);
+/// - the control plane must be positively reachable ([controlPlaneReachable]
+///   is the caller's fresh `ControlPlaneProbe` result, not an inference from
+///   the poll counters). A failed or unknown probe cannot support a move:
+///   discovery and the switch POST would only fail, and the attempt would
+///   stop a tunnel and spend the move budget for nothing;
 /// - the backend must look unreachable: either at least one status-poll
 ///   transport failure was observed ([pollFailures] >= 1), or no status poll
 ///   has succeeded within [quietFor] (slow-track for outages that start
@@ -34,12 +39,14 @@ bool shouldEscalateToFailover({
   required int autoHealAttempts,
   required int autoFailoverAttempts,
   required int pollFailures,
+  required bool controlPlaneReachable,
   required int healThreshold,
   required int maxFailovers,
   required Duration quietFor,
   DateTime? lastStatusAt,
   DateTime? now,
 }) =>
+    controlPlaneReachable &&
     autoFailoverAttempts < maxFailovers &&
     autoHealAttempts >= healThreshold &&
     (pollFailures >= 1 ||
@@ -48,6 +55,29 @@ bool shouldEscalateToFailover({
           now: now,
           quietFor: quietFor,
         ));
+
+/// Whether a local cached-tunnel restart is still allowed for this failure
+/// incident.
+///
+/// One restart can recover a wedged native tunnel without changing the
+/// server-side peer. Further restarts are not useful evidence of recovery: if
+/// the control plane is available, failover should take over; otherwise the
+/// controller waits rather than flapping the same tunnel forever.
+bool canAttemptAutoHeal({
+  required int autoHealAttempts,
+  required int autoFailoverAttempts,
+  required int maxFailovers,
+  required int maxHealsAfterMoveBudget,
+}) {
+  // With the move budget spent there is nowhere to move, so the trailing
+  // same-server budget applies; before it, one restart per incident is the
+  // cap. Both are read from `ConnectionTuning` at the call site, so a
+  // retune there is a retune here.
+  final limit = autoFailoverAttempts >= maxFailovers
+      ? maxHealsAfterMoveBudget
+      : 1;
+  return autoHealAttempts < limit;
+}
 
 /// Slow-track escalation signal: true when no status poll has proven the
 /// backend reachable within [quietFor] — either no poll ever succeeded

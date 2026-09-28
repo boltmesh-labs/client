@@ -252,9 +252,9 @@ void main() {
     expect(state.autoFailoverAttempts, 0);
   });
 
-  test('spent failover budget keeps healing on the cached config', () async {
-    // Failover budget already spent: escalation stays local and keeps
-    // restarting same-server (nowhere to move to).
+  test('spent failover budget does not loop local healing', () async {
+    // Failover budget already spent: one local restart is enough; subsequent
+    // ticks must wait instead of restarting the same-server config again.
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
       if (o.path.endsWith('/config')) return dialJson();
@@ -279,15 +279,14 @@ void main() {
     ]);
     events.clear();
 
-    // Cycle 2: the failover budget is spent, so the next stall keeps
-    // healing same-server. No regions discovery may run (escalation is
-    // budget-gated).
+    // Cycle 2: the failover budget is spent, so the next stall waits. No
+    // regions discovery or second local restart may run.
     await ctl.pollStatusOnce();
     await ctl.checkHealthOnce();
 
     state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 2);
+    expect(state.autoHealAttempts, 1);
     expect(state.autoFailoverAttempts, 3);
     expect(events, isNot(contains('GET:/vpn-regions')));
   });
@@ -303,12 +302,12 @@ void main() {
         if (o.path.endsWith('/config')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
-      });
+      }, controlProbe: support.FakeControlProbe(true));
       final ctl = container.read(connectionProvider.notifier);
       ctl.snap = ctl.snap.copyWith(autoFailoverAttempts: 3);
       staleHandshake(ctl);
 
-      // Two trailing heals are allowed after the move budget is spent.
+      // One bounded heal is allowed after the move budget is spent.
       for (var i = 0; i < ConnectionTuning.maxHealsAfterMoveBudget; i++) {
         await ctl.pollStatusOnce();
         await ctl.checkHealthOnce();
@@ -1283,15 +1282,21 @@ void main() {
 
   test('persistent stall escalates to a different server', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
 
     // Chain: heal, then a straight escalation to failover.
@@ -1314,61 +1319,63 @@ void main() {
     // network) and started the new one after.
     expect(events.where((e) => e == 'tunnel:stop'), isNotEmpty);
     expect(events.where((e) => e == 'tunnel:start'), isNotEmpty);
-    // Post-heal escalation is path-dead: never probe the tunnel that just
-    // failed a restart. The stop lands immediately before discovery.
+    // The null echo is unknown rather than positive path-dead evidence, so
+    // failover discovery probes the still-running tunnel before stopping it.
     final regionsAt = events.indexOf('GET:/vpn-regions');
     expect(regionsAt, greaterThan(0));
-    expect(events[regionsAt - 1], 'tunnel:stop');
+    expect(events[regionsAt - 1], startsWith('GET:'));
   });
 
-  test(
-    'an unreachable control probe makes the post-heal move path-dead',
-    () async {
-      // Gateway unprobeable (null echo) but the control probe is a performed
-      // failure: the escalation after one heal must still stop before
-      // discovery instead of probing a path already proven bad.
-      final events = <String>[];
-      final (container, _) = await seedConnected(
-        events,
-        (o) {
-          if (o.path.endsWith('/config')) return dialJson();
-          if (o.path.endsWith('/status')) throw networkTimeout(o);
-          if (o.path.endsWith('/vpn-regions')) {
-            return regionsList(twoServers());
-          }
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
-          throw StateError('unexpected ${o.path}');
-        },
-        gatewayProbe: support.FakeGatewayProbe(null),
-        controlProbe: support.FakeControlProbe(false),
-        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
-      );
-      final ctl = container.read(connectionProvider.notifier);
+  test('an unreachable control probe waits after the local heal', () async {
+    // Gateway unprobeable (null echo) and the control probe is a performed
+    // failure: after one local heal, recovery must wait rather than stop the
+    // tunnel and spend a failover budget that cannot make an API call.
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(false),
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+    );
+    final ctl = container.read(connectionProvider.notifier);
 
-      for (var i = 0; i < 2; i++) {
-        await stallOnce(ctl);
-      }
+    for (var i = 0; i < 2; i++) {
+      await stallOnce(ctl);
+    }
 
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-2');
-      expect(state.autoFailoverAttempts, 1);
-      final regionsAt = events.indexOf('GET:/vpn-regions');
-      expect(regionsAt, greaterThan(0));
-      expect(events[regionsAt - 1], 'tunnel:stop');
-    },
-  );
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-1');
+    expect(state.autoHealAttempts, 1);
+    expect(state.autoFailoverAttempts, 0);
+    expect(state.healthNote, contains('Waiting for the control plane'));
+    expect(events, isNot(contains('GET:/vpn-regions')));
+  });
 
   test('failover with no other capacity stays on the old server', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers().sublist(0, 1));
-      }
-      throw StateError('unexpected ${o.path}');
-    });
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers().sublist(0, 1));
+        }
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
 
     // Same chain; the no-capacity branch restarts the old tunnel
@@ -1426,13 +1433,19 @@ void main() {
 
   test('unpinned failover roams across regions', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
-      if (o.path.endsWith('/switch')) return dialJsonSrv9();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
+        if (o.path.endsWith('/switch')) return dialJsonSrv9();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
     // Unpinned (Auto) after the fresh connect: failover may roam globally
     // and stays unpinned.
@@ -1451,12 +1464,17 @@ void main() {
 
   test('pinned region never switches regions, surfaces error', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
-      throw StateError('unexpected ${o.path}');
-    });
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
     // Explicit region tap: r1 holds only the dead srv-1, r2 has capacity
     // that must NOT be used.
@@ -1484,15 +1502,21 @@ void main() {
 
   test('pinned server allows same-region moves', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
     // Explicit server tap: srv-2 in the same region stays a valid target.
     ctl.selectTarget(regionId: null, serverId: 'srv-1', explicitTarget: true);
@@ -1512,15 +1536,21 @@ void main() {
 
   test('auto-failover surfaces a keypair persistence failure', () async {
     final events = <String>[];
-    final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('SWITCH-PRIV', 'SWITCH-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
     final store = container.read(deviceStoreProvider) as FakeStore;
     store.setKeypairHook = (_, _) async {
@@ -1557,6 +1587,8 @@ void main() {
           Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
           Keypair('FRESH-PRIV', 'FRESH-PUB'),
         ],
+        gatewayProbe: support.FakeGatewayProbe(null),
+        controlProbe: support.FakeControlProbe(true),
       );
       final ctl = container.read(connectionProvider.notifier);
 
@@ -1578,15 +1610,21 @@ void main() {
 
   test('failover transport failure restarts the old tunnel', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) throw networkTimeout(o);
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
 
     // Heal, then a failover whose switch POST fails: the old tunnel is
@@ -1612,14 +1650,20 @@ void main() {
     // the next stall must move servers instead of restarting the same
     // config for another detection cycle.
     final events = <String>[];
-    final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
 
     // Stale handshake, no poll ever ran: the quiet slow-track
@@ -1932,15 +1976,21 @@ void main() {
     // poll must be enough to escalate — previously two full 60s poll
     // intervals were needed before the escalation even started.
     final events = <String>[];
-    final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) throw networkTimeout(o);
-      if (o.path.endsWith('/vpn-regions')) {
-        return regionsList(twoServers());
-      }
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
-      throw StateError('unexpected ${o.path}');
-    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers());
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
     final ctl = container.read(connectionProvider.notifier);
 
     // Cycle 1: stale handshake heals offline with zero polls (quiet

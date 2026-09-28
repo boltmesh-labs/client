@@ -10,6 +10,8 @@ const _noNetworkNote =
 /// live gateway echo proves the data path), so a healthy tunnel never wears a
 /// "checking recovery" banner.
 const _checkingRecoveryNote = 'Connection issue detected. Checking recovery…';
+const _recoveryInProgressNote = 'Recovery in progress…';
+const _recoveryWaitingNote = 'Recovery paused. Waiting for the control plane…';
 
 extension ConnectionHealth on ConnectionController {
   bool _healthSessionCurrent(int sessionEpoch, int epoch, DialParams dial) =>
@@ -41,9 +43,10 @@ extension ConnectionHealth on ConnectionController {
   /// [_autoHeal], [_autoFailover]). Public so tests can drive a tick without
   /// waiting [PollingService.healthCheckInterval]. The heal path never calls
   /// the backend; failover stops the tunnel first so its control-plane calls
-  /// travel over the direct network. Once the move budget and the trailing
-  /// restarts are spent, a corroborated stall surfaces an actionable error
-  /// instead (see [_surfaceRecoveryExhausted]).
+  /// travel over the direct network. Once the bounded local restart and move
+  /// budget are spent, a corroborated stall surfaces an actionable error when
+  /// the control plane is available; otherwise recovery waits for it (see
+  /// [_surfaceRecoveryExhausted]).
   Future<void> _healthCheckOp() async {
     if (snap.phase != ConnPhase.connected) return;
     if (_mutex.isLocked) return;
@@ -252,6 +255,15 @@ extension ConnectionHealth on ConnectionController {
     final handshakeStalled =
         standardStalled || localEchoStalled || hardStalled || serverDown;
     if (!localEvidence && !handshakeStalled) {
+      // `_startWith` publishes connected before the next health tick can
+      // observe the new handshake. This is the validation point for a local
+      // heal: clear its banner only after healthy evidence, not merely
+      // because start() returned successfully. The incident counter remains
+      // until a healthy status poll, so a fresh local restart cannot erase
+      // the failure evidence before the backend confirms the path.
+      if (snap.healthNote == _recoveryInProgressNote) {
+        snap = snap.copyWith(healthNote: null);
+      }
       return;
     }
     if (localEvidence && snap.healthNote == null) {
@@ -307,12 +319,26 @@ extension ConnectionHealth on ConnectionController {
       }
       return;
     }
-    // Nothing left to try: the move budget is spent and the trailing
-    // same-server restarts did not restore the tunnel. Surface an
-    // actionable error instead of heal-looping the proven-dead config
-    // forever. Checked before the classifier so the exhausted path never
-    // spends another control-plane probe.
-    if (snap.autoFailoverAttempts >= ConnectionTuning.maxAutoFailovers &&
+    final apiReachable = await _apiReachable();
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+    final canHeal = canAttemptAutoHeal(
+      autoHealAttempts: snap.autoHealAttempts,
+      autoFailoverAttempts: snap.autoFailoverAttempts,
+      maxFailovers: ConnectionTuning.maxAutoFailovers,
+      maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
+    );
+    // A move requires a positive control-plane result. A failed/unknown probe
+    // is not a reason to stop a tunnel or consume a move budget; after the one
+    // local restart, leave the tunnel alone until the control plane returns.
+    if (apiReachable != true && !canHeal) {
+      snap = snap.copyWith(healthNote: _recoveryWaitingNote);
+      return;
+    }
+    // Nothing left to try: the move budget is spent and the bounded local
+    // restart did not restore the tunnel. Surface an actionable error only
+    // when the control plane is available and a terminal decision can be made.
+    if (apiReachable == true &&
+        snap.autoFailoverAttempts >= ConnectionTuning.maxAutoFailovers &&
         snap.autoHealAttempts >= ConnectionTuning.maxHealsAfterMoveBudget) {
       await _surfaceRecoveryExhausted(
         why,
@@ -324,8 +350,6 @@ extension ConnectionHealth on ConnectionController {
       );
       return;
     }
-    final apiReachable = await _apiReachable();
-    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     // A fresh application response is not enough to suppress local evidence:
     // the response may have arrived out-of-band while the tunnel is dead.
     // The API probe below is the current reachability decision.
@@ -366,6 +390,7 @@ extension ConnectionHealth on ConnectionController {
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
       pollFailures: snap.pollFailures,
+      controlPlaneReachable: apiReachable == true,
       healThreshold: ConnectionTuning.failoverHealThreshold,
       maxFailovers: ConnectionTuning.maxAutoFailovers,
       lastStatusAt: snap.lastStatusAt,
@@ -393,7 +418,7 @@ extension ConnectionHealth on ConnectionController {
         expectedEpoch: epoch,
         expectedDial: dial,
       );
-    } else {
+    } else if (canHeal) {
       // `localConfirmed` is what lets a heal run while a status poll claims
       // the backend is reachable; `serverDown` satisfies it for the same
       // reason `hardStalled` does — the reachable answer travelled
@@ -405,6 +430,15 @@ extension ConnectionHealth on ConnectionController {
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,
+      );
+    } else {
+      // The local restart was already spent, but the current evidence is not
+      // strong enough for a move. Keep the tunnel and wait for fresh positive
+      // liveness/control-plane evidence instead of flapping it again.
+      snap = snap.copyWith(
+        healthNote: apiReachable == true
+            ? 'Recovery pending. Verifying the current tunnel…'
+            : _recoveryWaitingNote,
       );
     }
   }
