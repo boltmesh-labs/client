@@ -129,4 +129,63 @@ void main() {
       expect(st.subscriptionExpiresAt, isNull);
     });
   });
+
+  group('ServerStatus.fromJson', () {
+    test('an online node is the only healthy verdict', () {
+      final st = ServerStatus.fromJson({
+        'server_id': 'srv-1',
+        'name': 'node-eu',
+        'status': 'online',
+        'active_peers': 6,
+      });
+      expect(st.serverId, 'srv-1');
+      expect(st.name, 'node-eu');
+      expect(st.status, ServerHealth.online);
+      expect(st.isOnline, isTrue);
+      expect(st.isUnhealthy, isFalse);
+      expect(st.activePeers, 6);
+    });
+
+    test('every non-online status is a reason to move', () {
+      // The backend enum is the source of truth, so the client mirrors it
+      // rather than trusting a derived boolean the backend has to keep in
+      // sync. Each member must read as unhealthy.
+      for (final status in ServerHealth.values.where(
+        (s) => s != ServerHealth.online,
+      )) {
+        final st = ServerStatus.fromJson({
+          'server_id': 'srv-1',
+          'status': status.wire,
+        });
+        expect(st.isUnhealthy, isTrue, reason: status.wire);
+        expect(st.isOnline, isFalse, reason: status.wire);
+      }
+    });
+
+    test('an unknown status stays unknown, never healthy or dead', () {
+      // A status the backend adds later must not read as online, and must not
+      // read as a confirmed-dead node either: unknown is the only safe state,
+      // because the two other readings drive a server move.
+      final st = ServerStatus.fromJson({
+        'server_id': 'srv-1',
+        'status': 'draining',
+      });
+      expect(st.status, isNull);
+      expect(st.isOnline, isFalse);
+      expect(st.isUnhealthy, isFalse);
+    });
+
+    test('an absent status is unknown too', () {
+      final st = ServerStatus.fromJson({'server_id': 'srv-1'});
+      expect(st.status, isNull);
+      expect(st.isUnhealthy, isFalse);
+    });
+
+    test('requires the server id', () {
+      expect(
+        () => ServerStatus.fromJson({'status': 'online'}),
+        throwsA(isA<TypeError>()),
+      );
+    });
+  });
 }

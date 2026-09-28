@@ -70,5 +70,19 @@ abstract class ConnState with _$ConnState {
     /// handshake): an out-of-band poll success while the WireGuard path stays
     /// dead is not the outage ending, so it must not restore the ladder.
     @Default(0) int autoFailoverAttempts,
+
+    /// The backend reported the serving node as not `online` on the last
+    /// `GET …/server-status` poll (see [ServerStatus.isUnhealthy]).
+    ///
+    /// Unlike every other signal in this snapshot this one is *attributed*:
+    /// it says the node itself is gone, not merely that the local path looks
+    /// dead. It therefore counts as positive path-dead evidence and skips the
+    /// same-server heal cycle on the way to a move — redialing a node the
+    /// backend has already given up on only spends the budget.
+    ///
+    /// False while the read is unknown (never polled, or the request failed):
+    /// absence of evidence is never evidence of death, so the local
+    /// echo/handshake ladder keeps owning that case unchanged.
+    @Default(false) bool serverConfirmedDown,
   }) = _ConnState;
 }

@@ -140,6 +140,80 @@ void main() {
         );
       }
     });
+
+    group('serverConfirmedDown', () {
+      test('a backend-confirmed dead node fast-tracks on its own', () {
+        // The one attributed signal: the backend said the node is gone, so
+        // an unprobeable echo is not needed to corroborate it. Skipping the
+        // offline restart is the point — redialing a node the backend has
+        // given up on only spends the heal budget.
+        expect(
+          classifyFailure(
+            hasNetwork: true,
+            gatewayAlive: null,
+            apiReachable: true,
+            serverConfirmedDown: true,
+          ),
+          ConnectionFailureCause.tunnelPathDead,
+        );
+        // Also with a fresh-but-not-yet-stale handshake observed: the node
+        // verdict outranks a symptom of its own death.
+        expect(
+          classifyFailure(
+            hasNetwork: true,
+            gatewayAlive: true,
+            apiReachable: true,
+            serverConfirmedDown: true,
+          ),
+          ConnectionFailureCause.tunnelPathDead,
+        );
+      });
+
+      test('never moves servers without a reachable control plane', () {
+        // Same gate as every other fast-track rung: during a total outage
+        // this flag must not be able to trigger a move on its own.
+        for (final api in <bool?>[false, null]) {
+          expect(
+            classifyFailure(
+              hasNetwork: true,
+              gatewayAlive: null,
+              apiReachable: api,
+              serverConfirmedDown: true,
+            ),
+            ConnectionFailureCause.totalBlackout,
+          );
+        }
+      });
+
+      test('loses to a down local link', () {
+        // The link check runs first: a node cannot be blamed while this
+        // client cannot reach the network at all.
+        expect(
+          classifyFailure(
+            hasNetwork: false,
+            gatewayAlive: null,
+            apiReachable: true,
+            serverConfirmedDown: true,
+          ),
+          ConnectionFailureCause.noLocalNetwork,
+        );
+      });
+
+      test('an absent verdict changes nothing (never-polled read)', () {
+        // The flag defaults to false and is only ever set from an answered
+        // payload, so omitting it is exactly the never-polled case: an
+        // unprobeable echo plus a reachable API must still take the cheap
+        // local ladder.
+        expect(
+          classifyFailure(
+            hasNetwork: true,
+            gatewayAlive: null,
+            apiReachable: true,
+          ),
+          ConnectionFailureCause.totalBlackout,
+        );
+      });
+    });
   });
 
   group('firstDnsProbeIp', () {

@@ -22,6 +22,26 @@ extension ConnectionPoll on ConnectionController {
     return future;
   }
 
+  /// Reads the serving node's health, or null when the answer is unknown.
+  ///
+  /// Null on any failure — a transport error, an app-level rejection, or a
+  /// 404 (a peerless or revoked device has no node to report). Callers keep
+  /// whatever they already believed, because a failed read is evidence of
+  /// neither health nor death; only an answered payload is.
+  Future<ServerStatus?> _readServerStatus(String deviceId) async {
+    try {
+      final st = await _api.serverStatus(deviceId);
+      AppLog.info('server status ${st.status?.wire ?? 'unknown'} (${st.name})');
+      return st;
+    } on DioException catch (e) {
+      AppLog.error('server status poll failed', e);
+      return null;
+    } catch (e) {
+      AppLog.error('server status poll failed', e);
+      return null;
+    }
+  }
+
   /// One status poll tick: refreshes the session snapshot while connected,
   /// auto-disconnects on `suspended`, and forgets the device on 404
   /// (revoked server-side). Transient transport failures increment
@@ -232,7 +252,13 @@ extension ConnectionPoll on ConnectionController {
     // then would let the ladder loop forever. Require an observed, fresh
     // handshake; an unsupported reader (no handshake telemetry) keeps the
     // old reset-on-poll behavior.
-    final hs = await _readHandshake();
+    // The serving node's own health, read concurrently with the handshake so
+    // the two sequential 30s request deadlines don't stack. A failure here is
+    // deliberately NOT folded into the poll-failure counter below: that
+    // counter means "the control plane is unreachable", and this endpoint
+    // failing while `status` just succeeded proves the opposite. It leaves
+    // `serverConfirmedDown` unchanged instead (unknown, not healthy).
+    final (hs, serverSt) = await (_readHandshake(), _readServerStatus(id)).wait;
     // The read above is an await: drop a snapshot a heal/failover just
     // superseded (same reason as the pre-status epoch check).
     if (!_sessionCurrent(
@@ -259,6 +285,10 @@ extension ConnectionPoll on ConnectionController {
       pollFailures: 0,
       healthNote: healthyStage ? null : snap.healthNote,
       backendIssue: null,
+      // Only an answered read may clear the flag: an unknown one carries no
+      // information, and clearing on it would erase a confirmed-dead node the
+      // moment one request blipped.
+      serverConfirmedDown: serverSt?.isUnhealthy ?? snap.serverConfirmedDown,
       autoHealAttempts: tunnelHealthy ? 0 : snap.autoHealAttempts,
       autoFailoverAttempts: tunnelHealthy ? 0 : snap.autoFailoverAttempts,
     );

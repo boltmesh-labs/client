@@ -550,6 +550,119 @@ void main() {
     },
   );
 
+  test(
+    'a backend-confirmed dead node moves without burning a heal cycle',
+    () async {
+      // The attributed case the local ladder cannot reach: the handshake is
+      // fresh and the in-tunnel echo is alive (one datagram from a node
+      // mid-restart), yet the backend has already given up on it. Both local
+      // signals say "healthy", so without the node verdict the session would
+      // sit there until the next poll. The verdict must skip the heal.
+      final events = <String>[];
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/server-status')) {
+            return serverStatusJson('offline');
+          }
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        gatewayProbe: support.FakeGatewayProbe(true),
+        controlProbe: support.FakeControlProbe(true),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      await ctl.pollStatusOnce();
+      expect(container.read(connectionProvider).serverConfirmedDown, isTrue);
+      events.clear();
+
+      await ctl.checkHealthOnce();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-2');
+      // The whole point: no same-server restart on the way to the move. The
+      // one `tunnel:stop` is the move's own teardown (the path is known dead,
+      // so discovery and the switch travel direct), not a heal — proven by the
+      // heal's signature config fetch being absent.
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    },
+  );
+
+  test('a healthy node leaves the local ladder untouched', () async {
+    // Same setup as above with an `online` verdict: nothing about the
+    // tunnel changed, so the tick must do nothing at all.
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/server-status')) {
+          return onlineServerStatusJson();
+        }
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(true),
+      controlProbe: support.FakeControlProbe(true),
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    await ctl.pollStatusOnce();
+    events.clear();
+
+    await ctl.checkHealthOnce();
+
+    final state = container.read(connectionProvider);
+    expect(state.serverConfirmedDown, isFalse);
+    expect(state.autoHealAttempts, 0);
+    expect(state.autoFailoverAttempts, 0);
+    expect(state.dial?.serverId, 'srv-1');
+    expect(events, isEmpty);
+  });
+
+  test(
+    'a node-down verdict never moves servers while the control plane is down',
+    () async {
+      // A total outage must not turn a stale node verdict into a server move:
+      // the move itself needs the control plane, and burning the budget on an
+      // unreachable one just strands the session.
+      final events = <String>[];
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/server-status')) {
+            return serverStatusJson('offline');
+          }
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        gatewayProbe: support.FakeGatewayProbe(false),
+        controlProbe: support.FakeControlProbe(false),
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      await ctl.pollStatusOnce();
+      events.clear();
+
+      await ctl.checkHealthOnce();
+
+      final state = container.read(connectionProvider);
+      expect(state.autoFailoverAttempts, 0);
+      expect(state.dial?.serverId, 'srv-1');
+    },
+  );
+
   test('hard-stale handshake heals despite a poll that proved the backend reachable', () async {
     // The same out-of-band suppression, but the control-plane probe is also
     // unreachable: totalBlackout would normally keep the tunnel up (the

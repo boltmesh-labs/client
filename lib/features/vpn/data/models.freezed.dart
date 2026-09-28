@@ -596,6 +596,285 @@ as int,
 
 
 /// @nodoc
+mixin _$ServerStatus {
+
+@JsonKey(name: 'server_id') String get serverId; String get name;@JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire) ServerHealth? get status;@JsonKey(name: 'active_peers') int get activePeers;
+/// Create a copy of ServerStatus
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$ServerStatusCopyWith<ServerStatus> get copyWith => _$ServerStatusCopyWithImpl<ServerStatus>(this as ServerStatus, _$identity);
+
+  /// Serializes this ServerStatus to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  final _this = this as ServerStatus;
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ServerStatus&&(identical(other.serverId, _this.serverId) || other.serverId == _this.serverId)&&(identical(other.name, _this.name) || other.name == _this.name)&&(identical(other.status, _this.status) || other.status == _this.status)&&(identical(other.activePeers, _this.activePeers) || other.activePeers == _this.activePeers));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+  final _this = this as ServerStatus;
+  return Object.hash(runtimeType,_this.serverId,_this.name,_this.status,_this.activePeers);
+}
+
+@override
+String toString() {
+  final _this = this as ServerStatus;
+  return 'ServerStatus(serverId: ${_this.serverId}, name: ${_this.name}, status: ${_this.status}, activePeers: ${_this.activePeers})';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $ServerStatusCopyWith<$Res>  {
+  factory $ServerStatusCopyWith(ServerStatus value, $Res Function(ServerStatus) _then) = _$ServerStatusCopyWithImpl;
+@useResult
+$Res call({
+@JsonKey(name: 'server_id') String serverId, String name,@JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire) ServerHealth? status,@JsonKey(name: 'active_peers') int activePeers
+});
+
+
+
+
+}
+/// @nodoc
+class _$ServerStatusCopyWithImpl<$Res>
+    implements $ServerStatusCopyWith<$Res> {
+  _$ServerStatusCopyWithImpl(this._self, this._then);
+
+  final ServerStatus _self;
+  final $Res Function(ServerStatus) _then;
+
+/// Create a copy of ServerStatus
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? serverId = null,Object? name = null,Object? status = freezed,Object? activePeers = null,}) {
+  return _then(ServerStatus(
+serverId: null == serverId ? _self.serverId : serverId // ignore: cast_nullable_to_non_nullable
+as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,status: freezed == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
+as ServerHealth?,activePeers: null == activePeers ? _self.activePeers : activePeers // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [ServerStatus].
+extension ServerStatusPatterns on ServerStatus {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _ServerStatus value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _ServerStatus() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _ServerStatus value)  $default,){
+final _that = this;
+switch (_that) {
+case _ServerStatus():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _ServerStatus value)?  $default,){
+final _that = this;
+switch (_that) {
+case _ServerStatus() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'server_id')  String serverId,  String name, @JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire)  ServerHealth? status, @JsonKey(name: 'active_peers')  int activePeers)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _ServerStatus() when $default != null:
+return $default(_that.serverId,_that.name,_that.status,_that.activePeers);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'server_id')  String serverId,  String name, @JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire)  ServerHealth? status, @JsonKey(name: 'active_peers')  int activePeers)  $default,) {final _that = this;
+switch (_that) {
+case _ServerStatus():
+return $default(_that.serverId,_that.name,_that.status,_that.activePeers);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'server_id')  String serverId,  String name, @JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire)  ServerHealth? status, @JsonKey(name: 'active_peers')  int activePeers)?  $default,) {final _that = this;
+switch (_that) {
+case _ServerStatus() when $default != null:
+return $default(_that.serverId,_that.name,_that.status,_that.activePeers);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _ServerStatus extends ServerStatus {
+  const _ServerStatus({@JsonKey(name: 'server_id') required this.serverId, this.name = '', @JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire) this.status, @JsonKey(name: 'active_peers') this.activePeers = 0}): super._();
+  factory _ServerStatus.fromJson(Map<String, dynamic> json) => _$ServerStatusFromJson(json);
+
+@override@JsonKey(name: 'server_id') final  String serverId;
+@override@JsonKey() final  String name;
+@override@JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire) final  ServerHealth? status;
+@override@JsonKey(name: 'active_peers') final  int activePeers;
+
+/// Create a copy of ServerStatus
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$ServerStatusCopyWith<_ServerStatus> get copyWith => __$ServerStatusCopyWithImpl<_ServerStatus>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$ServerStatusToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _ServerStatus&&(identical(other.serverId, serverId) || other.serverId == serverId)&&(identical(other.name, name) || other.name == name)&&(identical(other.status, status) || other.status == status)&&(identical(other.activePeers, activePeers) || other.activePeers == activePeers));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+    return Object.hash(runtimeType,serverId,name,status,activePeers);
+}
+
+@override
+String toString() {
+    return 'ServerStatus(serverId: $serverId, name: $name, status: $status, activePeers: $activePeers)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$ServerStatusCopyWith<$Res> implements $ServerStatusCopyWith<$Res> {
+  factory _$ServerStatusCopyWith(_ServerStatus value, $Res Function(_ServerStatus) _then) = __$ServerStatusCopyWithImpl;
+@override @useResult
+$Res call({
+@JsonKey(name: 'server_id') String serverId, String name,@JsonKey(name: 'status', fromJson: ServerHealth.fromWire, toJson: _serverHealthToWire) ServerHealth? status,@JsonKey(name: 'active_peers') int activePeers
+});
+
+
+
+
+}
+/// @nodoc
+class __$ServerStatusCopyWithImpl<$Res>
+    implements _$ServerStatusCopyWith<$Res> {
+  __$ServerStatusCopyWithImpl(this._self, this._then);
+
+  final _ServerStatus _self;
+  final $Res Function(_ServerStatus) _then;
+
+/// Create a copy of ServerStatus
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? serverId = null,Object? name = null,Object? status = freezed,Object? activePeers = null,}) {
+  return _then(_ServerStatus(
+serverId: null == serverId ? _self.serverId : serverId // ignore: cast_nullable_to_non_nullable
+as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String,status: freezed == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
+as ServerHealth?,activePeers: null == activePeers ? _self.activePeers : activePeers // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+
+/// @nodoc
 mixin _$Region {
 
  String get id; String get name;@JsonKey(name: 'country_code') String? get countryCode; List<DiscoveryServer> get servers;

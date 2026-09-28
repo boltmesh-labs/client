@@ -5,8 +5,9 @@ import '../../../../l10n/gen/app_localizations.dart';
 import '../../domain/backend_issue.dart';
 import '../../state/vpn_providers.dart';
 
-/// Degraded-tunnel banner (backend unreachable, auth/subscription lapse, or
-/// stage anomaly). Null when healthy; only visible while connected.
+/// Degraded-tunnel banner (backend unreachable, auth/subscription lapse,
+/// serving node offline, or stage anomaly). Null when healthy; only visible
+/// while connected.
 ///
 /// A specific [ConnState.healthNote] (no-network, degraded stage, transport
 /// unreachable, backend error) wins; when none is set but a structured
@@ -17,16 +18,21 @@ class HealthBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final (note, issue) = ref.watch(
+    final (note, issue, serverDown) = ref.watch(
       connectionProvider.select(
         (c) => c.phase == ConnPhase.connected
-            ? (c.healthNote, c.backendIssue)
-            : (null, null),
+            ? (c.healthNote, c.backendIssue, c.serverConfirmedDown)
+            : (null, null, false),
       ),
     );
     final l10n = AppLocalizations.of(context);
+    // The serving node is down, and no more specific note explains it: the
+    // backend attributed the failure, which no local probe can do, so say so
+    // instead of rendering it as a generic stall.
     final text = (note != null && note.isNotEmpty)
         ? note
+        : serverDown
+        ? l10n.homeServerOffline
         : _issueText(l10n, issue);
     if (text == null) return const SizedBox.shrink();
     return Padding(

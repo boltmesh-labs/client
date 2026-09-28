@@ -8,8 +8,16 @@ extension ConnectionLifecycle on ConnectionController {
   /// poll-failure evidence cleared. Applied when a session ends (idle/error
   /// teardown) or a fresh one is promoted, so the next connect/outage starts
   /// from a clean budget.
-  ConnState _resetSessionCounters(ConnState s) =>
-      s.copyWith(pollFailures: 0, autoHealAttempts: 0, autoFailoverAttempts: 0);
+  ConnState _resetSessionCounters(ConnState s) => s.copyWith(
+    pollFailures: 0,
+    autoHealAttempts: 0,
+    autoFailoverAttempts: 0,
+    // A confirmed-dead node describes the session that just ended, not the
+    // next one: a fresh connect lands on whatever the backend picks, and
+    // carrying the flag over would make the health tick move off a healthy
+    // node before it has read a single server-status response.
+    serverConfirmedDown: false,
+  );
 
   /// Wipes the local device identity, retrying once on failure.
   ///

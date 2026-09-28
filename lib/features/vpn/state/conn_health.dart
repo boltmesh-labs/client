@@ -241,8 +241,16 @@ extension ConnectionHealth on ConnectionController {
           graceAfter: ConnectionTuning.firstHandshakeGrace,
           staleAfter: ConnectionTuning.echoStallHandshakeAge,
         );
-    final localEvidence = stageStalled || localEchoStalled || hardStalled;
-    final handshakeStalled = standardStalled || localEchoStalled || hardStalled;
+    // The backend's verdict on the serving node (set by the status poll).
+    // Attributed, unlike every other signal here: it says the node itself is
+    // gone rather than that this client's path looks dead, so a dead echo is
+    // not needed to corroborate it — but it is still gated on the link and
+    // the control plane below, and a never-polled/blank read leaves it false.
+    final serverDown = snap.serverConfirmedDown;
+    final localEvidence =
+        stageStalled || localEchoStalled || hardStalled || serverDown;
+    final handshakeStalled =
+        standardStalled || localEchoStalled || hardStalled || serverDown;
     if (!localEvidence && !handshakeStalled) {
       return;
     }
@@ -250,7 +258,11 @@ extension ConnectionHealth on ConnectionController {
       snap = snap.copyWith(healthNote: _checkingRecoveryNote);
     }
     final String why;
-    if (handshakeStalled) {
+    if (serverDown) {
+      // Reported first: it is the only signal that names a cause rather than
+      // a symptom, and the other two may be riding along as a consequence.
+      why = 'server offline';
+    } else if (handshakeStalled) {
       final age = handshake == null
           ? 'never'
           : '${now.difference(handshake).inSeconds}s';
@@ -278,8 +290,13 @@ extension ConnectionHealth on ConnectionController {
     }
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     // Reuse this tick's echo read (already computed above); a live echo
-    // proves the data path, so the stall is a transient flap.
-    if (gateway == true) {
+    // proves the data path, so the stall is a transient flap. The
+    // backend-confirmed-dead node is the exception, and the ordering lives
+    // in [classifyFailure] so the two call sites cannot disagree: that report
+    // could not have travelled over a dead tunnel, so a live echo is a second
+    // opinion about a node already known gone rather than proof the path
+    // recovered.
+    if (gateway == true && !serverDown) {
       AppLog.info('health suppressed ($why) gateway echo alive');
       // Nothing will run, so the recovery banner would outlive the tick on a
       // proven-alive tunnel. Only this tick's own note is dropped: a note from
@@ -317,22 +334,26 @@ extension ConnectionHealth on ConnectionController {
       gatewayAlive: gateway,
       apiReachable: apiReachable,
       hardStalled: hardStalled,
+      serverConfirmedDown: serverDown,
     );
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (cause == ConnectionFailureCause.tunnelPathDead) {
       // The control plane answers directly but the tunnel path is dead —
-      // either a performed dead echo or a handshake that stayed dead past
-      // the hard ceiling (the echo may be unprobeable). The cached config
-      // can't recover on its own, so go straight to a server move instead of
-      // burning a heal cycle. The tunnel is stopped before discovery (see
-      // [_autoFailover]) since the path is already proven dead, so no probe
-      // is wasted on it.
+      // a performed dead echo, a handshake that stayed dead past the hard
+      // ceiling (the echo may be unprobeable), or the backend reporting the
+      // serving node not-online. The cached config can't recover on its own,
+      // so go straight to a server move instead of burning a heal cycle. The
+      // tunnel is stopped before discovery (see [_autoFailover]) since the
+      // path is already proven dead, so no probe is wasted on it.
       if (snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
         AppLog.info('health fast-track ($why) path dead, api up -> failover');
         await _autoFailover(
           why,
           tunnelPathDead: true,
-          hardStalled: hardStalled,
+          // The server verdict is attributed, so it also outranks a status
+          // poll that answered out-of-band while this tunnel's path was
+          // already dead — same reason `hardStalled` is passed through.
+          hardStalled: hardStalled || serverDown,
           expectedSession: sessionEpoch,
           expectedEpoch: epoch,
           expectedDial: dial,
@@ -356,17 +377,27 @@ extension ConnectionHealth on ConnectionController {
       // fetch and the switch POST travel over the direct network instead of
       // waiting out a probe on a path known bad. `null` probe evidence
       // (unknown) keeps the probe-first behavior — absence of evidence must
-      // never flap a path that may still be alive.
-      final pathDead = hardStalled || gateway == false || apiReachable == false;
+      // never flap a path that may still be alive. A backend-confirmed-dead
+      // node is never "unknown": the server said so outright, so there is no
+      // path worth probing.
+      final pathDead =
+          hardStalled ||
+          serverDown ||
+          gateway == false ||
+          apiReachable == false;
       await _autoFailover(
         why,
         tunnelPathDead: pathDead,
-        hardStalled: hardStalled,
+        hardStalled: hardStalled || serverDown,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,
       );
     } else {
+      // `localConfirmed` is what lets a heal run while a status poll claims
+      // the backend is reachable; `serverDown` satisfies it for the same
+      // reason `hardStalled` does — the reachable answer travelled
+      // out-of-band and says nothing about a node the backend called dead.
       await _autoHeal(
         why,
         hardStalled: hardStalled,

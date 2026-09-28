@@ -96,6 +96,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Backend-Fehler. Wiederherstellung wird beobachtet …';
 
   @override
+  String get homeServerOffline =>
+      'Server offline. Wechsel zu einem anderen Server …';
+
+  @override
   String get homeTrafficTitle => 'Sitzungsdaten';
 
   @override

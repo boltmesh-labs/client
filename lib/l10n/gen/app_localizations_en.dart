@@ -94,6 +94,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeBackendError => 'Backend error. Watching for recovery…';
 
   @override
+  String get homeServerOffline =>
+      'Server offline. Switching to another server…';
+
+  @override
   String get homeTrafficTitle => 'Session traffic';
 
   @override

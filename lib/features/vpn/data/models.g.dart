@@ -53,6 +53,22 @@ Map<String, dynamic> _$DiscoveryServerToJson(_DiscoveryServer instance) =>
       'active_peers': instance.activePeers,
     };
 
+_ServerStatus _$ServerStatusFromJson(Map<String, dynamic> json) =>
+    _ServerStatus(
+      serverId: json['server_id'] as String,
+      name: json['name'] as String? ?? '',
+      status: ServerHealth.fromWire(json['status'] as String?),
+      activePeers: (json['active_peers'] as num?)?.toInt() ?? 0,
+    );
+
+Map<String, dynamic> _$ServerStatusToJson(_ServerStatus instance) =>
+    <String, dynamic>{
+      'server_id': instance.serverId,
+      'name': instance.name,
+      'status': _serverHealthToWire(instance.status),
+      'active_peers': instance.activePeers,
+    };
+
 _Region _$RegionFromJson(Map<String, dynamic> json) => _Region(
   id: json['id'] as String,
   name: json['name'] as String? ?? '',

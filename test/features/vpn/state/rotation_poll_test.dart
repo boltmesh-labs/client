@@ -152,6 +152,7 @@ void main() {
     final api = VpnApi(
       recordingDio(events, (o) {
         if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/server-status')) return onlineServerStatusJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
       }),
@@ -168,7 +169,66 @@ void main() {
     expect(state.deviceStatus?.tier, 'pro');
     expect(state.deviceStatus?.isSuspended, isFalse);
     expect(state.lastStatusAt, isNotNull);
-    expect(events, ['GET:/vpn-devices/dev-1/status']);
+    expect(state.serverConfirmedDown, isFalse);
+    // The node's health rides the same tick as the session heartbeat.
+    expect(events, [
+      'GET:/vpn-devices/dev-1/status',
+      'GET:/vpn-devices/dev-1/server-status',
+    ]);
+  });
+
+  test('offline serving node marks the session confirmed down', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys(const []);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/server-status')) {
+          return serverStatusJson('offline');
+        }
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await seedConnected(container, store, tunnel);
+
+    await container.read(connectionProvider.notifier).pollStatusOnce();
+
+    final state = container.read(connectionProvider);
+    // The poll itself is healthy, so only the node verdict changed.
+    expect(state.phase, ConnPhase.connected);
+    expect(state.pollFailures, 0);
+    expect(state.serverConfirmedDown, isTrue);
+  });
+
+  test('an unknown server-status read never claims a dead node', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys(const []);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/server-status')) throw networkTimeout(o);
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await seedConnected(container, store, tunnel);
+
+    await container.read(connectionProvider.notifier).pollStatusOnce();
+
+    final state = container.read(connectionProvider);
+    // Absent evidence, not evidence of absence: this endpoint failing while
+    // `status` succeeded proves the control plane is fine, so it must not be
+    // folded into the transport-failure counter either.
+    expect(state.phase, ConnPhase.connected);
+    expect(state.pollFailures, 0);
+    expect(state.serverConfirmedDown, isFalse);
   });
 
   test('suspended poll auto-disconnects with the lapse reason', () async {

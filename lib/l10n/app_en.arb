@@ -119,6 +119,10 @@
   "@homeBackendError": {
     "description": "Connected-Home banner when the backend answered but is unhealthy (5xx/429) and no more specific note is set."
   },
+  "homeServerOffline": "Server offline. Switching to another server…",
+  "@homeServerOffline": {
+    "description": "Connected-Home banner when the backend reports the serving node as not online, so the client moves to a different server without first retrying the dead one."
+  },
   "homeTrafficTitle": "Session traffic",
   "@homeTrafficTitle": {
     "description": "Title above the download/upload counters."

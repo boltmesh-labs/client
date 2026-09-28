@@ -19,6 +19,8 @@ Object? _readDialHost(Map<dynamic, dynamic> json, String _) {
 DateTime? _parseExpiry(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
 
+String? _serverHealthToWire(ServerHealth? value) => value?.wire;
+
 @freezed
 abstract class DialParams with _$DialParams {
   const factory DialParams({
@@ -57,6 +59,47 @@ abstract class DiscoveryServer with _$DiscoveryServer {
 
   factory DiscoveryServer.fromJson(Map<String, Object?> json) =>
       _$DiscoveryServerFromJson(json);
+}
+
+/// Health of the node serving this device (`GET …/server-status`).
+///
+/// The backend's own view of the node: `status` is heartbeat-driven and
+/// swept to `offline` once the node stops reporting, so a client can tell
+/// "my node is gone" apart from "my local path is broken". The discovery list
+/// cannot make that distinction — it filters to `online` rows, so every server
+/// it lists is healthy by construction.
+///
+/// Any value other than [ServerHealth.online] means move. Modeling the
+/// backend enum as a Dart enum rather than a bool keeps that rule total: a
+/// status added server-side later decodes to null and is treated as unknown
+/// (absence of evidence) instead of silently reading as healthy.
+@freezed
+abstract class ServerStatus with _$ServerStatus {
+  const ServerStatus._();
+
+  const factory ServerStatus({
+    @JsonKey(name: 'server_id') required String serverId,
+    @Default('') String name,
+    @JsonKey(
+      name: 'status',
+      fromJson: ServerHealth.fromWire,
+      toJson: _serverHealthToWire,
+    )
+    ServerHealth? status,
+    @JsonKey(name: 'active_peers') @Default(0) int activePeers,
+  }) = _ServerStatus;
+
+  factory ServerStatus.fromJson(Map<String, Object?> json) =>
+      _$ServerStatusFromJson(json);
+
+  /// The node is serving clients. The only state that is not a reason to move.
+  bool get isOnline => status == ServerHealth.online;
+
+  /// A positively-confirmed unhealthy node.
+  ///
+  /// False while [status] is null: an unparseable or absent read is unknown,
+  /// never proof of death, and must not by itself drive a server move.
+  bool get isUnhealthy => status != null && !isOnline;
 }
 
 @freezed
@@ -99,4 +142,29 @@ abstract class DeviceStatus with _$DeviceStatus {
       _$DeviceStatusFromJson(json);
 
   bool get isSuspended => status == 'suspended';
+}
+
+/// Liveness of a serving node (backend `VpnServerStatusEnum`).
+///
+/// Mirrors the backend enum rather than collapsing to a bool so the
+/// "act unless online" rule stays total: a status the backend adds later
+/// decodes to null (unknown) instead of being silently read as healthy.
+enum ServerHealth {
+  online,
+  provisioning,
+  maintenance,
+  offline,
+  decommissioned,
+  error;
+
+  /// Wire value, for tests and logs.
+  String get wire => name;
+
+  static ServerHealth? fromWire(String? value) {
+    if (value == null) return null;
+    for (final v in values) {
+      if (v.name == value) return v;
+    }
+    return null;
+  }
 }

@@ -67,6 +67,26 @@ Map<String, dynamic> suspendedStatusJson() => {
   'subscription_expires_at': '2026-01-01T00:00:00Z',
 };
 
+/// Successful `GET …/server-status` payload ([VpnApi.serverStatus]).
+Map<String, dynamic> onlineServerStatusJson({
+  String serverId = 'srv-1',
+  String name = 'node-1',
+  int activePeers = 3,
+}) => {
+  'server_id': serverId,
+  'name': name,
+  'status': 'online',
+  'active_peers': activePeers,
+};
+
+/// `GET …/server-status` payload for a node the backend has given up on.
+/// The status is the raw wire value, so this is the only change needed to
+/// exercise any non-`online` branch ([ServerHealth]).
+Map<String, dynamic> serverStatusJson(String status) => {
+  ...onlineServerStatusJson(),
+  'status': status,
+};
+
 /// Receive-timeout transport failure (backend unreachable, no response).
 DioException networkTimeout(RequestOptions o) => DioException(
   requestOptions: o,

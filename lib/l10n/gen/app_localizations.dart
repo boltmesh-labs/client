@@ -248,6 +248,12 @@ abstract class AppLocalizations {
   /// **'Backend error. Watching for recovery…'**
   String get homeBackendError;
 
+  /// Connected-Home banner when the backend reports the serving node as not online, so the client moves to a different server without first retrying the dead one.
+  ///
+  /// In en, this message translates to:
+  /// **'Server offline. Switching to another server…'**
+  String get homeServerOffline;
+
   /// Title above the download/upload counters.
   ///
   /// In en, this message translates to:

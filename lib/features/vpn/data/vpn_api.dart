@@ -187,6 +187,29 @@ class VpnApi {
     return DeviceStatus.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// Health of the node serving this device (backend
+  /// `GET /vpn-devices/{id}/server-status`). Lets the controller attribute a
+  /// dead tunnel to its node instead of inferring it from a local probe; the
+  /// discovery list cannot, because it only ever lists `online` rows.
+  ///
+  /// Shares the status poll's cadence and session-keyed budget, so the pair
+  /// costs 2 of the backend's 30 requests/min. Callers must treat a failure
+  /// as unknown, never as a dead node.
+  Future<ServerStatus> serverStatus(
+    String deviceId, {
+    CancelToken? cancelToken,
+  }) async {
+    final r = await _request(
+      '/vpn-devices/$deviceId/server-status',
+      (token) => _dio.get<Map<String, dynamic>>(
+        '/vpn-devices/$deviceId/server-status',
+        cancelToken: token,
+      ),
+      cancelToken: cancelToken,
+    );
+    return ServerStatus.fromJson(r.data as Map<String, dynamic>);
+  }
+
   /// Idempotent teardown: works with a lapsed subscription, returns
   /// `disconnected_peers=0` when already peerless.
   Future<void> disconnect(String deviceId, {CancelToken? cancelToken}) async {

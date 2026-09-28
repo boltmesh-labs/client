@@ -25,6 +25,7 @@
   "homeAuthExpired": "Sitzung abgelaufen. Melde dich erneut an, um die Verbindung wiederherzustellen.",
   "homeSubscriptionInactive": "Kein aktives Abo. Verlängere es, um dich wieder zu verbinden.",
   "homeBackendError": "Backend-Fehler. Wiederherstellung wird beobachtet …",
+  "homeServerOffline": "Server offline. Wechsel zu einem anderen Server …",
   "homeTrafficTitle": "Sitzungsdaten",
   "homeTrafficLabel": "Download {down} · Upload {up}",
   "homeTrafficSemantics": "{down} heruntergeladen, {up} hochgeladen",

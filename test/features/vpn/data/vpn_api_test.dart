@@ -1,3 +1,4 @@
+import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -155,6 +156,45 @@ void main() {
     expect(st.activeDevices, 2);
     expect(st.subscriptionExpiresAt?.year, 2026);
   });
+
+  test('serverStatus maps the serving node payload', () async {
+    final seen = <RequestOptions>[];
+    final api = VpnApi(
+      fakeDio(
+        (_) => {
+          'server_id': 'srv-1',
+          'name': 'node-eu',
+          'status': 'offline',
+          'active_peers': 4,
+        },
+        seen: seen,
+      ),
+    );
+    final st = await api.serverStatus('dev-1');
+    expect(seen.single.path, '/vpn-devices/dev-1/server-status');
+    expect(st.serverId, 'srv-1');
+    expect(st.name, 'node-eu');
+    expect(st.status, ServerHealth.offline);
+    expect(st.isOnline, isFalse);
+    expect(st.isUnhealthy, isTrue);
+    expect(st.activePeers, 4);
+  });
+
+  test(
+    'serverStatus keeps an unrecognized status unknown, not healthy',
+    () async {
+      // A status added to the backend enum later must not read as online: the
+      // rule is "act unless online", and a null is unknown — which is why it
+      // can never be mistaken for either health or death.
+      final api = VpnApi(
+        fakeDio((_) => {'server_id': 'srv-1', 'status': 'sunsetting'}),
+      );
+      final st = await api.serverStatus('dev-1');
+      expect(st.status, isNull);
+      expect(st.isOnline, isFalse);
+      expect(st.isUnhealthy, isFalse);
+    },
+  );
 
   test('revoke hits device delete path', () async {
     final seen = <RequestOptions>[];
