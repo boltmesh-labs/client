@@ -4,12 +4,43 @@ WireGuard VPN client. Backend contract lives in the
 [`backend`](https://github.com/boltmesh-labs/backend) repo (`app/vpn/`; user
 routes `/vpn-devices`, `/vpn-regions` under `/v1`).
 
+## Documentation
+
+This README is the entry point; the deeper docs live alongside it:
+
+- [SETUP.md](SETUP.md) — fresh-machine setup per OS (toolchains, emulator,
+  `boltmeshd` dev loop).
+- [DEPLOYMENT.md](DEPLOYMENT.md) — release versions, CI pipeline, artifacts
+  and signing.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution flow, local hooks, style,
+  test locations.
+- [SECURITY.md](SECURITY.md) — vulnerability reporting, privilege model,
+  transport security.
+- [`boltmeshd/README.md`](boltmeshd/README.md) — helper socket/pipe protocol
+  and security model.
+- [AGENTS.md](AGENTS.md) — conventions for automated contributors.
+
+## Contents
+
+- [Prereqs](#prereqs)
+- [First-time platform scaffolding](#first-time-platform-scaffolding)
+- [Run](#run)
+- [Project layout](#project-layout)
+- [Platform status](#platform-status)
+- [Platform notes](#platform-notes-after-flutter-create)
+- [Release versioning](#release-versioning)
+- [Android release build](#android-release-build)
+- [Windows release build](#windows-release-build)
+- [Flows (backend truth)](#flows-backend-truth)
+- [Handshake readers](#handshake-readers)
+- [Tests](#tests)
+
 ## Prereqs
 
 Setting up a fresh machine (per-OS toolchains, emulator, `boltmeshd` dev
 loop): see [SETUP.md](SETUP.md).
 
-- Flutter SDK ≥ 3.47 (`flutter --version`).
+- Flutter SDK 3.47.x (`flutter --version`).
 - Running backend (`podman-compose up -d` from the
   [`infra`](https://github.com/boltmesh-labs/infra) repo) + a user account
   (`POST /v1/auth/register`, then log in from the app's login screen).
@@ -44,28 +75,26 @@ for `run`, `build`, and anything else. Plain `flutter run` and the IDE's run
 buttons still work — they just add no defines and get the localhost default.
 `.env` is gitignored; `.env.example` is the committed template.
 
-```sh
-# any other define still works the old way, and overrides nothing that is
-# already in .env — prefer .env for the URL and these for the rest:
-# the public site where accounts are created. The login screen shows a
-# "Create account" button that opens it in the system browser, with the URL
-# printed underneath; unset hides that row entirely:
-# --dart-define=WEBSITE_URL=https://boltmesh.mooo.com
-# iOS/macOS Network Extension target id, and the App Group shared by the
-# app and that extension. Both are required on Apple; the app fails fast
-# naming whichever is missing (see SETUP.md "macOS"):
-# --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel
-# --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
-# optional public-key (SPKI) pin(s): comma-separated base64 SHA-256 of the
-# server cert's SubjectPublicKeyInfo (survives cert renewal while the key is
-# reused; compute with `openssl x509 -pubkey -noout | openssl pkey -pubin
-# -outform DER | openssl dgst -sha256 -binary | base64`):
-# --dart-define=TLS_PIN_SPKI_SHA256=pin[,pin...]
-# release builds refuse http:// API URLs (debug/profile allow localhost), so a
-# release build with no API_BASE_URL fails fast rather than shipping cleartext
-# physical phone on LAN: replace localhost with your machine IP
-# optional platform label override: --dart-define=VPN_PLATFORM=android
-```
+Every entry is a compile-time `--dart-define`, and `.env` is the preferred
+place for all of them. Besides `API_BASE_URL`, these are understood:
+
+- `WEBSITE_URL` — the public site where accounts are created. The login
+  screen's "Create account" button opens it in the system browser and prints
+  the URL underneath; unset hides that row entirely.
+- `VPN_PROVIDER_BUNDLE_ID` and `VPN_APP_GROUP` — the iOS/macOS Network
+  Extension target id and the App Group shared by the app and that extension.
+  Both are required on Apple; the app fails fast naming whichever is missing
+  (see [SETUP.md "macOS"](SETUP.md#macos)).
+- `TLS_PIN_SPKI_SHA256` — optional comma-separated base64 SHA-256 public-key
+  (SPKI) pin(s) of the server certificate, which survive cert renewal while
+  the key is reused. Compute with `openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64`.
+- `VPN_PLATFORM` — optional platform-label override for diagnostics (for
+  example `android`).
+
+Two behaviors are worth calling out: release builds refuse `http://` API URLs
+(debug/profile allow localhost), so a release build with no `API_BASE_URL`
+fails fast instead of shipping cleartext; and to run on a physical phone over
+a LAN, replace `localhost` with your machine's IP.
 
 Release packaging does not read `.env`: `distribute_options.yaml` pins the
 production URL per job, so CI needs no `.env` of its own.
@@ -83,9 +112,11 @@ lib/
 ├── main.dart              # main() + BoltMeshApp
 ├── previews.dart          # barrel re-exporting previews/*
 ├── l10n/                  # app_en/app_de.arb + generated gen/**
-├── app/                   # root_shell (auth gate), authed_shell (nav + lifecycle)
+├── app/                   # root_shell (auth gate), authed_shell (nav +
+│                          #   lifecycle), desktop_tray (close-to-tray)
 ├── core/                  # dio_client, env, errors, ip, locale, log, mutex,
-│                          #   storage_options, theme
+│                          #   storage_options, theme, clock, tls_pinning,
+│                          #   x509_spki, desktop/ (tray)
 ├── features/
 │   ├── auth/{data,state,ui}/   # auth_api/models, session_store, auth_session
 │   └── vpn/
@@ -96,10 +127,12 @@ lib/
 └── previews/              # harness, fixtures, login, home, regions, settings
 ```
 
-`test/` mirrors `lib/`: `core/`, `features/auth/{data,state}/` and
-`features/vpn/{data,domain,state}/`. App-level suites (`widget_test.dart`,
-`regions_refresh_test.dart`) stay at the `test/` root, and shared doubles live
-in `test/support/fakes.dart`.
+`test/` mirrors `lib/`, including `test/app/` and the `ui/` trees
+(`features/auth/ui/`, `features/vpn/ui/`). Cross-cutting suites
+(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root and
+`test/tool/` covers `tool/run_flutter.dart`; shared doubles live in
+`test/support/fakes.dart` (state suites layer fixtures on
+`test/support/vpn_harness.dart`).
 
 ## Platform status
 
@@ -603,10 +636,11 @@ rest of the pipeline (which files, when, verify) is unchanged.
   only when the snapshot is stale) immediately instead of waiting out the
   tick.
 
-## Handshake readers (`com.boltmesh/handshake` → `getLastHandshake`)
+## Handshake readers
 
 `wireguard_flutter_plus` exposes only byte counters, so the app reads
-handshakes through its own channel (the plugin is never forked). Contract:
+handshakes through its own channel, `com.boltmesh/handshake` →
+`getLastHandshake` (the plugin is never forked). Contract:
 `getLastHandshake` returns epoch seconds (double) of the last completed
 handshake, or null when unknown (null never heals — only the
 degraded-stage path acts). Dart side: `lib/features/vpn/data/` —

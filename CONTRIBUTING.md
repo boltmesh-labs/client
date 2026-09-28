@@ -127,10 +127,11 @@ bash tool/check_generated.sh
 
 ### Test Locations
 
-`test/` mirrors `lib/` (`core/`, `features/auth/{data,state}/`,
-`features/vpn/{data,domain,state}/`). App-level suites (`widget_test.dart`,
-`regions_refresh_test.dart`) stay at the `test/` root, and shared doubles live
-in `test/support/fakes.dart` (state suites layer fixtures on
+`test/` mirrors `lib/` (`app/`, `core/`, `features/auth/{data,state,ui}/`,
+`features/vpn/{data,domain,state,ui}/`). Cross-cutting suites
+(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root and
+`test/tool/` covers `tool/run_flutter.dart`; shared doubles live in
+`test/support/fakes.dart` (state suites layer fixtures on
 `test/support/vpn_harness.dart`).
 
 ## Documentation
