@@ -229,16 +229,16 @@ void main() {
   group('ControlPlaneProbe.healthUrl', () {
     test('strips /v1, keeps host', () {
       expect(
-        ControlPlaneProbe.healthUrl('https://api.boltmesh.net/v1'),
-        'https://api.boltmesh.net/health',
+        ControlPlaneProbe.healthUrl('https://api.example.com/v1'),
+        'https://api.example.com/health',
       );
       expect(
         ControlPlaneProbe.healthUrl('http://localhost:8000/v1/'),
         'http://localhost:8000/health',
       );
       expect(
-        ControlPlaneProbe.healthUrl('https://api.boltmesh.net'),
-        'https://api.boltmesh.net/health',
+        ControlPlaneProbe.healthUrl('https://api.example.com'),
+        'https://api.example.com/health',
       );
     });
   });
