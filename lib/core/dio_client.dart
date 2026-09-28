@@ -10,6 +10,16 @@ import 'tls_pinning_stub.dart'
     if (dart.library.io) 'tls_pinning_io.dart'
     as tls_pinning;
 
+/// The single wording for the cleartext-release refusal, hoisted so the three
+/// throw sites cannot drift apart. It names the fix rather than only the rule:
+/// [Env]'s default is the local `http://localhost:8000/v1` stack, so a release
+/// build with no `API_BASE_URL` define lands here and the operator needs to
+/// know where the URL is supposed to come from.
+const _insecureReleaseMessage =
+    'API_BASE_URL must use https:// in release builds. Set it to an https:// '
+    'URL with --dart-define=API_BASE_URL=https://host/v1, or put it in .env '
+    'and build via `dart run tool/run_flutter.dart build ...`.';
+
 /// True when a release build points at cleartext HTTP. Debug/profile keep
 /// `http://localhost` for the local `podman-compose` stack.
 bool isInsecureReleaseBuild(String baseUrl, {bool releaseMode = kReleaseMode}) {
@@ -225,7 +235,7 @@ String requestElapsed(RequestOptions options) {
 /// tokens in the clear.
 Dio baseDio() {
   if (isInsecureReleaseBuild(Env.apiBaseUrl)) {
-    throw StateError('API_BASE_URL must use https:// in release builds.');
+    throw StateError(_insecureReleaseMessage);
   }
   final dio = Dio(
     BaseOptions(
@@ -246,7 +256,7 @@ Dio baseDio() {
 Dio pinnedDio(BaseOptions options, {bool releaseMode = kReleaseMode}) {
   final baseUrl = options.baseUrl;
   if (isInsecureReleaseBuild(baseUrl, releaseMode: releaseMode)) {
-    throw StateError('API_BASE_URL must use https:// in release builds.');
+    throw StateError(_insecureReleaseMessage);
   }
   final dio = Dio(options);
   configureTlsPinning(dio);
@@ -261,9 +271,7 @@ Dio pinnedDio(BaseOptions options, {bool releaseMode = kReleaseMode}) {
             DioException(
               requestOptions: requestOptions,
               type: DioExceptionType.connectionError,
-              error: StateError(
-                'API_BASE_URL must use https:// in release builds.',
-              ),
+              error: StateError(_insecureReleaseMessage),
             ),
           );
           return;

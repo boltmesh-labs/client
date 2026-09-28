@@ -2,8 +2,15 @@
 //
 // Backend mounts user routes under {API_V1_PREFIX} = `/v1`
 // (see backend/app/core/config.py, backend/app/vpn/router.py).
-// Defaults to production; point at a local stack with
-// `flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1`.
+//
+// The default is the local `podman-compose` stack from the `infra` repo, so a
+// fresh clone runs against localhost with no configuration. Any other API —
+// the real backend included — comes from `API_BASE_URL`, supplied either as
+// `--dart-define=API_BASE_URL=...` or through `.env` via
+// `dart run tool/run_flutter.dart run`. Release builds still refuse a
+// cleartext `http://` URL (see `dio_client.dart`); the production URL is
+// pinned per job in `distribute_options.yaml`, which is why CI needs no
+// `.env` of its own.
 
 /// Trims whitespace and every trailing slash, so path joins never produce
 /// `//segment` (and `healthUrl` can drop a `/v1` suffix cleanly).
@@ -18,7 +25,7 @@ String stripTrailingSlashes(String url) {
 class Env {
   static const _rawApiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api.boltmesh.mooo.com/v1',
+    defaultValue: 'http://localhost:8000/v1',
   );
 
   /// Normalized base URL without a trailing slash, so path joins in

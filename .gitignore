@@ -31,3 +31,7 @@ Thumbs.db
 
 boltmeshd/bin
 coverage
+
+# ---> Local build configuration
+# Compile-time defines for tool/run_flutter.dart; commit .env.example instead.
+.env

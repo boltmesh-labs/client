@@ -28,10 +28,25 @@ folders and never overwrites `lib/`.
 
 ## Run
 
+The API URL is a compile-time constant, and it defaults to the local
+`podman-compose` stack from the [`infra`](https://github.com/boltmesh-labs/infra)
+repo (`http://localhost:8000/v1`) — so a fresh clone runs against localhost
+with no configuration. To build against another API, put it in `.env`:
+
 ```sh
-# API_BASE_URL defaults to https://api.boltmesh.mooo.com/v1 (production);
-# point it at the local stack with:
-flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1
+cp .env.example .env          # then edit API_BASE_URL
+dart run tool/run_flutter.dart run
+```
+
+`tool/run_flutter.dart` forwards every `.env` entry to `flutter` as a
+`--dart-define` and passes all other arguments through untouched, so it works
+for `run`, `build`, and anything else. Plain `flutter run` and the IDE's run
+buttons still work — they just add no defines and get the localhost default.
+`.env` is gitignored; `.env.example` is the committed template.
+
+```sh
+# any other define still works the old way, and overrides nothing that is
+# already in .env — prefer .env for the URL and these for the rest:
 # iOS/macOS Network Extension target id, and the App Group shared by the
 # app and that extension. Both are required on Apple; the app fails fast
 # naming whichever is missing (see SETUP.md "macOS"):
@@ -42,10 +57,14 @@ flutter run --dart-define=API_BASE_URL=http://localhost:8000/v1
 # reused; compute with `openssl x509 -pubkey -noout | openssl pkey -pubin
 # -outform DER | openssl dgst -sha256 -binary | base64`):
 # --dart-define=TLS_PIN_SPKI_SHA256=pin[,pin...]
-# release builds refuse http:// API URLs (debug/profile allow localhost)
+# release builds refuse http:// API URLs (debug/profile allow localhost), so a
+# release build with no API_BASE_URL fails fast rather than shipping cleartext
 # physical phone on LAN: replace localhost with your machine IP
 # optional platform label override: --dart-define=VPN_PLATFORM=android
 ```
+
+Release packaging does not read `.env`: `distribute_options.yaml` pins the
+production URL per job, so CI needs no `.env` of its own.
 
 Then: log in (username or email + password, or Continue with
 Google/GitHub) → Connect tab → toggle.
