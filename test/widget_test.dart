@@ -382,6 +382,20 @@ void main() {
     expect(find.byType(NavigationBar), findsNothing);
   });
 
+  testWidgets(
+    'login screen offers account creation only when the site is set',
+    (tester) async {
+      // WEBSITE_URL is a compile-time define, so the test binary carries the
+      // plain `flutter test` default: the row stays hidden. The configured
+      // branch is covered against the widget itself in
+      // features/auth/ui/create_account_link_test.dart.
+      await tester.pumpWidget(testScope(authenticated: false));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Create account'), findsNothing);
+    },
+  );
+
   testWidgets('busy spinners announce what the app is doing', (tester) async {
     // Every spinner that gates a screen or an action needs a semantics label;
     // a bare CircularProgressIndicator says nothing to a screen reader. These

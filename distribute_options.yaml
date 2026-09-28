@@ -9,6 +9,7 @@ releases:
           build_args:
             dart-define:
               API_BASE_URL: https://api.boltmesh.mooo.com/v1
+              WEBSITE_URL: https://boltmesh.mooo.com
           hooks:
             pre: bash boltmeshd/packaging/stage.sh
       - name: linux-rpm
@@ -18,6 +19,7 @@ releases:
           build_args:
             dart-define:
               API_BASE_URL: https://api.boltmesh.mooo.com/v1
+              WEBSITE_URL: https://boltmesh.mooo.com
           hooks:
             pre: bash boltmeshd/packaging/stage.sh
       # `fastforge release --name=production` runs the jobs supported by the
@@ -36,6 +38,7 @@ releases:
           build_args:
             dart-define:
               API_BASE_URL: https://api.boltmesh.mooo.com/v1
+              WEBSITE_URL: https://boltmesh.mooo.com
           hooks:
             pre: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/stage_boltmeshd.ps1 -BuildDir "$BUILD_OUTPUT_DIRECTORY" && powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$BUILD_OUTPUT_DIRECTORY"'
             post: 'powershell -NoProfile -ExecutionPolicy Bypass -File windows/packaging/sign.ps1 -Path "$OUTPUT_DIRECTORY"'

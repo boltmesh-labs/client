@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/env.dart';
 import '../../../l10n/gen/app_localizations.dart';
 import '../state/auth_providers.dart';
+import 'create_account_link.dart';
 
 /// Sign-in form. On success the auth gate switches to the VPN tabs
 /// automatically; failures surface inline via [AuthState.error].
@@ -169,6 +171,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   icon: const Icon(Icons.code),
                   label: Text(l10n.loginGithub),
                 ),
+                // Hidden entirely unless WEBSITE_URL is configured, so a build
+                // without it shows no dead link.
+                if (Env.websiteUrl.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  CreateAccountLink(url: Env.websiteUrl),
+                ],
               ],
             ),
           ),

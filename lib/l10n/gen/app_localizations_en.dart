@@ -142,6 +142,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get loginGithub => 'Continue with GitHub';
 
   @override
+  String get loginCreateAccount => 'Create account';
+
+  @override
+  String loginCreateAccountUrl(String url) {
+    return '$url';
+  }
+
+  @override
+  String get loginCreateAccountFailed =>
+      'Couldn\'t open the browser. Visit the site below to create an account.';
+
+  @override
   String get regionsSearchHint => 'Search regions or servers';
 
   @override

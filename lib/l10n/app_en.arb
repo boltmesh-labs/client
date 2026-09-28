@@ -199,6 +199,23 @@
   "@loginGithub": {
     "description": "OAuth sign-in button for GitHub."
   },
+  "loginCreateAccount": "Create account",
+  "@loginCreateAccount": {
+    "description": "Opens the WEBSITE_URL site in the system browser. Hidden entirely when the site is not configured."
+  },
+  "loginCreateAccountUrl": "{url}",
+  "@loginCreateAccountUrl": {
+    "description": "The account-creation site, shown as selectable text so it can be copied when the browser will not open.",
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
+  },
+  "loginCreateAccountFailed": "Couldn't open the browser. Visit the site below to create an account.",
+  "@loginCreateAccountFailed": {
+    "description": "Snack shown when the system browser could not be launched from the Create account button."
+  },
   "regionsSearchHint": "Search regions or servers",
   "@regionsSearchHint": {
     "description": "Hint for the region list search field."

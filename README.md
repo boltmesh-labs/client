@@ -47,6 +47,10 @@ buttons still work — they just add no defines and get the localhost default.
 ```sh
 # any other define still works the old way, and overrides nothing that is
 # already in .env — prefer .env for the URL and these for the rest:
+# the public site where accounts are created. The login screen shows a
+# "Create account" button that opens it in the system browser, with the URL
+# printed underneath; unset hides that row entirely:
+# --dart-define=WEBSITE_URL=https://boltmesh.mooo.com
 # iOS/macOS Network Extension target id, and the App Group shared by the
 # app and that extension. Both are required on Apple; the app fails fast
 # naming whichever is missing (see SETUP.md "macOS"):
@@ -69,6 +73,8 @@ production URL per job, so CI needs no `.env` of its own.
 Then: log in (username or email + password, or Continue with
 Google/GitHub) → Connect tab → toggle.
 Regions tab → Quick Connect (auto lowest-load) or per-server switch.
+No account yet? The login screen's "Create account" button opens
+`WEBSITE_URL` in the system browser.
 
 ## Project layout
 

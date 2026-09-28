@@ -332,6 +332,24 @@ abstract class AppLocalizations {
   /// **'Continue with GitHub'**
   String get loginGithub;
 
+  /// Opens the WEBSITE_URL site in the system browser. Hidden entirely when the site is not configured.
+  ///
+  /// In en, this message translates to:
+  /// **'Create account'**
+  String get loginCreateAccount;
+
+  /// The account-creation site, shown as selectable text so it can be copied when the browser will not open.
+  ///
+  /// In en, this message translates to:
+  /// **'{url}'**
+  String loginCreateAccountUrl(String url);
+
+  /// Snack shown when the system browser could not be launched from the Create account button.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t open the browser. Visit the site below to create an account.'**
+  String get loginCreateAccountFailed;
+
   /// Hint for the region list search field.
   ///
   /// In en, this message translates to:

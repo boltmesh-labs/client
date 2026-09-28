@@ -22,15 +22,44 @@ String stripTrailingSlashes(String url) {
   return v;
 }
 
+/// True when [url] is a well-formed absolute `http`/`https` URL with a host.
+///
+/// The website URL comes from a compile-time define, so it is only as trusted
+/// as the build that set it — but it is launched into an external browser, and
+/// a typo or a stray define should never hand the platform some other scheme
+/// (`file:`, an app's custom scheme). Anything that is not plainly a web URL
+/// is treated as "not configured" and the link is hidden instead.
+bool isLaunchableWebUrl(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null || !uri.isAbsolute) return false;
+  if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+  return uri.host.isNotEmpty;
+}
+
 class Env {
   static const _rawApiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://localhost:8000/v1',
   );
 
+  static const _rawWebsiteUrl = String.fromEnvironment('WEBSITE_URL');
+
   /// Normalized base URL without a trailing slash, so path joins in
   /// [VpnApi] never produce `//vpn-regions`.
   static String get apiBaseUrl => stripTrailingSlashes(_rawApiBaseUrl);
+
+  /// Public site where accounts are created, shown on the login screen. Set
+  /// it with `--dart-define=WEBSITE_URL=...` or through `.env` via
+  /// `dart run tool/run_flutter.dart run`; release jobs pin it in
+  /// `distribute_options.yaml`.
+  ///
+  /// Empty (the default, and every plain `flutter run` that reads no `.env`)
+  /// means "not configured": the login screen then shows no account-creation
+  /// affordance at all rather than a dead link.
+  static String get websiteUrl {
+    final value = stripTrailingSlashes(_rawWebsiteUrl);
+    return isLaunchableWebUrl(value) ? value : '';
+  }
 
   /// Discovery cache TTL mirrors backend `Cache-Control: private, max-age=60`
   /// on GET /vpn-regions (backend/app/vpn/routers/regions.py).

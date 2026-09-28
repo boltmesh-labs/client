@@ -31,6 +31,8 @@ dependencies:
   # Idempotency-Key generation for POST /vpn-devices.
   uuid: ^4.4.0
   flutter_web_auth_2: ^5.1.0
+  # Opens the account-creation site (WEBSITE_URL) in the system browser.
+  url_launcher: ^6.3.2
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0
   connectivity_plus: ^7.3.1
