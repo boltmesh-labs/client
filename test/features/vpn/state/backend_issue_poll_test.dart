@@ -5,6 +5,8 @@ import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
+import 'package:boltmesh/features/vpn/domain/failover_policy.dart';
+import 'package:boltmesh/features/vpn/state/connection_tuning.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -226,4 +228,45 @@ void main() {
     await ctl.pollStatusOnce();
     expect(container.read(connectionProvider).backendIssue, isNull);
   });
+
+  test(
+    'the failure count saturates instead of growing without bound',
+    () async {
+      // Every reader thresholds this counter (`>= 1` for corroboration, `>=
+      // degradedPollThreshold` for the banner), so an outage that never
+      // recovers has nothing left to say after the threshold. Left unbounded
+      // it also made the debug footer and the banner's `×` read as a rising
+      // severity measure, which is exactly what this evidence is not.
+      final events = <String>[];
+      final (container, _) = await seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      });
+      final ctl = container.read(connectionProvider.notifier);
+
+      // Well past the threshold: a long outage must not keep counting.
+      for (var i = 0; i < ConnectionTuning.maxPollFailures + 5; i++) {
+        await ctl.pollStatusOnce();
+      }
+
+      final state = container.read(connectionProvider);
+      expect(state.pollFailures, ConnectionTuning.maxPollFailures);
+      // The banner still reads as the same outage, not a louder one.
+      expect(state.backendIssue, BackendIssue.unreachable);
+      expect(state.healthNote, contains('Backend unreachable'));
+
+      // And the corroboration it feeds is unchanged by the ceiling.
+      expect(
+        isBackendCorroborated(
+          pollFailures: state.pollFailures,
+          pollThreshold: ConnectionTuning.handshakeStallPollThreshold,
+          quietFor: ConnectionTuning.backendQuietFor,
+          lastStatusAt: state.lastStatusAt,
+          now: DateTime(2026),
+        ),
+        isTrue,
+      );
+    },
+  );
 }

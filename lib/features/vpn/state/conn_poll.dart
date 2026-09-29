@@ -146,7 +146,17 @@ extension ConnectionPoll on ConnectionController {
         );
         return;
       }
-      final failures = snap.pollFailures + 1;
+      // Saturating count: every reader of this counter thresholds it
+      // (`>= 1` for corroboration, `>= degradedPollThreshold` for the
+      // banner), so a longer outage says nothing new. The alternative — an
+      // unbounded int that outlives a multi-day outage — made the debug
+      // footer and the `×` in the banner read as a growing severity
+      // measure, which is the one thing this evidence is not. The raw
+      // attempt number still goes to the log below, where a real timeline
+      // is what you want.
+      final failures = snap.pollFailures < ConnectionTuning.maxPollFailures
+          ? snap.pollFailures + 1
+          : ConnectionTuning.maxPollFailures;
       // A poll that was in flight while a heal/refresh/failover stopped
       // the tunnel proves nothing about the backend (its socket died with
       // the teardown): don't count it toward escalation, just note it.

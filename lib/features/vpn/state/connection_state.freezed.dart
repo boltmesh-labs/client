@@ -15,7 +15,9 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ConnState {
 
- ConnPhase get phase; String get message; DialParams? get dial; String? get regionId; String? get serverId; bool get explicitTarget; DeviceStatus? get deviceStatus; DateTime? get lastStatusAt;/// Consecutive transient status-poll failures (network/timeout only).
+ ConnPhase get phase; String get message; DialParams? get dial; String? get regionId; String? get serverId; bool get explicitTarget; DeviceStatus? get deviceStatus; DateTime? get lastStatusAt;/// Consecutive transient status-poll failures (network/timeout only),
+/// saturating at [ConnectionTuning.maxPollFailures] — every reader
+/// thresholds it, so a longer outage carries no extra information.
 /// Reset on any successful poll or fresh tunnel start.
  int get pollFailures;/// Last observed native tunnel stage (null until first observation).
  VpnStage? get lastStage;/// Last published traffic counters for the Home card (null until the
@@ -304,7 +306,9 @@ class _ConnState implements ConnState {
 @override@JsonKey() final  bool explicitTarget;
 @override final  DeviceStatus? deviceStatus;
 @override final  DateTime? lastStatusAt;
-/// Consecutive transient status-poll failures (network/timeout only).
+/// Consecutive transient status-poll failures (network/timeout only),
+/// saturating at [ConnectionTuning.maxPollFailures] — every reader
+/// thresholds it, so a longer outage carries no extra information.
 /// Reset on any successful poll or fresh tunnel start.
 @override@JsonKey() final  int pollFailures;
 /// Last observed native tunnel stage (null until first observation).

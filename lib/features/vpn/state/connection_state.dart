@@ -24,7 +24,9 @@ abstract class ConnState with _$ConnState {
     DeviceStatus? deviceStatus,
     DateTime? lastStatusAt,
 
-    /// Consecutive transient status-poll failures (network/timeout only).
+    /// Consecutive transient status-poll failures (network/timeout only),
+    /// saturating at [ConnectionTuning.maxPollFailures] — every reader
+    /// thresholds it, so a longer outage carries no extra information.
     /// Reset on any successful poll or fresh tunnel start.
     @Default(0) int pollFailures,
 

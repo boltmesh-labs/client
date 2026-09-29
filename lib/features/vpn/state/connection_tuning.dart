@@ -7,6 +7,15 @@ abstract final class ConnectionTuning {
   /// Status-poll failures before the UI shows a degraded banner.
   static const degradedPollThreshold = 3;
 
+  /// Ceiling for [ConnState.pollFailures]. Derived from
+  /// [degradedPollThreshold] rather than a separate literal: the counter
+  /// saturates exactly where its last consumer flips, so retuning the
+  /// threshold cannot leave the ceiling behind. Every reader thresholds it
+  /// (`>= 1` for corroboration, `>= degradedPollThreshold` for the banner),
+  /// so nothing above the ceiling carries information — see
+  /// `conn_poll.dart`.
+  static const maxPollFailures = degradedPollThreshold;
+
   /// Last-handshake age that marks the peer dead (see [isHandshakeStale]).
   /// WireGuard's 25s persistent keepalive initiates a fresh handshake once
   /// the last one is ~120s old, so 150s still clears a full rekey cycle with
