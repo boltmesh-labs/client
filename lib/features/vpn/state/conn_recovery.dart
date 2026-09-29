@@ -38,6 +38,19 @@ extension ConnectionRecovery on ConnectionController {
       final dial = snap.dial;
       if (dial == null || snap.phase != ConnPhase.connected) return;
       if (!hardStalled && !localConfirmed && _lastStatusAnswered) return;
+      // A status poll may have proven the backend reachable after the tick
+      // scheduled this heal: stopping the tunnel then would flap a path the
+      // backend just vouched for. Keep the tunnel up in that case without
+      // consuming the heal budget — unless the handshake is hard-stalled, in
+      // which case the reachable backend was out-of-band and the tunnel path
+      // is still dead. Checked before the first write below so a suppressed
+      // heal does not publish `working` and then walk it back, which cost
+      // the UI two rebuilds and a visible "Reconnecting…" flicker.
+      if (_backendLooksReachable() && !hardStalled && !localConfirmed) {
+        AppLog.info('auto-heal suppressed ($why) backend reachable');
+        snap = snap.copyWith(healthNote: null, backendIssue: null);
+        return;
+      }
       final sessionEpoch = _sessionEpoch;
       final attempt = snap.autoHealAttempts + 1;
       // [_startWith] resets the failover budget; a same-server restart must
@@ -53,23 +66,6 @@ extension ConnectionRecovery on ConnectionController {
         autoHealAttempts: attempt,
         healthNote: 'VPN stalled ($why). Reconnecting…',
       );
-      // A status poll may have proven the backend reachable after the tick
-      // scheduled this heal: stopping the tunnel then would flap a path the
-      // backend just vouched for. Keep the tunnel up in that case without
-      // consuming the heal budget — unless the handshake is hard-stalled, in
-      // which case the reachable backend was out-of-band and the tunnel path
-      // is still dead.
-      if (_backendLooksReachable() && !hardStalled && !localConfirmed) {
-        AppLog.info('auto-heal suppressed ($why) backend reachable');
-        snap = snap.copyWith(
-          phase: ConnPhase.connected,
-          message: 'Connected',
-          autoHealAttempts: attempt - 1,
-          healthNote: null,
-          backendIssue: null,
-        );
-        return;
-      }
       await _stopTunnel('auto-heal');
       if (sessionEpoch != _sessionEpoch) return;
       try {
@@ -83,10 +79,20 @@ extension ConnectionRecovery on ConnectionController {
         if (sessionEpoch != _sessionEpoch) return;
         final vpnErr = asVpnError(e);
         AppLog.error('auto-heal restart failed', vpnErr?.message ?? e);
+        // The tunnel is already down (it was stopped above), so this is a
+        // terminal state like [_surfaceRecoveryExhausted]: stop the ticks
+        // and drop the stage it died on rather than leaving stale reads
+        // armed behind an error.
+        _stopPolling();
+        _pollsSinceRotate = 0;
+        _resetLocalHealth();
         snap = snap.copyWith(
           phase: ConnPhase.error,
           message:
               'VPN stalled ($why). Restart failed (${vpnErr?.message ?? e}). Tap Connect.',
+          lastStage: null,
+          healthNote: null,
+          backendIssue: null,
         );
         return;
       }
@@ -168,7 +174,10 @@ extension ConnectionRecovery on ConnectionController {
   /// has no capacity left. Transport failures restart the old tunnel and
   /// stay connected so the next health tick retries until
   /// [ConnectionTuning.maxAutoFailovers] is spent; a 404 forgets the device
-  /// like `pollStatusOnce` does.
+  /// like `pollStatusOnce` does. The budget is charged per committed
+  /// attempt (a tunnel stop, a resolved target), not per entry: a call the
+  /// backend *answers* while the tunnel stays up changed nothing, so it
+  /// costs nothing and the tick cadence is the backoff.
   ///
   /// [tunnelPathDead] is the path-already-suspect fast-track: a
   /// performed-dead in-tunnel gateway echo, a hard-stale handshake, an
@@ -283,9 +292,28 @@ extension ConnectionRecovery on ConnectionController {
     snap = snap.copyWith(
       phase: ConnPhase.working,
       message: 'Trying another server…',
-      autoFailoverAttempts: attempt,
       healthNote: 'Server unreachable ($why). Trying another server…',
     );
+    // The move budget is charged at *commitment*, not on entry. A discovery
+    // or switch POST the backend answers (5xx/429/…) proves the control plane
+    // is reachable, so the tunnel is kept up and no move happened; charging
+    // there spent the budget against servers the session was never on and
+    // walked it into [_surfaceRecoveryExhausted] with the tunnel healthy.
+    // Every path that stops the tunnel or issues the switch POST charges
+    // first, so a real attempt still costs exactly one.
+    void chargeAttempt() {
+      snap = snap.copyWith(autoFailoverAttempts: attempt);
+    }
+
+    // The counterpart, for a move the backend *answered* while the tunnel
+    // stayed up: the control plane is reachable and no server was changed,
+    // so the budget goes back and the next tick may try again. A transport
+    // failure (which tears the tunnel down and restarts it) keeps the
+    // charge.
+    void refundAttempt() {
+      snap = snap.copyWith(autoFailoverAttempts: attempt - 1);
+    }
+
     bool sessionCurrent() => sessionEpoch == _sessionEpoch;
     // A path-already-dead tunnel is stopped before discovery; otherwise
     // probe discovery through the live tunnel first and stop only when the
@@ -295,6 +323,7 @@ extension ConnectionRecovery on ConnectionController {
     var tunnelDown = false;
     List<Region>? regions;
     if (tunnelPathDead) {
+      chargeAttempt();
       await _stopTunnel('auto-failover');
       if (!sessionCurrent()) return;
       tunnelDown = true;
@@ -308,8 +337,9 @@ extension ConnectionRecovery on ConnectionController {
         if (!sessionCurrent()) return;
       } catch (e) {
         // App-level rejection with the tunnel still up: the backend is
-        // reachable, so keep the tunnel instead of flapping it. The next
-        // health tick retries within the remaining failover budget.
+        // reachable, so keep the tunnel instead of flapping it. Nothing
+        // moved, so the budget is untouched and the next health tick
+        // retries at the tick cadence.
         AppLog.error('failover discovery failed', e);
         if (!sessionCurrent()) return;
         _noteRateLimit(asVpnError(e));
@@ -318,6 +348,7 @@ extension ConnectionRecovery on ConnectionController {
       }
     }
     if (regions == null && !tunnelDown) {
+      chargeAttempt();
       await _stopTunnel('auto-failover');
       if (!sessionCurrent()) return;
       tunnelDown = true;
@@ -341,6 +372,10 @@ extension ConnectionRecovery on ConnectionController {
     if (!sessionCurrent()) return;
     final target = _pickFailoverTarget(regions, oldDial);
     if (target == null) {
+      // Nowhere to move: the client deliberately bounces the old tunnel
+      // instead, which is a committed move attempt like any other (the
+      // budget is what keeps the stall from re-discovering forever).
+      chargeAttempt();
       if (snap.explicitTarget) {
         // Pinned region/server with no same-region capacity: never roam
         // across regions. The tunnel is down before the error is surfaced
@@ -399,6 +434,10 @@ extension ConnectionRecovery on ConnectionController {
     DialParams dial;
     String newPriv;
     String newPub;
+    // A target is in hand: this is a committed move, so it costs an attempt
+    // whether or not the switch POST below succeeds. Charging here (rather
+    // than on entry) is what spares the discovery-only failures above.
+    chargeAttempt();
     try {
       final kp = await _keys.generate();
       // Probe the switch through the live tunnel first when it is still
@@ -459,6 +498,7 @@ extension ConnectionRecovery on ConnectionController {
       AppLog.error('failover switch failed', e);
       if (!sessionCurrent()) return;
       if (!tunnelDown) {
+        refundAttempt();
         _keepConnected();
         return;
       }
@@ -473,6 +513,7 @@ extension ConnectionRecovery on ConnectionController {
       AppLog.error('failover move failed', e);
       if (!sessionCurrent()) return;
       if (!tunnelDown) {
+        refundAttempt();
         _keepConnected();
         return;
       }
@@ -641,8 +682,9 @@ extension ConnectionRecovery on ConnectionController {
     bool tunnelDown = true,
     required int sessionEpoch,
   }) async {
-    // The failover count was already incremented before the tunnel stop;
-    // [_startWith] resets it, so preserve it across the fallback restart.
+    // Every path that reaches here has already charged its attempt (a
+    // tunnel stop or a resolved target), but [_startWith] resets the
+    // counter — so read it back and re-assert it across the restart.
     // Poll failures are preserved for the same reason as in [_autoHeal]:
     // the outage is still ongoing.
     final failovers = snap.autoFailoverAttempts;

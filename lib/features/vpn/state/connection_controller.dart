@@ -115,11 +115,15 @@ class ConnectionController extends Notifier<ConnState> {
   /// connected (see [_startPolling]). Lifecycle owned by [PollingService].
   final PollingService _polling = PollingService();
 
-  /// True when the most recent status request received an application-level
-  /// response (including 401/403/409/429/5xx). A response proves the control
-  /// plane was reachable even when it rejected the request, so health must
-  /// not reinterpret it as a transport outage. Reset with the tunnel/session
-  /// health anchor in [_resetLocalHealth].
+  /// True when the most recent status request was *rejected* by the control
+  /// plane (401/403/409/429/5xx). Such a response still proves the control
+  /// plane was reachable, so health must not reinterpret it as a transport
+  /// outage — that is what this flag gates in the heal ladder. A successful
+  /// poll clears it and reaches the same conclusion the other way, through
+  /// [ConnState.lastStatusAt] + `pollFailures: 0` (see
+  /// [isBackendCorroborated]), which is why the success path writes `false`
+  /// here. Reset with the tunnel/session health anchor in
+  /// [_resetLocalHealth].
   bool _lastStatusAnswered = false;
 
   /// Shared single-flight guards for public/manual ticks as well as timer

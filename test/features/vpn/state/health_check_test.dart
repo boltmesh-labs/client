@@ -2197,4 +2197,146 @@ void main() {
     await ctl.checkHealthOnce();
     expect(tunnel.trafficReads, 2);
   });
+
+  test(
+    'a successful move drops the dead-node verdict for the new server',
+    () async {
+      // `serverConfirmedDown` is a verdict about one serving node, but it
+      // lives on the session. The health tick reads it as attributed cause
+      // (it outranks a live gateway echo), so a verdict left set after the
+      // move fast-tracks *another* move off a healthy server on the next
+      // tick — draining the whole move budget and ending in an error with
+      // the tunnel never having been broken.
+      //
+      // Background is the shape that exposes it: the early status poll is
+      // skipped there, so nothing rewrites the flag before the next health
+      // tick (15s) and the next status poll (60s) both do.
+      final events = <String>[];
+      var nodeOffline = true;
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/server-status')) {
+            return serverStatusJson(nodeOffline ? 'offline' : 'online');
+          }
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        gatewayProbe: support.FakeGatewayProbe(true),
+        controlProbe: support.FakeControlProbe(true),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.setBackgrounded(true);
+      await ctl.pollStatusOnce();
+      expect(container.read(connectionProvider).serverConfirmedDown, isTrue);
+      events.clear();
+
+      // The node is back; the move is what has to retire the verdict.
+      nodeOffline = false;
+      await ctl.checkHealthOnce();
+      var state = container.read(connectionProvider);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(state.autoFailoverAttempts, 1);
+      expect(
+        state.serverConfirmedDown,
+        isFalse,
+        reason: 'the verdict described srv-1, and the session is on srv-2',
+      );
+
+      // A further tick must be a no-op: srv-2 is healthy, and no status
+      // poll has run to correct the flag.
+      events.clear();
+      await ctl.checkHealthOnce();
+      state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(state.autoFailoverAttempts, 1);
+      expect(events, isNot(contains('GET:/vpn-regions')));
+      expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));
+    },
+  );
+
+  test('a same-server restart keeps the dead-node verdict', () async {
+    // The counterpart: a heal restarts the *same* node, so the backend's
+    // verdict about it still applies and must survive (it is what escalates
+    // the next tick to a move).
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/server-status')) {
+          return serverStatusJson('offline');
+        }
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(false),
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    await ctl.pollStatusOnce();
+    expect(container.read(connectionProvider).serverConfirmedDown, isTrue);
+
+    // Control plane down, so this is a local heal, not a move.
+    hardStaleHandshake(ctl);
+    await ctl.checkHealthOnce();
+    final state = container.read(connectionProvider);
+    expect(state.autoHealAttempts, 1);
+    expect(state.dial?.serverId, 'srv-1');
+    expect(state.serverConfirmedDown, isTrue);
+  });
+
+  test('a failing regions discovery does not spend the move budget', () async {
+    // The control probe answers `/health` while `/vpn-regions` fails at the
+    // app level (500/429). Nothing moved and the tunnel is never stopped, so
+    // charging a move would walk the session into
+    // `_surfaceRecoveryExhausted` in a few ticks — dropping a healthy tunnel
+    // over a discovery endpoint that was only ever erroring.
+    final events = <String>[];
+    final (container, tunnel) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          throw DioException(
+            requestOptions: o,
+            type: DioExceptionType.badResponse,
+            response: Response(
+              requestOptions: o,
+              statusCode: 500,
+              data: const {'detail': 'boom'},
+            ),
+          );
+        }
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
+    final ctl = container.read(connectionProvider.notifier);
+
+    // Heal, then several ticks that each attempt (and fail) a move.
+    for (var i = 0; i < 5; i++) {
+      await stallOnce(ctl);
+    }
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-1');
+    expect(state.autoFailoverAttempts, 0);
+    expect(
+      state.autoHealAttempts,
+      1,
+      reason: 'one heal, then the move path retries without spending budget',
+    );
+    // The tunnel was only cycled by the heal, never by a failed move.
+    expect(events.where((e) => e == 'tunnel:stop'), hasLength(1));
+    expect(tunnel.stageValue, isNot(VpnStage.disconnected));
+  });
 }

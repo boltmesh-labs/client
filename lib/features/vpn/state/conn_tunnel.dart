@@ -206,6 +206,16 @@ extension ConnectionTunnel on ConnectionController {
     // which preserve the in-tunnel failures so one outage doesn't need a
     // full new set of 60s polls after every restart.
     final pollFailures = preservePollFailures ? snap.pollFailures : 0;
+    // A confirmed-dead verdict describes the serving *node*, not the
+    // session, so it stops applying the moment the dial moves off it. The
+    // health tick reads it as attributed cause (it outranks a live echo),
+    // so carrying it onto a different server would fast-track another move
+    // off a perfectly healthy node and drain the move budget — while the
+    // only thing that would clear it is a status poll, up to a full 60s
+    // away (the early poll is skipped in the background). A same-server
+    // restart (heal, rotate) keeps it, which is the whole point.
+    final movedServer =
+        snap.dial != null && snap.dial!.serverId != dial.serverId;
     // Any fresh tunnel start supersedes cold watching and its grace.
     _coldRestore.clear();
     snap = snap.copyWith(
@@ -218,6 +228,7 @@ extension ConnectionTunnel on ConnectionController {
       backendIssue: null,
       autoHealAttempts: 0,
       autoFailoverAttempts: 0,
+      serverConfirmedDown: movedServer ? false : snap.serverConfirmedDown,
       rxBytes: null,
       txBytes: null,
     );
