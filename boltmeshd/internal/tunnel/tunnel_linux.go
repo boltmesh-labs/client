@@ -11,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
@@ -72,6 +74,10 @@ func findTool(name string) (string, error) {
 
 type runFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+// runInputFunc is [runFunc] with a stdin payload, for the tools that read
+// their input (resolvconf -a).
+type runInputFunc func(ctx context.Context, input string, name string, args ...string) ([]byte, error)
+
 // Manager brings the interface up/down and reports its state. Construct with
 // [NewManager]; tests replace the unexported seams.
 type Manager struct {
@@ -85,20 +91,39 @@ type Manager struct {
 	busy atomic.Bool
 
 	run        runFunc
+	runInput   runInputFunc
 	lookup     func(name string) (string, error)
 	linkExists func(name string) bool
 	device     func(name string) (*wgtypes.Device, error)
+
+	// Userspace AmneziaWG data plane (obfuscated configs). mu guards the
+	// fields below; a nil awgDev means no userspace tunnel is live. Unlike
+	// the kernel path, the data plane dies with the daemon process, so a
+	// stale config file after a restart is the only state that can linger
+	// (plus the underlay host routes; see teardownObfuscated).
+	mu                sync.Mutex
+	awgDev            awgDevice
+	awgEndpointRoutes []string
+	makeAwgTun        func(name string, mtu int) (awgtun.Device, error)
+	makeAwgDevice     func(awgtun.Device) (awgDevice, error)
+	resolveHost       func(ctx context.Context, host string) ([]net.IP, error)
 }
 
 // NewManager returns a Manager for iface storing its config in dir.
 func NewManager(dir, iface string) *Manager {
 	return &Manager{
-		iface:      iface,
-		dir:        dir,
-		run:        runCommand,
-		lookup:     findTool,
-		linkExists: linkExists,
-		device:     queryDevice,
+		iface:         iface,
+		dir:           dir,
+		run:           runCommand,
+		runInput:      runCommandInput,
+		lookup:        findTool,
+		linkExists:    linkExists,
+		device:        queryDevice,
+		makeAwgTun:    awgtun.CreateTUN,
+		makeAwgDevice: newAwgDevice,
+		resolveHost: func(ctx context.Context, host string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(ctx, "ip", host)
+		},
 	}
 }
 
@@ -149,6 +174,13 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	operationCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	ctx = operationCtx
+
+	// An obfuscated config never reaches wg-quick: the kernel module has no
+	// concept of the AmneziaWG parameters, and writing them to a wg-quick
+	// file would only fail at up time. Route it to the userspace data plane.
+	if awgObfuscated(parseWgQuick(wgQuickConfig)) {
+		return m.upObfuscated(ctx, wgQuickConfig)
+	}
 
 	// Resolve before writing anything: a missing tool must not leave a
 	// privileged config behind.
@@ -236,6 +268,13 @@ func (m *Manager) readDeviceStatus(ctx context.Context) (*protocol.Status, error
 	if err := ctx.Err(); err != nil {
 		return nil, statusReadError(err)
 	}
+	// A live userspace tunnel's tun interface is not a kernel WireGuard
+	// device, so wgctrl cannot read it; its own device dump is the status
+	// source instead. This branch must precede the wgctrl read, which would
+	// otherwise misreport the tunnel.
+	if dev := m.liveAwgDevice(); dev != nil {
+		return m.readObfuscatedStatus(ctx, dev)
+	}
 	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
 	dev, err := m.device(m.iface)
 	if err != nil {
@@ -280,6 +319,14 @@ func statusReadError(err error) error {
 }
 
 func (m *Manager) down(ctx context.Context) error {
+	// The userspace data plane is torn down by its own path: closing the
+	// device removes the tun interface, and the underlay host routes it
+	// needed are not part of the wg-quick world at all. A live userspace
+	// tunnel still satisfies linkExists below (its tun is a netdev), so this
+	// branch must come first.
+	if m.awgLive() {
+		return m.teardownObfuscated(ctx)
+	}
 	// A normal down does not need to invoke wg-quick when the link is already
 	// absent. The resolver cleanup still runs: deleting a link does not remove
 	// a per-interface resolvconf/systemd-resolved entry.
@@ -338,6 +385,12 @@ func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
 	}
 
 	if err := m.clearResolverState(ctx); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	// The underlay host routes a previous obfuscated tunnel pinned through
+	// the physical path survive its tun death; remove them when the
+	// lingering config says the tunnel was obfuscated. A no-op otherwise.
+	if err := m.clearObfuscatedUnderlay(ctx); err != nil {
 		cleanupErrs = append(cleanupErrs, err)
 	}
 	if len(cleanupErrs) > 0 {
@@ -458,6 +511,35 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 func linkExists(name string) bool {
 	_, err := net.InterfaceByName(name)
 	return err == nil
+}
+
+// runCommandInput is [runCommand] with a stdin payload (resolvconf -a reads
+// its nameserver list from stdin). The same process-group and wait-bounds
+// discipline applies.
+func runCommandInput(ctx context.Context, input string, name string, args ...string) ([]byte, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(commandCtx, name, args...)
+	cmd.Stdin = strings.NewReader(input)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = commandWaitDelay
+	cmd.Cancel = func() error { return terminateProcessGroup(cmd) }
+
+	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		_ = terminateProcessGroup(cmd)
+	}
+	if err != nil {
+		if commandCtx.Err() != nil {
+			err = commandCtx.Err()
+		}
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+		return out, err
+	}
+	return out, nil
 }
 
 func queryDevice(name string) (*wgtypes.Device, error) {

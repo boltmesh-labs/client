@@ -81,6 +81,24 @@ type uapiDirective struct {
 	value   string
 }
 
+// awgDirectiveNames are the AmneziaWG obfuscation directives as they appear
+// after [parseWgQuick] lower-cases them. They mirror the device-level UAPI
+// keys one-for-one (jc, jmin, jmax, s1–s4, h1–h4); the values ride the config
+// text and the UAPI body unchanged.
+var awgDirectiveNames = map[string]bool{
+	"jc":   true,
+	"jmin": true,
+	"jmax": true,
+	"s1":   true,
+	"s2":   true,
+	"s3":   true,
+	"s4":   true,
+	"h1":   true,
+	"h2":   true,
+	"h3":   true,
+	"h4":   true,
+}
+
 // parseWgQuick splits validated wg-quick text into ordered directives. The
 // caller must have run config.Validate first, so hooks and unknown directives
 // are already rejected; this only needs the structure.
@@ -109,7 +127,8 @@ func parseWgQuick(text string) []uapiDirective {
 	return out
 }
 
-// ConfigToUAPI renders a validated wg-quick config as a UAPI `set=1` body.
+// ConfigToUAPI renders a validated wg-quick config as a UAPI `set=1` body for
+// a stock WireGuard device.
 //
 // Two directives carry meaning on Linux that the device has no concept of,
 // and are deliberately dropped rather than approximated:
@@ -123,7 +142,25 @@ func parseWgQuick(text string) []uapiDirective {
 // Passing them as unknown keys would make the device reject the whole request,
 // so dropping them here is what lets the same client config drive every
 // backend.
+//
+// A config carrying AmneziaWG obfuscation directives is rejected instead of
+// silently stripped: a stock WireGuard device would come up unobfuscated while
+// the obfuscated peer never handshakes — a silent misconfiguration is worse
+// than an error. Such configs must use [ConfigToUAPIWithObfuscation].
 func ConfigToUAPI(text string) ([]byte, error) {
+	return configToUAPI(text, false)
+}
+
+// ConfigToUAPIWithObfuscation renders a validated wg-quick config, including
+// the AmneziaWG obfuscation directives, as a UAPI `set=1` body for the
+// in-process AmneziaWG device. The UAPI key names and value syntaxes are
+// identical to the wg-quick directive names (jc=…, h1=115-120), so the values
+// pass through unchanged; [config.Validate] has already checked the set.
+func ConfigToUAPIWithObfuscation(text string) ([]byte, error) {
+	return configToUAPI(text, true)
+}
+
+func configToUAPI(text string, obfuscation bool) ([]byte, error) {
 	directives := parseWgQuick(text)
 	request := &uapiKeyValue{}
 
@@ -208,6 +245,20 @@ func ConfigToUAPI(text string) ([]byte, error) {
 					return nil, fmt.Errorf("invalid ListenPort %q", d.value)
 				}
 				request.add("listen_port", strconv.Itoa(port))
+			default:
+				// The AmneziaWG obfuscation directives ride the wg-quick
+				// text unchanged; only the obfuscation-aware translation
+				// forwards them, and a stock device must never receive a
+				// silently stripped config.
+				if awgDirectiveNames[d.key] {
+					if !obfuscation {
+						return nil, fmt.Errorf(
+							"directive %q requires the obfuscated data plane",
+							strings.ToUpper(d.key[:1])+d.key[1:],
+						)
+					}
+					request.add(d.key, d.value)
+				}
 			}
 			// address/dns/fwmark/mtu/table are Linux-shaped and skipped.
 		case "peer":
@@ -310,13 +361,19 @@ func normalizeEndpoint(endpoint string) (string, error) {
 
 // ParseUAPIPeers projects a `GET=1` response into the cross-platform peer
 // list. A handshake timestamp of zero (never completed) stays zero, so
-// [applyPeers] reports "unknown" rather than a fabricated time.
+// [applyPeers] reports "unknown" rather than a fabricated time. Public keys
+// are re-encoded from the dump's hex into the standard base64 wire form
+// (see [publicKeyFromHex]).
 func ParseUAPIPeers(data []byte) ([]peer, error) {
 	var device uapiDevice
 	if err := json.Unmarshal(data, &device); err != nil {
 		return nil, fmt.Errorf("decode UAPI device state: %w", err)
 	}
-	peers := make([]peer, 0, len(device.Peers))
+	type entry struct {
+		hexKey string
+		peer   peer
+	}
+	entries := make([]entry, 0, len(device.Peers))
 	for _, p := range device.Peers {
 		key, err := hexKey(p.PublicKey)
 		if err != nil {
@@ -325,18 +382,27 @@ func ParseUAPIPeers(data []byte) ([]peer, error) {
 			// single odd entry into an unknown tunnel.
 			continue
 		}
-		peers = append(peers, peer{
-			publicKey:     key,
+		wire, err := publicKeyFromHex(key)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry{hexKey: key, peer: peer{
+			publicKey:     wire,
 			endpoint:      p.Endpoint.String(),
 			lastHandshake: uapiHandshake(p),
 			rxBytes:       p.RxBytes,
 			txBytes:       p.TxBytes,
-		})
+		}})
 	}
-	// Stable order keeps status reads reproducible for the client.
-	sort.SliceStable(peers, func(i, j int) bool {
-		return peers[i].publicKey < peers[j].publicKey
+	// Stable order (by the canonical hex key) keeps status reads
+	// reproducible for the client.
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].hexKey < entries[j].hexKey
 	})
+	peers := make([]peer, 0, len(entries))
+	for _, e := range entries {
+		peers = append(peers, e.peer)
+	}
 	return peers, nil
 }
 
@@ -347,6 +413,121 @@ func uapiHandshake(p uapiPeer) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(p.LastHandshakeTimeSec, p.LastHandshakeTimeNSec)
+}
+
+// ParseUAPIPeersText projects a `GET=1` key=value dump — the format the
+// in-process AmneziaWG device emits — into the cross-platform peer list.
+// Device-level lines (listen_port, the obfuscation parameters, …) are ignored;
+// each public_key line starts a peer block. The skip-and-continue policy
+// mirrors [ParseUAPIPeers]: one unparseable entry must not turn the whole
+// status read into an unknown tunnel.
+func ParseUAPIPeersText(data []byte) ([]peer, error) {
+	type textPeer struct {
+		hexKey        string
+		endpoint      string
+		handshakeSec  int64
+		handshakeNSec int64
+		rxBytes       int64
+		txBytes       int64
+	}
+	var (
+		peers   []textPeer
+		current *textPeer
+	)
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		switch key {
+		case "public_key":
+			k, err := hexKey(value)
+			if err != nil {
+				// A peer whose key does not parse cannot be attributed; skip
+				// its block rather than failing the whole read.
+				current = nil
+				continue
+			}
+			peers = append(peers, textPeer{hexKey: k})
+			current = &peers[len(peers)-1]
+		case "endpoint":
+			if current != nil {
+				current.endpoint = value
+			}
+		case "last_handshake_time_sec":
+			if current != nil {
+				current.handshakeSec, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "last_handshake_time_nsec":
+			if current != nil {
+				current.handshakeNSec, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "rx_bytes":
+			if current != nil {
+				current.rxBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "tx_bytes":
+			if current != nil {
+				current.txBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
+		default:
+			// preshared_key, protocol_version, allowed_ip,
+			// persistent_keepalive_interval, and every device-level line
+			// (listen_port, the obfuscation parameters, …) carry no status
+			// meaning here.
+		}
+	}
+	type entry struct {
+		hexKey string
+		peer   peer
+	}
+	entries := make([]entry, 0, len(peers))
+	for _, p := range peers {
+		wire, err := publicKeyFromHex(p.hexKey)
+		if err != nil {
+			continue
+		}
+		handshake := time.Time{}
+		if p.handshakeSec != 0 || p.handshakeNSec != 0 {
+			handshake = time.Unix(p.handshakeSec, p.handshakeNSec)
+		}
+		entries = append(entries, entry{hexKey: p.hexKey, peer: peer{
+			publicKey:     wire,
+			endpoint:      p.endpoint,
+			lastHandshake: handshake,
+			rxBytes:       p.rxBytes,
+			txBytes:       p.txBytes,
+		}})
+	}
+	// Stable order (by the canonical hex key) keeps status reads
+	// reproducible for the client.
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].hexKey < entries[j].hexKey
+	})
+	out := make([]peer, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.peer)
+	}
+	return out, nil
+}
+
+// publicKeyFromHex converts a hex-encoded key from a device dump into the
+// standard base64 wire form. Every backend reporting through
+// [protocol.Status] must use this projection: the client compares the
+// reported key against the backend's base64 `wg_public_key` (the kernel
+// path's `wgtypes.Key.String` and the Windows path's `encodeKey` agree), and
+// reporting the dump's own hex would make the same tunnel change identity
+// between data planes.
+func publicKeyFromHex(hexEncoded string) (string, error) {
+	raw, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(hexEncoded)))
+	if err != nil || len(raw) != wireguardKeyLen {
+		return "", fmt.Errorf("key is not %d hex-encoded bytes", wireguardKeyLen)
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 // FormatPeersAsUAPI renders a peer list back into a `GET=1`-shaped response.

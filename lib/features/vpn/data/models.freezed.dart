@@ -14,9 +14,638 @@ part of 'models.dart';
 T _$identity<T>(T value) => value;
 
 /// @nodoc
+mixin _$Obfuscation {
+
+ String get mode; ObfuscationParams? get params;
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$ObfuscationCopyWith<Obfuscation> get copyWith => _$ObfuscationCopyWithImpl<Obfuscation>(this as Obfuscation, _$identity);
+
+  /// Serializes this Obfuscation to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  final _this = this as Obfuscation;
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is Obfuscation&&(identical(other.mode, _this.mode) || other.mode == _this.mode)&&(identical(other.params, _this.params) || other.params == _this.params));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+  final _this = this as Obfuscation;
+  return Object.hash(runtimeType,_this.mode,_this.params);
+}
+
+@override
+String toString() {
+  final _this = this as Obfuscation;
+  return 'Obfuscation(mode: ${_this.mode}, params: ${_this.params})';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $ObfuscationCopyWith<$Res>  {
+  factory $ObfuscationCopyWith(Obfuscation value, $Res Function(Obfuscation) _then) = _$ObfuscationCopyWithImpl;
+@useResult
+$Res call({
+ String mode, ObfuscationParams? params
+});
+
+
+$ObfuscationParamsCopyWith<$Res>? get params;
+
+}
+/// @nodoc
+class _$ObfuscationCopyWithImpl<$Res>
+    implements $ObfuscationCopyWith<$Res> {
+  _$ObfuscationCopyWithImpl(this._self, this._then);
+
+  final Obfuscation _self;
+  final $Res Function(Obfuscation) _then;
+
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? mode = null,Object? params = freezed,}) {
+  return _then(Obfuscation(
+mode: null == mode ? _self.mode : mode // ignore: cast_nullable_to_non_nullable
+as String,params: freezed == params ? _self.params : params // ignore: cast_nullable_to_non_nullable
+as ObfuscationParams?,
+  ));
+}
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationParamsCopyWith<$Res>? get params {
+    if (_self.params == null) {
+    return null;
+  }
+
+  return $ObfuscationParamsCopyWith<$Res>(_self.params!, (value) {
+    return _then(_self.copyWith(params: value));
+  });
+}
+}
+
+
+/// Adds pattern-matching-related methods to [Obfuscation].
+extension ObfuscationPatterns on Obfuscation {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _Obfuscation value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _Obfuscation() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _Obfuscation value)  $default,){
+final _that = this;
+switch (_that) {
+case _Obfuscation():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _Obfuscation value)?  $default,){
+final _that = this;
+switch (_that) {
+case _Obfuscation() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String mode,  ObfuscationParams? params)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _Obfuscation() when $default != null:
+return $default(_that.mode,_that.params);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String mode,  ObfuscationParams? params)  $default,) {final _that = this;
+switch (_that) {
+case _Obfuscation():
+return $default(_that.mode,_that.params);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String mode,  ObfuscationParams? params)?  $default,) {final _that = this;
+switch (_that) {
+case _Obfuscation() when $default != null:
+return $default(_that.mode,_that.params);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _Obfuscation extends Obfuscation {
+  const _Obfuscation({this.mode = '', this.params}): super._();
+  factory _Obfuscation.fromJson(Map<String, dynamic> json) => _$ObfuscationFromJson(json);
+
+@override@JsonKey() final  String mode;
+@override final  ObfuscationParams? params;
+
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$ObfuscationCopyWith<_Obfuscation> get copyWith => __$ObfuscationCopyWithImpl<_Obfuscation>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$ObfuscationToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _Obfuscation&&(identical(other.mode, mode) || other.mode == mode)&&(identical(other.params, params) || other.params == params));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+    return Object.hash(runtimeType,mode,params);
+}
+
+@override
+String toString() {
+    return 'Obfuscation(mode: $mode, params: $params)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$ObfuscationCopyWith<$Res> implements $ObfuscationCopyWith<$Res> {
+  factory _$ObfuscationCopyWith(_Obfuscation value, $Res Function(_Obfuscation) _then) = __$ObfuscationCopyWithImpl;
+@override @useResult
+$Res call({
+ String mode, ObfuscationParams? params
+});
+
+
+@override $ObfuscationParamsCopyWith<$Res>? get params;
+
+}
+/// @nodoc
+class __$ObfuscationCopyWithImpl<$Res>
+    implements _$ObfuscationCopyWith<$Res> {
+  __$ObfuscationCopyWithImpl(this._self, this._then);
+
+  final _Obfuscation _self;
+  final $Res Function(_Obfuscation) _then;
+
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? mode = null,Object? params = freezed,}) {
+  return _then(_Obfuscation(
+mode: null == mode ? _self.mode : mode // ignore: cast_nullable_to_non_nullable
+as String,params: freezed == params ? _self.params : params // ignore: cast_nullable_to_non_nullable
+as ObfuscationParams?,
+  ));
+}
+
+/// Create a copy of Obfuscation
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationParamsCopyWith<$Res>? get params {
+    if (_self.params == null) {
+    return null;
+  }
+
+  return $ObfuscationParamsCopyWith<$Res>(_self.params!, (value) {
+    return _then(_self.copyWith(params: value));
+  });
+}
+}
+
+
+/// @nodoc
+mixin _$ObfuscationParams {
+
+@JsonKey(name: 'jc') int? get jc;@JsonKey(name: 'jmin') int? get jmin;@JsonKey(name: 'jmax') int? get jmax;@JsonKey(name: 's1') int? get s1;@JsonKey(name: 's2') int? get s2;@JsonKey(name: 's3') int? get s3;@JsonKey(name: 's4') int? get s4;@JsonKey(name: 'h1') List<int>? get h1;@JsonKey(name: 'h2') List<int>? get h2;@JsonKey(name: 'h3') List<int>? get h3;@JsonKey(name: 'h4') List<int>? get h4;
+/// Create a copy of ObfuscationParams
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$ObfuscationParamsCopyWith<ObfuscationParams> get copyWith => _$ObfuscationParamsCopyWithImpl<ObfuscationParams>(this as ObfuscationParams, _$identity);
+
+  /// Serializes this ObfuscationParams to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  final _this = this as ObfuscationParams;
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ObfuscationParams&&(identical(other.jc, _this.jc) || other.jc == _this.jc)&&(identical(other.jmin, _this.jmin) || other.jmin == _this.jmin)&&(identical(other.jmax, _this.jmax) || other.jmax == _this.jmax)&&(identical(other.s1, _this.s1) || other.s1 == _this.s1)&&(identical(other.s2, _this.s2) || other.s2 == _this.s2)&&(identical(other.s3, _this.s3) || other.s3 == _this.s3)&&(identical(other.s4, _this.s4) || other.s4 == _this.s4)&&const DeepCollectionEquality().equals(other.h1, _this.h1)&&const DeepCollectionEquality().equals(other.h2, _this.h2)&&const DeepCollectionEquality().equals(other.h3, _this.h3)&&const DeepCollectionEquality().equals(other.h4, _this.h4));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+  final _this = this as ObfuscationParams;
+  return Object.hash(runtimeType,_this.jc,_this.jmin,_this.jmax,_this.s1,_this.s2,_this.s3,_this.s4,const DeepCollectionEquality().hash(_this.h1),const DeepCollectionEquality().hash(_this.h2),const DeepCollectionEquality().hash(_this.h3),const DeepCollectionEquality().hash(_this.h4));
+}
+
+@override
+String toString() {
+  final _this = this as ObfuscationParams;
+  return 'ObfuscationParams(jc: ${_this.jc}, jmin: ${_this.jmin}, jmax: ${_this.jmax}, s1: ${_this.s1}, s2: ${_this.s2}, s3: ${_this.s3}, s4: ${_this.s4}, h1: ${_this.h1}, h2: ${_this.h2}, h3: ${_this.h3}, h4: ${_this.h4})';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $ObfuscationParamsCopyWith<$Res>  {
+  factory $ObfuscationParamsCopyWith(ObfuscationParams value, $Res Function(ObfuscationParams) _then) = _$ObfuscationParamsCopyWithImpl;
+@useResult
+$Res call({
+@JsonKey(name: 'jc') int? jc,@JsonKey(name: 'jmin') int? jmin,@JsonKey(name: 'jmax') int? jmax,@JsonKey(name: 's1') int? s1,@JsonKey(name: 's2') int? s2,@JsonKey(name: 's3') int? s3,@JsonKey(name: 's4') int? s4,@JsonKey(name: 'h1') List<int>? h1,@JsonKey(name: 'h2') List<int>? h2,@JsonKey(name: 'h3') List<int>? h3,@JsonKey(name: 'h4') List<int>? h4
+});
+
+
+
+
+}
+/// @nodoc
+class _$ObfuscationParamsCopyWithImpl<$Res>
+    implements $ObfuscationParamsCopyWith<$Res> {
+  _$ObfuscationParamsCopyWithImpl(this._self, this._then);
+
+  final ObfuscationParams _self;
+  final $Res Function(ObfuscationParams) _then;
+
+/// Create a copy of ObfuscationParams
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? jc = freezed,Object? jmin = freezed,Object? jmax = freezed,Object? s1 = freezed,Object? s2 = freezed,Object? s3 = freezed,Object? s4 = freezed,Object? h1 = freezed,Object? h2 = freezed,Object? h3 = freezed,Object? h4 = freezed,}) {
+  return _then(ObfuscationParams(
+jc: freezed == jc ? _self.jc : jc // ignore: cast_nullable_to_non_nullable
+as int?,jmin: freezed == jmin ? _self.jmin : jmin // ignore: cast_nullable_to_non_nullable
+as int?,jmax: freezed == jmax ? _self.jmax : jmax // ignore: cast_nullable_to_non_nullable
+as int?,s1: freezed == s1 ? _self.s1 : s1 // ignore: cast_nullable_to_non_nullable
+as int?,s2: freezed == s2 ? _self.s2 : s2 // ignore: cast_nullable_to_non_nullable
+as int?,s3: freezed == s3 ? _self.s3 : s3 // ignore: cast_nullable_to_non_nullable
+as int?,s4: freezed == s4 ? _self.s4 : s4 // ignore: cast_nullable_to_non_nullable
+as int?,h1: freezed == h1 ? _self.h1 : h1 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h2: freezed == h2 ? _self.h2 : h2 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h3: freezed == h3 ? _self.h3 : h3 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h4: freezed == h4 ? _self.h4 : h4 // ignore: cast_nullable_to_non_nullable
+as List<int>?,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [ObfuscationParams].
+extension ObfuscationParamsPatterns on ObfuscationParams {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _ObfuscationParams value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _ObfuscationParams() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _ObfuscationParams value)  $default,){
+final _that = this;
+switch (_that) {
+case _ObfuscationParams():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _ObfuscationParams value)?  $default,){
+final _that = this;
+switch (_that) {
+case _ObfuscationParams() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'jc')  int? jc, @JsonKey(name: 'jmin')  int? jmin, @JsonKey(name: 'jmax')  int? jmax, @JsonKey(name: 's1')  int? s1, @JsonKey(name: 's2')  int? s2, @JsonKey(name: 's3')  int? s3, @JsonKey(name: 's4')  int? s4, @JsonKey(name: 'h1')  List<int>? h1, @JsonKey(name: 'h2')  List<int>? h2, @JsonKey(name: 'h3')  List<int>? h3, @JsonKey(name: 'h4')  List<int>? h4)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _ObfuscationParams() when $default != null:
+return $default(_that.jc,_that.jmin,_that.jmax,_that.s1,_that.s2,_that.s3,_that.s4,_that.h1,_that.h2,_that.h3,_that.h4);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'jc')  int? jc, @JsonKey(name: 'jmin')  int? jmin, @JsonKey(name: 'jmax')  int? jmax, @JsonKey(name: 's1')  int? s1, @JsonKey(name: 's2')  int? s2, @JsonKey(name: 's3')  int? s3, @JsonKey(name: 's4')  int? s4, @JsonKey(name: 'h1')  List<int>? h1, @JsonKey(name: 'h2')  List<int>? h2, @JsonKey(name: 'h3')  List<int>? h3, @JsonKey(name: 'h4')  List<int>? h4)  $default,) {final _that = this;
+switch (_that) {
+case _ObfuscationParams():
+return $default(_that.jc,_that.jmin,_that.jmax,_that.s1,_that.s2,_that.s3,_that.s4,_that.h1,_that.h2,_that.h3,_that.h4);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'jc')  int? jc, @JsonKey(name: 'jmin')  int? jmin, @JsonKey(name: 'jmax')  int? jmax, @JsonKey(name: 's1')  int? s1, @JsonKey(name: 's2')  int? s2, @JsonKey(name: 's3')  int? s3, @JsonKey(name: 's4')  int? s4, @JsonKey(name: 'h1')  List<int>? h1, @JsonKey(name: 'h2')  List<int>? h2, @JsonKey(name: 'h3')  List<int>? h3, @JsonKey(name: 'h4')  List<int>? h4)?  $default,) {final _that = this;
+switch (_that) {
+case _ObfuscationParams() when $default != null:
+return $default(_that.jc,_that.jmin,_that.jmax,_that.s1,_that.s2,_that.s3,_that.s4,_that.h1,_that.h2,_that.h3,_that.h4);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _ObfuscationParams extends ObfuscationParams {
+  const _ObfuscationParams({@JsonKey(name: 'jc') this.jc, @JsonKey(name: 'jmin') this.jmin, @JsonKey(name: 'jmax') this.jmax, @JsonKey(name: 's1') this.s1, @JsonKey(name: 's2') this.s2, @JsonKey(name: 's3') this.s3, @JsonKey(name: 's4') this.s4, @JsonKey(name: 'h1')  List<int>? h1, @JsonKey(name: 'h2')  List<int>? h2, @JsonKey(name: 'h3')  List<int>? h3, @JsonKey(name: 'h4')  List<int>? h4}): _h1 = h1,_h2 = h2,_h3 = h3,_h4 = h4,super._();
+  factory _ObfuscationParams.fromJson(Map<String, dynamic> json) => _$ObfuscationParamsFromJson(json);
+
+@override@JsonKey(name: 'jc') final  int? jc;
+@override@JsonKey(name: 'jmin') final  int? jmin;
+@override@JsonKey(name: 'jmax') final  int? jmax;
+@override@JsonKey(name: 's1') final  int? s1;
+@override@JsonKey(name: 's2') final  int? s2;
+@override@JsonKey(name: 's3') final  int? s3;
+@override@JsonKey(name: 's4') final  int? s4;
+ final  List<int>? _h1;
+@override@JsonKey(name: 'h1') List<int>? get h1 {
+  final value = _h1;
+  if (value == null) return null;
+  if (_h1 is EqualUnmodifiableListView) return _h1;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(value);
+}
+
+ final  List<int>? _h2;
+@override@JsonKey(name: 'h2') List<int>? get h2 {
+  final value = _h2;
+  if (value == null) return null;
+  if (_h2 is EqualUnmodifiableListView) return _h2;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(value);
+}
+
+ final  List<int>? _h3;
+@override@JsonKey(name: 'h3') List<int>? get h3 {
+  final value = _h3;
+  if (value == null) return null;
+  if (_h3 is EqualUnmodifiableListView) return _h3;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(value);
+}
+
+ final  List<int>? _h4;
+@override@JsonKey(name: 'h4') List<int>? get h4 {
+  final value = _h4;
+  if (value == null) return null;
+  if (_h4 is EqualUnmodifiableListView) return _h4;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(value);
+}
+
+
+/// Create a copy of ObfuscationParams
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$ObfuscationParamsCopyWith<_ObfuscationParams> get copyWith => __$ObfuscationParamsCopyWithImpl<_ObfuscationParams>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$ObfuscationParamsToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _ObfuscationParams&&(identical(other.jc, jc) || other.jc == jc)&&(identical(other.jmin, jmin) || other.jmin == jmin)&&(identical(other.jmax, jmax) || other.jmax == jmax)&&(identical(other.s1, s1) || other.s1 == s1)&&(identical(other.s2, s2) || other.s2 == s2)&&(identical(other.s3, s3) || other.s3 == s3)&&(identical(other.s4, s4) || other.s4 == s4)&&const DeepCollectionEquality().equals(other.h1, _h1)&&const DeepCollectionEquality().equals(other.h2, _h2)&&const DeepCollectionEquality().equals(other.h3, _h3)&&const DeepCollectionEquality().equals(other.h4, _h4));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+    return Object.hash(runtimeType,jc,jmin,jmax,s1,s2,s3,s4,const DeepCollectionEquality().hash(_h1),const DeepCollectionEquality().hash(_h2),const DeepCollectionEquality().hash(_h3),const DeepCollectionEquality().hash(_h4));
+}
+
+@override
+String toString() {
+    return 'ObfuscationParams(jc: $jc, jmin: $jmin, jmax: $jmax, s1: $s1, s2: $s2, s3: $s3, s4: $s4, h1: $h1, h2: $h2, h3: $h3, h4: $h4)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$ObfuscationParamsCopyWith<$Res> implements $ObfuscationParamsCopyWith<$Res> {
+  factory _$ObfuscationParamsCopyWith(_ObfuscationParams value, $Res Function(_ObfuscationParams) _then) = __$ObfuscationParamsCopyWithImpl;
+@override @useResult
+$Res call({
+@JsonKey(name: 'jc') int? jc,@JsonKey(name: 'jmin') int? jmin,@JsonKey(name: 'jmax') int? jmax,@JsonKey(name: 's1') int? s1,@JsonKey(name: 's2') int? s2,@JsonKey(name: 's3') int? s3,@JsonKey(name: 's4') int? s4,@JsonKey(name: 'h1') List<int>? h1,@JsonKey(name: 'h2') List<int>? h2,@JsonKey(name: 'h3') List<int>? h3,@JsonKey(name: 'h4') List<int>? h4
+});
+
+
+
+
+}
+/// @nodoc
+class __$ObfuscationParamsCopyWithImpl<$Res>
+    implements _$ObfuscationParamsCopyWith<$Res> {
+  __$ObfuscationParamsCopyWithImpl(this._self, this._then);
+
+  final _ObfuscationParams _self;
+  final $Res Function(_ObfuscationParams) _then;
+
+/// Create a copy of ObfuscationParams
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? jc = freezed,Object? jmin = freezed,Object? jmax = freezed,Object? s1 = freezed,Object? s2 = freezed,Object? s3 = freezed,Object? s4 = freezed,Object? h1 = freezed,Object? h2 = freezed,Object? h3 = freezed,Object? h4 = freezed,}) {
+  return _then(_ObfuscationParams(
+jc: freezed == jc ? _self.jc : jc // ignore: cast_nullable_to_non_nullable
+as int?,jmin: freezed == jmin ? _self.jmin : jmin // ignore: cast_nullable_to_non_nullable
+as int?,jmax: freezed == jmax ? _self.jmax : jmax // ignore: cast_nullable_to_non_nullable
+as int?,s1: freezed == s1 ? _self.s1 : s1 // ignore: cast_nullable_to_non_nullable
+as int?,s2: freezed == s2 ? _self.s2 : s2 // ignore: cast_nullable_to_non_nullable
+as int?,s3: freezed == s3 ? _self.s3 : s3 // ignore: cast_nullable_to_non_nullable
+as int?,s4: freezed == s4 ? _self.s4 : s4 // ignore: cast_nullable_to_non_nullable
+as int?,h1: freezed == h1 ? _self._h1 : h1 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h2: freezed == h2 ? _self._h2 : h2 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h3: freezed == h3 ? _self._h3 : h3 // ignore: cast_nullable_to_non_nullable
+as List<int>?,h4: freezed == h4 ? _self._h4 : h4 // ignore: cast_nullable_to_non_nullable
+as List<int>?,
+  ));
+}
+
+
+}
+
+
+/// @nodoc
 mixin _$DialParams {
 
-@JsonKey(name: 'id') String get deviceId;@JsonKey(name: 'assigned_ip') String get assignedIp;@JsonKey(name: 'server_id') String get serverId;@JsonKey(name: 'server_name') String get serverName; String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String get wgPublicKey;@JsonKey(name: 'client_public_key') String? get clientPublicKey;
+@JsonKey(name: 'id') String get deviceId;@JsonKey(name: 'assigned_ip') String get assignedIp;@JsonKey(name: 'server_id') String get serverId;@JsonKey(name: 'server_name') String get serverName; String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String get wgPublicKey;@JsonKey(name: 'client_public_key') String? get clientPublicKey;@JsonKey(name: 'obfuscation') Obfuscation? get obfuscation;
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -30,20 +659,20 @@ $DialParamsCopyWith<DialParams> get copyWith => _$DialParamsCopyWithImpl<DialPar
 @override
 bool operator ==(Object other) {
   final _this = this as DialParams;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is DialParams&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.assignedIp, _this.assignedIp) || other.assignedIp == _this.assignedIp)&&(identical(other.serverId, _this.serverId) || other.serverId == _this.serverId)&&(identical(other.serverName, _this.serverName) || other.serverName == _this.serverName)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.clientPublicKey, _this.clientPublicKey) || other.clientPublicKey == _this.clientPublicKey));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DialParams&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.assignedIp, _this.assignedIp) || other.assignedIp == _this.assignedIp)&&(identical(other.serverId, _this.serverId) || other.serverId == _this.serverId)&&(identical(other.serverName, _this.serverName) || other.serverName == _this.serverName)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.clientPublicKey, _this.clientPublicKey) || other.clientPublicKey == _this.clientPublicKey)&&(identical(other.obfuscation, _this.obfuscation) || other.obfuscation == _this.obfuscation));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as DialParams;
-  return Object.hash(runtimeType,_this.deviceId,_this.assignedIp,_this.serverId,_this.serverName,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.clientPublicKey);
+  return Object.hash(runtimeType,_this.deviceId,_this.assignedIp,_this.serverId,_this.serverName,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.clientPublicKey,_this.obfuscation);
 }
 
 @override
 String toString() {
   final _this = this as DialParams;
-  return 'DialParams(deviceId: ${_this.deviceId}, assignedIp: ${_this.assignedIp}, serverId: ${_this.serverId}, serverName: ${_this.serverName}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, clientPublicKey: ${_this.clientPublicKey})';
+  return 'DialParams(deviceId: ${_this.deviceId}, assignedIp: ${_this.assignedIp}, serverId: ${_this.serverId}, serverName: ${_this.serverName}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, clientPublicKey: ${_this.clientPublicKey}, obfuscation: ${_this.obfuscation})';
 }
 
 
@@ -54,11 +683,11 @@ abstract mixin class $DialParamsCopyWith<$Res>  {
   factory $DialParamsCopyWith(DialParams value, $Res Function(DialParams) _then) = _$DialParamsCopyWithImpl;
 @useResult
 $Res call({
-@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey
+@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
 });
 
 
-
+$ObfuscationCopyWith<$Res>? get obfuscation;
 
 }
 /// @nodoc
@@ -71,7 +700,7 @@ class _$DialParamsCopyWithImpl<$Res>
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,}) {
   return _then(DialParams(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,assignedIp: null == assignedIp ? _self.assignedIp : assignedIp // ignore: cast_nullable_to_non_nullable
@@ -82,10 +711,23 @@ as String,wgPort: null == wgPort ? _self.wgPort : wgPort // ignore: cast_nullabl
 as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_non_nullable
 as String,wgPublicKey: null == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String,clientPublicKey: freezed == clientPublicKey ? _self.clientPublicKey : clientPublicKey // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
+as Obfuscation?,
   ));
 }
+/// Create a copy of DialParams
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationCopyWith<$Res>? get obfuscation {
+    if (_self.obfuscation == null) {
+    return null;
+  }
 
+  return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
+    return _then(_self.copyWith(obfuscation: value));
+  });
+}
 }
 
 
@@ -167,10 +809,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _DialParams() when $default != null:
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
   return orElse();
 
 }
@@ -188,10 +830,10 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)  $default,) {final _that = this;
 switch (_that) {
 case _DialParams():
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -208,10 +850,10 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,) {final _that = this;
 switch (_that) {
 case _DialParams() when $default != null:
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
   return null;
 
 }
@@ -223,7 +865,7 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 @JsonSerializable()
 
 class _DialParams implements DialParams {
-  const _DialParams({@JsonKey(name: 'id') required this.deviceId, @JsonKey(name: 'assigned_ip') required this.assignedIp, @JsonKey(name: 'server_id') required this.serverId, @JsonKey(name: 'server_name') this.serverName = '', required this.endpoint, @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') required this.wgDns, @JsonKey(name: 'wg_public_key') required this.wgPublicKey, @JsonKey(name: 'client_public_key') this.clientPublicKey});
+  const _DialParams({@JsonKey(name: 'id') required this.deviceId, @JsonKey(name: 'assigned_ip') required this.assignedIp, @JsonKey(name: 'server_id') required this.serverId, @JsonKey(name: 'server_name') this.serverName = '', required this.endpoint, @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') required this.wgDns, @JsonKey(name: 'wg_public_key') required this.wgPublicKey, @JsonKey(name: 'client_public_key') this.clientPublicKey, @JsonKey(name: 'obfuscation') this.obfuscation});
   factory _DialParams.fromJson(Map<String, dynamic> json) => _$DialParamsFromJson(json);
 
 @override@JsonKey(name: 'id') final  String deviceId;
@@ -235,6 +877,7 @@ class _DialParams implements DialParams {
 @override@JsonKey(name: 'wg_dns') final  String wgDns;
 @override@JsonKey(name: 'wg_public_key') final  String wgPublicKey;
 @override@JsonKey(name: 'client_public_key') final  String? clientPublicKey;
+@override@JsonKey(name: 'obfuscation') final  Obfuscation? obfuscation;
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
@@ -249,18 +892,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DialParams&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.assignedIp, assignedIp) || other.assignedIp == assignedIp)&&(identical(other.serverId, serverId) || other.serverId == serverId)&&(identical(other.serverName, serverName) || other.serverName == serverName)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.clientPublicKey, clientPublicKey) || other.clientPublicKey == clientPublicKey));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DialParams&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.assignedIp, assignedIp) || other.assignedIp == assignedIp)&&(identical(other.serverId, serverId) || other.serverId == serverId)&&(identical(other.serverName, serverName) || other.serverName == serverName)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.clientPublicKey, clientPublicKey) || other.clientPublicKey == clientPublicKey)&&(identical(other.obfuscation, obfuscation) || other.obfuscation == obfuscation));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,deviceId,assignedIp,serverId,serverName,endpoint,wgPort,wgDns,wgPublicKey,clientPublicKey);
+    return Object.hash(runtimeType,deviceId,assignedIp,serverId,serverName,endpoint,wgPort,wgDns,wgPublicKey,clientPublicKey,obfuscation);
 }
 
 @override
 String toString() {
-    return 'DialParams(deviceId: $deviceId, assignedIp: $assignedIp, serverId: $serverId, serverName: $serverName, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, clientPublicKey: $clientPublicKey)';
+    return 'DialParams(deviceId: $deviceId, assignedIp: $assignedIp, serverId: $serverId, serverName: $serverName, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, clientPublicKey: $clientPublicKey, obfuscation: $obfuscation)';
 }
 
 
@@ -271,11 +914,11 @@ abstract mixin class _$DialParamsCopyWith<$Res> implements $DialParamsCopyWith<$
   factory _$DialParamsCopyWith(_DialParams value, $Res Function(_DialParams) _then) = __$DialParamsCopyWithImpl;
 @override @useResult
 $Res call({
-@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey
+@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
 });
 
 
-
+@override $ObfuscationCopyWith<$Res>? get obfuscation;
 
 }
 /// @nodoc
@@ -288,7 +931,7 @@ class __$DialParamsCopyWithImpl<$Res>
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,}) {
   return _then(_DialParams(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,assignedIp: null == assignedIp ? _self.assignedIp : assignedIp // ignore: cast_nullable_to_non_nullable
@@ -299,18 +942,31 @@ as String,wgPort: null == wgPort ? _self.wgPort : wgPort // ignore: cast_nullabl
 as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_non_nullable
 as String,wgPublicKey: null == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String,clientPublicKey: freezed == clientPublicKey ? _self.clientPublicKey : clientPublicKey // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
+as Obfuscation?,
   ));
 }
 
+/// Create a copy of DialParams
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationCopyWith<$Res>? get obfuscation {
+    if (_self.obfuscation == null) {
+    return null;
+  }
 
+  return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
+    return _then(_self.copyWith(obfuscation: value));
+  });
+}
 }
 
 
 /// @nodoc
 mixin _$DiscoveryServer {
 
- String get id; String get name;@JsonKey(readValue: _readDialHost) String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String? get wgPublicKey;@JsonKey(name: 'active_peers') int get activePeers;
+ String get id; String get name;@JsonKey(readValue: _readDialHost) String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String? get wgPublicKey;@JsonKey(name: 'active_peers') int get activePeers;@JsonKey(name: 'obfuscation') Obfuscation? get obfuscation;
 /// Create a copy of DiscoveryServer
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -324,20 +980,20 @@ $DiscoveryServerCopyWith<DiscoveryServer> get copyWith => _$DiscoveryServerCopyW
 @override
 bool operator ==(Object other) {
   final _this = this as DiscoveryServer;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is DiscoveryServer&&(identical(other.id, _this.id) || other.id == _this.id)&&(identical(other.name, _this.name) || other.name == _this.name)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.activePeers, _this.activePeers) || other.activePeers == _this.activePeers));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DiscoveryServer&&(identical(other.id, _this.id) || other.id == _this.id)&&(identical(other.name, _this.name) || other.name == _this.name)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.activePeers, _this.activePeers) || other.activePeers == _this.activePeers)&&(identical(other.obfuscation, _this.obfuscation) || other.obfuscation == _this.obfuscation));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as DiscoveryServer;
-  return Object.hash(runtimeType,_this.id,_this.name,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.activePeers);
+  return Object.hash(runtimeType,_this.id,_this.name,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.activePeers,_this.obfuscation);
 }
 
 @override
 String toString() {
   final _this = this as DiscoveryServer;
-  return 'DiscoveryServer(id: ${_this.id}, name: ${_this.name}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, activePeers: ${_this.activePeers})';
+  return 'DiscoveryServer(id: ${_this.id}, name: ${_this.name}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, activePeers: ${_this.activePeers}, obfuscation: ${_this.obfuscation})';
 }
 
 
@@ -348,11 +1004,11 @@ abstract mixin class $DiscoveryServerCopyWith<$Res>  {
   factory $DiscoveryServerCopyWith(DiscoveryServer value, $Res Function(DiscoveryServer) _then) = _$DiscoveryServerCopyWithImpl;
 @useResult
 $Res call({
- String id, String name,@JsonKey(readValue: _readDialHost) String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String? wgPublicKey,@JsonKey(name: 'active_peers') int activePeers
+ String id, String name,@JsonKey(readValue: _readDialHost) String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String? wgPublicKey,@JsonKey(name: 'active_peers') int activePeers,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
 });
 
 
-
+$ObfuscationCopyWith<$Res>? get obfuscation;
 
 }
 /// @nodoc
@@ -365,7 +1021,7 @@ class _$DiscoveryServerCopyWithImpl<$Res>
 
 /// Create a copy of DiscoveryServer
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = freezed,Object? activePeers = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? name = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = freezed,Object? activePeers = null,Object? obfuscation = freezed,}) {
   return _then(DiscoveryServer(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
@@ -374,10 +1030,23 @@ as String,wgPort: null == wgPort ? _self.wgPort : wgPort // ignore: cast_nullabl
 as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_non_nullable
 as String,wgPublicKey: freezed == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String?,activePeers: null == activePeers ? _self.activePeers : activePeers // ignore: cast_nullable_to_non_nullable
-as int,
+as int,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
+as Obfuscation?,
   ));
 }
+/// Create a copy of DiscoveryServer
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationCopyWith<$Res>? get obfuscation {
+    if (_self.obfuscation == null) {
+    return null;
+  }
 
+  return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
+    return _then(_self.copyWith(obfuscation: value));
+  });
+}
 }
 
 
@@ -459,10 +1128,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _DiscoveryServer() when $default != null:
-return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers);case _:
+return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers,_that.obfuscation);case _:
   return orElse();
 
 }
@@ -480,10 +1149,10 @@ return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_tha
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)  $default,) {final _that = this;
 switch (_that) {
 case _DiscoveryServer():
-return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers);case _:
+return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers,_that.obfuscation);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -500,10 +1169,10 @@ return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_tha
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( String id,  String name, @JsonKey(readValue: _readDialHost)  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String? wgPublicKey, @JsonKey(name: 'active_peers')  int activePeers, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,) {final _that = this;
 switch (_that) {
 case _DiscoveryServer() when $default != null:
-return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers);case _:
+return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.activePeers,_that.obfuscation);case _:
   return null;
 
 }
@@ -515,7 +1184,7 @@ return $default(_that.id,_that.name,_that.endpoint,_that.wgPort,_that.wgDns,_tha
 @JsonSerializable()
 
 class _DiscoveryServer extends DiscoveryServer {
-  const _DiscoveryServer({required this.id, this.name = '', @JsonKey(readValue: _readDialHost) this.endpoint = '', @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') this.wgDns = '', @JsonKey(name: 'wg_public_key') this.wgPublicKey, @JsonKey(name: 'active_peers') this.activePeers = 0}): super._();
+  const _DiscoveryServer({required this.id, this.name = '', @JsonKey(readValue: _readDialHost) this.endpoint = '', @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') this.wgDns = '', @JsonKey(name: 'wg_public_key') this.wgPublicKey, @JsonKey(name: 'active_peers') this.activePeers = 0, @JsonKey(name: 'obfuscation') this.obfuscation}): super._();
   factory _DiscoveryServer.fromJson(Map<String, dynamic> json) => _$DiscoveryServerFromJson(json);
 
 @override final  String id;
@@ -525,6 +1194,7 @@ class _DiscoveryServer extends DiscoveryServer {
 @override@JsonKey(name: 'wg_dns') final  String wgDns;
 @override@JsonKey(name: 'wg_public_key') final  String? wgPublicKey;
 @override@JsonKey(name: 'active_peers') final  int activePeers;
+@override@JsonKey(name: 'obfuscation') final  Obfuscation? obfuscation;
 
 /// Create a copy of DiscoveryServer
 /// with the given fields replaced by the non-null parameter values.
@@ -539,18 +1209,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DiscoveryServer&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.activePeers, activePeers) || other.activePeers == activePeers));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DiscoveryServer&&(identical(other.id, id) || other.id == id)&&(identical(other.name, name) || other.name == name)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.activePeers, activePeers) || other.activePeers == activePeers)&&(identical(other.obfuscation, obfuscation) || other.obfuscation == obfuscation));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,id,name,endpoint,wgPort,wgDns,wgPublicKey,activePeers);
+    return Object.hash(runtimeType,id,name,endpoint,wgPort,wgDns,wgPublicKey,activePeers,obfuscation);
 }
 
 @override
 String toString() {
-    return 'DiscoveryServer(id: $id, name: $name, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, activePeers: $activePeers)';
+    return 'DiscoveryServer(id: $id, name: $name, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, activePeers: $activePeers, obfuscation: $obfuscation)';
 }
 
 
@@ -561,11 +1231,11 @@ abstract mixin class _$DiscoveryServerCopyWith<$Res> implements $DiscoveryServer
   factory _$DiscoveryServerCopyWith(_DiscoveryServer value, $Res Function(_DiscoveryServer) _then) = __$DiscoveryServerCopyWithImpl;
 @override @useResult
 $Res call({
- String id, String name,@JsonKey(readValue: _readDialHost) String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String? wgPublicKey,@JsonKey(name: 'active_peers') int activePeers
+ String id, String name,@JsonKey(readValue: _readDialHost) String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String? wgPublicKey,@JsonKey(name: 'active_peers') int activePeers,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
 });
 
 
-
+@override $ObfuscationCopyWith<$Res>? get obfuscation;
 
 }
 /// @nodoc
@@ -578,7 +1248,7 @@ class __$DiscoveryServerCopyWithImpl<$Res>
 
 /// Create a copy of DiscoveryServer
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = freezed,Object? activePeers = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? name = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = freezed,Object? activePeers = null,Object? obfuscation = freezed,}) {
   return _then(_DiscoveryServer(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
@@ -587,11 +1257,24 @@ as String,wgPort: null == wgPort ? _self.wgPort : wgPort // ignore: cast_nullabl
 as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_non_nullable
 as String,wgPublicKey: freezed == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String?,activePeers: null == activePeers ? _self.activePeers : activePeers // ignore: cast_nullable_to_non_nullable
-as int,
+as int,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
+as Obfuscation?,
   ));
 }
 
+/// Create a copy of DiscoveryServer
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$ObfuscationCopyWith<$Res>? get obfuscation {
+    if (_self.obfuscation == null) {
+    return null;
+  }
 
+  return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
+    return _then(_self.copyWith(obfuscation: value));
+  });
+}
 }
 
 

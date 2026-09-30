@@ -6,6 +6,47 @@ part of 'models.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+_Obfuscation _$ObfuscationFromJson(Map<String, dynamic> json) => _Obfuscation(
+  mode: json['mode'] as String? ?? '',
+  params: json['params'] == null
+      ? null
+      : ObfuscationParams.fromJson(json['params'] as Map<String, dynamic>),
+);
+
+Map<String, dynamic> _$ObfuscationToJson(_Obfuscation instance) =>
+    <String, dynamic>{'mode': instance.mode, 'params': instance.params};
+
+_ObfuscationParams _$ObfuscationParamsFromJson(
+  Map<String, dynamic> json,
+) => _ObfuscationParams(
+  jc: (json['jc'] as num?)?.toInt(),
+  jmin: (json['jmin'] as num?)?.toInt(),
+  jmax: (json['jmax'] as num?)?.toInt(),
+  s1: (json['s1'] as num?)?.toInt(),
+  s2: (json['s2'] as num?)?.toInt(),
+  s3: (json['s3'] as num?)?.toInt(),
+  s4: (json['s4'] as num?)?.toInt(),
+  h1: (json['h1'] as List<dynamic>?)?.map((e) => (e as num).toInt()).toList(),
+  h2: (json['h2'] as List<dynamic>?)?.map((e) => (e as num).toInt()).toList(),
+  h3: (json['h3'] as List<dynamic>?)?.map((e) => (e as num).toInt()).toList(),
+  h4: (json['h4'] as List<dynamic>?)?.map((e) => (e as num).toInt()).toList(),
+);
+
+Map<String, dynamic> _$ObfuscationParamsToJson(_ObfuscationParams instance) =>
+    <String, dynamic>{
+      'jc': instance.jc,
+      'jmin': instance.jmin,
+      'jmax': instance.jmax,
+      's1': instance.s1,
+      's2': instance.s2,
+      's3': instance.s3,
+      's4': instance.s4,
+      'h1': instance.h1,
+      'h2': instance.h2,
+      'h3': instance.h3,
+      'h4': instance.h4,
+    };
+
 _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   deviceId: json['id'] as String,
   assignedIp: json['assigned_ip'] as String,
@@ -16,6 +57,9 @@ _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   wgDns: json['wg_dns'] as String,
   wgPublicKey: json['wg_public_key'] as String,
   clientPublicKey: json['client_public_key'] as String?,
+  obfuscation: json['obfuscation'] == null
+      ? null
+      : Obfuscation.fromJson(json['obfuscation'] as Map<String, dynamic>),
 );
 
 Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
@@ -29,6 +73,7 @@ Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
       'wg_dns': instance.wgDns,
       'wg_public_key': instance.wgPublicKey,
       'client_public_key': instance.clientPublicKey,
+      'obfuscation': instance.obfuscation,
     };
 
 _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>
@@ -40,6 +85,9 @@ _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>
       wgDns: json['wg_dns'] as String? ?? '',
       wgPublicKey: json['wg_public_key'] as String?,
       activePeers: (json['active_peers'] as num?)?.toInt() ?? 0,
+      obfuscation: json['obfuscation'] == null
+          ? null
+          : Obfuscation.fromJson(json['obfuscation'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$DiscoveryServerToJson(_DiscoveryServer instance) =>
@@ -51,6 +99,7 @@ Map<String, dynamic> _$DiscoveryServerToJson(_DiscoveryServer instance) =>
       'wg_dns': instance.wgDns,
       'wg_public_key': instance.wgPublicKey,
       'active_peers': instance.activePeers,
+      'obfuscation': instance.obfuscation,
     };
 
 _ServerStatus _$ServerStatusFromJson(Map<String, dynamic> json) =>

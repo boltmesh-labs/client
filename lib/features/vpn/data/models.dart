@@ -21,6 +21,92 @@ DateTime? _parseExpiry(Object? value) =>
 
 String? _serverHealthToWire(ServerHealth? value) => value?.wire;
 
+/// Per-region tunnel obfuscation descriptor (backend `obfuscation` object).
+///
+/// Null or `mode: ''` is the native WireGuard data plane. `awg` selects the
+/// obfuscated data plane with a complete parameter set — both tunnel ends
+/// must run identical parameters, so a descriptor with a mode but no params
+/// is a misconfiguration the client treats as native rather than building a
+/// half-obfuscated tunnel that can never handshake.
+@freezed
+abstract class Obfuscation with _$Obfuscation {
+  const Obfuscation._();
+
+  const factory Obfuscation({
+    @Default('') String mode,
+    ObfuscationParams? params,
+  }) = _Obfuscation;
+
+  factory Obfuscation.fromJson(Map<String, Object?> json) =>
+      _$ObfuscationFromJson(json);
+
+  /// True when this descriptor selects the obfuscated (AmneziaWG) data
+  /// plane *and* carries the complete parameter set to build a conf with.
+  bool get isAwg => mode == 'awg' && params != null && params!.isComplete;
+}
+
+/// AmneziaWG obfuscation parameters (`params` object). Mirrors the backend
+/// contract: counts/sizes as numbers, magic-header ranges as `[lo, hi]`
+/// pairs. Fields decode leniently (nullable) so a partial descriptor from a
+/// buggy backend never breaks the whole dial payload — [isComplete] is the
+/// gate, and both tunnel ends must run identical values, so an incomplete
+/// set is never emitted into a conf.
+@freezed
+abstract class ObfuscationParams with _$ObfuscationParams {
+  const ObfuscationParams._();
+
+  const factory ObfuscationParams({
+    @JsonKey(name: 'jc') int? jc,
+    @JsonKey(name: 'jmin') int? jmin,
+    @JsonKey(name: 'jmax') int? jmax,
+    @JsonKey(name: 's1') int? s1,
+    @JsonKey(name: 's2') int? s2,
+    @JsonKey(name: 's3') int? s3,
+    @JsonKey(name: 's4') int? s4,
+    @JsonKey(name: 'h1') List<int>? h1,
+    @JsonKey(name: 'h2') List<int>? h2,
+    @JsonKey(name: 'h3') List<int>? h3,
+    @JsonKey(name: 'h4') List<int>? h4,
+  }) = _ObfuscationParams;
+
+  factory ObfuscationParams.fromJson(Map<String, Object?> json) =>
+      _$ObfuscationParamsFromJson(json);
+
+  /// True when every parameter is present and well-formed: every header pair
+  /// is a two-element `[lo, hi]` range with `lo <= hi`. An incomplete set is
+  /// never emitted into a conf (see [Obfuscation.isAwg]).
+  bool get isComplete =>
+      jc != null &&
+      jmin != null &&
+      jmax != null &&
+      s1 != null &&
+      s2 != null &&
+      s3 != null &&
+      s4 != null &&
+      h1 != null &&
+      h2 != null &&
+      h3 != null &&
+      h4 != null &&
+      jc! >= 0 &&
+      jmin! >= 0 &&
+      jmax! >= 0 &&
+      s1! >= 0 &&
+      s2! >= 0 &&
+      s3! >= 0 &&
+      s4! >= 0 &&
+      jmin! <= jmax! &&
+      _rangeValid(h1) &&
+      _rangeValid(h2) &&
+      _rangeValid(h3) &&
+      _rangeValid(h4);
+
+  static bool _rangeValid(List<int>? range) =>
+      range != null &&
+      range.length == 2 &&
+      range[0] >= 0 &&
+      range[0] <= range[1];
+}
+
 @freezed
 abstract class DialParams with _$DialParams {
   const factory DialParams({
@@ -37,6 +123,9 @@ abstract class DialParams with _$DialParams {
     // when present the controller verifies the stored keypair matches before
     // starting a tunnel, repairing a divergence a lost bind response can leave.
     @JsonKey(name: 'client_public_key') String? clientPublicKey,
+    // Per-region obfuscation descriptor. Null on backends that predate the
+    // field (native data plane).
+    @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
   }) = _DialParams;
 
   factory DialParams.fromJson(Map<String, Object?> json) =>
@@ -55,6 +144,9 @@ abstract class DiscoveryServer with _$DiscoveryServer {
     @JsonKey(name: 'wg_dns') @Default('') String wgDns,
     @JsonKey(name: 'wg_public_key') String? wgPublicKey,
     @JsonKey(name: 'active_peers') @Default(0) int activePeers,
+    // Per-region obfuscation descriptor. Null on backends that predate the
+    // field (native data plane).
+    @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
   }) = _DiscoveryServer;
 
   factory DiscoveryServer.fromJson(Map<String, Object?> json) =>

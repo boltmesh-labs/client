@@ -19,6 +19,7 @@
 // calls back inside a live tunnel.
 
 import '../../../core/ip.dart';
+import 'models.dart';
 
 String normalizeAddressCidr(String assignedIp) {
   final v = assignedIp.trim();
@@ -51,6 +52,11 @@ void _requireNoControl(String value, String field) {
 String _normalizeDns(String dns) =>
     dns.split(RegExp(r'[,\s]+')).where((s) => s.isNotEmpty).join(', ');
 
+/// Builds the wg-quick config text for the tunnel, including the AmneziaWG
+/// obfuscation directives when [obfuscation] is given: the parameter set is
+/// emitted verbatim as `[Interface]` directives (`Jc`, `Jmin`, `Jmax`,
+/// `S1`–`S4`, `H1`–`H4`), which the platform's obfuscated data plane
+/// consumes. A null [obfuscation] builds the classic native config.
 String buildWgQuickConfig({
   required String privateKey,
   required String assignedIp,
@@ -59,6 +65,7 @@ String buildWgQuickConfig({
   required int endpointPort,
   required String dns,
   bool allowLocal = true,
+  ObfuscationParams? obfuscation,
 }) {
   if (privateKey.trim().isEmpty) {
     throw ArgumentError('Missing WireGuard private key.');
@@ -94,10 +101,33 @@ String buildWgQuickConfig({
     assignedIp: assignedIp,
     dns: normalizedDns,
   );
+  // The obfuscation parameter set rides the [Interface] section verbatim.
+  // An incomplete set fails closed here — both tunnel ends must run
+  // identical parameters, and a partial set could never handshake — mirroring
+  // the helper's own all-or-none validation.
+  if (obfuscation != null && !obfuscation.isComplete) {
+    throw ArgumentError('Incomplete obfuscation parameter set.');
+  }
+  final obfLines = obfuscation == null
+      ? <String>[]
+      : [
+          'Jc = ${obfuscation.jc}',
+          'Jmin = ${obfuscation.jmin}',
+          'Jmax = ${obfuscation.jmax}',
+          'S1 = ${obfuscation.s1}',
+          'S2 = ${obfuscation.s2}',
+          'S3 = ${obfuscation.s3}',
+          'S4 = ${obfuscation.s4}',
+          _headerLine('H1', obfuscation.h1),
+          _headerLine('H2', obfuscation.h2),
+          _headerLine('H3', obfuscation.h3),
+          _headerLine('H4', obfuscation.h4),
+        ];
   return '[Interface]\n'
       'PrivateKey = $priv\n'
       'Address = $address\n'
       'DNS = $normalizedDns\n'
+      '${obfLines.isEmpty ? '' : '${obfLines.join('\n')}\n'}'
       '\n'
       '[Peer]\n'
       'PublicKey = $srvPub\n'
@@ -105,6 +135,12 @@ String buildWgQuickConfig({
       'AllowedIPs = $allowedIps\n'
       'PersistentKeepalive = 25\n';
 }
+
+/// Renders one magic-header directive from its `[lo, hi]` pair. The value
+/// syntax is the AmneziaWG range form the helper's validation and the
+/// device's UAPI both accept.
+String _headerLine(String name, List<int>? range) =>
+    '$name = ${range![0]}-${range[1]}';
 
 /// Subnets kept off the tunnel in split mode: RFC1918 private ranges,
 /// link-local, and multicast (v4) / unique-local, link-local, multicast

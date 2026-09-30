@@ -29,6 +29,18 @@ String currentPlatformLabel() {
   }
 }
 
+/// True where the obfuscated (AmneziaWG) data plane is available: the Linux
+/// `boltmeshd` helper runs the device in-process. The Windows helper's
+/// data plane has no obfuscated path (yet), Android's plugin cannot be
+/// forking (see `tunnel_adapter.dart`), and Apple is the Network Extension —
+/// so everywhere else a region's obfuscation descriptor is ignored and the
+/// native data plane is used. Parameters injectable for tests.
+bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
+  if (web) return false;
+  final p = platform ?? defaultTargetPlatform;
+  return p == TargetPlatform.linux;
+}
+
 /// Network-extension bundle ID for iOS/macOS
 /// (`--dart-define=VPN_PROVIDER_BUNDLE_ID=<ext id>`); ignored elsewhere.
 const _kProviderBundleId = String.fromEnvironment('VPN_PROVIDER_BUNDLE_ID');

@@ -251,8 +251,14 @@ func TestParseUAPIPeersStableOrder(t *testing.T) {
 			t.Fatal("peer order is not stable across reads")
 		}
 	}
-	if first[0].publicKey >= first[1].publicKey {
-		t.Errorf("peers should be sorted by key: %q then %q", first[0].publicKey, first[1].publicKey)
+	// The canonical order is the underlying key bytes (00… < ff…); base64
+	// strings do not sort lexicographically, so the order is asserted through
+	// the payloads each key carried.
+	if first[0].rxBytes != 1 || first[1].rxBytes != 2 {
+		t.Errorf(
+			"peers should be sorted by canonical key order: rx=%d,%d, want 1,2",
+			first[0].rxBytes, first[1].rxBytes,
+		)
 	}
 }
 
@@ -295,5 +301,124 @@ func TestHexKeyRejectsWrongLength(t *testing.T) {
 				t.Errorf("a %s key must be rejected", name)
 			}
 		})
+	}
+}
+
+// A stock WireGuard device must never receive a silently stripped obfuscated
+// config: the tunnel would come up unobfuscated while the peer never
+// handshakes. The native translation rejects it instead.
+func TestConfigToUAPIRejectsObfuscatedConfig(t *testing.T) {
+	if _, err := ConfigToUAPI(obfuscatedConfig); err == nil {
+		t.Fatal("ConfigToUAPI(obfuscatedConfig) = nil, want error")
+	}
+}
+
+func TestConfigToUAPIWithObfuscation(t *testing.T) {
+	got, err := ConfigToUAPIWithObfuscation(obfuscatedConfig)
+	if err != nil {
+		t.Fatalf("ConfigToUAPIWithObfuscation: %v", err)
+	}
+	body := string(got)
+
+	for _, want := range []string{
+		"private_key=" + mustHex(t, keyA),
+		"public_key=" + mustHex(t, keyB),
+		"endpoint=203.0.113.10:51820",
+		"persistent_keepalive_interval=25",
+		"allowed_ip=0.0.0.0/0",
+		"jc=3",
+		"jmin=40",
+		"jmax=70",
+		"s1=15",
+		"s2=17",
+		"s3=10",
+		"s4=5",
+		"h1=115-120",
+		"h2=130",
+		"h3=150-160",
+		"h4=171",
+	} {
+		if !strings.Contains(body, want+"\n") {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	// Address/DNS are backend-owned (never forwarded to a device), and the
+	// obfuscation directives must not smuggle any of the Linux-shaped keys
+	// through either.
+	for _, banned := range []string{"address=", "dns=", "mtu=", "fwmark=", "table="} {
+		if strings.Contains(body, banned) {
+			t.Errorf("body must not contain %q:\n%s", banned, body)
+		}
+	}
+}
+
+// The text dump is the `GET=1` format the in-process AmneziaWG device emits:
+// device-level obfuscation lines, then one block per peer. Keys are reported
+// on the wire in the standard base64 form (the dump's own hex re-encoded),
+// zero handshakes stay unknown, and an unparseable key skips its block.
+func TestParseUAPIPeersText(t *testing.T) {
+	dump := "listen_port=51820\n" +
+		"fwmark=0\n" +
+		"jc=3\njmin=40\njmax=70\ns1=15\ns2=17\ns3=10\ns4=5\n" +
+		"h1=115-120\nh2=130\nh3=150-160\nh4=171\n" +
+		"random_trailers=false\ndisable_cookies=false\n" +
+		"public_key=" + mustHex(t, keyB) + "\n" +
+		"preshared_key=0000000000000000000000000000000000000000000000000000000000000000\n" +
+		"protocol_version=1\n" +
+		"endpoint=203.0.113.10:51820\n" +
+		"last_handshake_time_sec=1000\n" +
+		"last_handshake_time_nsec=500\n" +
+		"tx_bytes=200\n" +
+		"rx_bytes=100\n" +
+		"persistent_keepalive_interval=25\n" +
+		"allowed_ip=0.0.0.0/0\n" +
+		"public_key=zzzz\n" +
+		"rx_bytes=999\n" +
+		"public_key=" + mustHex(t, keyA) + "\n" +
+		"last_handshake_time_sec=0\n" +
+		"last_handshake_time_nsec=0\n" +
+		"tx_bytes=6\nrx_bytes=5\n"
+
+	peers, err := ParseUAPIPeersText([]byte(dump))
+	if err != nil {
+		t.Fatalf("ParseUAPIPeersText: %v", err)
+	}
+	if len(peers) != 2 {
+		t.Fatalf("want 2 peers, got %d", len(peers))
+	}
+	// Canonical hex order: keyA (00…00) sorts before keyB (01…01).
+	if peers[0].publicKey != keyA {
+		t.Errorf("peers[0].publicKey = %q, want %q", peers[0].publicKey, keyA)
+	}
+	if peers[0].endpoint != "" {
+		t.Errorf("peers[0].endpoint = %q, want empty", peers[0].endpoint)
+	}
+	if !peers[0].lastHandshake.IsZero() {
+		t.Errorf("zero handshake must stay the zero time, got %v", peers[0].lastHandshake)
+	}
+	if peers[0].rxBytes != 5 || peers[0].txBytes != 6 {
+		t.Errorf("peers[0] counters not decoded: %+v", peers[0])
+	}
+	if peers[1].publicKey != keyB {
+		t.Errorf("peers[1].publicKey = %q, want %q", peers[1].publicKey, keyB)
+	}
+	if peers[1].endpoint != "203.0.113.10:51820" {
+		t.Errorf("peers[1].endpoint = %q", peers[1].endpoint)
+	}
+	if want := time.Unix(1000, 500); !peers[1].lastHandshake.Equal(want) {
+		t.Errorf("peers[1].lastHandshake = %v, want %v", peers[1].lastHandshake, want)
+	}
+	if peers[1].rxBytes != 100 || peers[1].txBytes != 200 {
+		t.Errorf("peers[1] counters not decoded: %+v", peers[1])
+	}
+}
+
+func TestParseUAPIPeersTextEmptyDump(t *testing.T) {
+	peers, err := ParseUAPIPeersText([]byte("listen_port=0\nfwmark=0\njc=3\n"))
+	if err != nil {
+		t.Fatalf("ParseUAPIPeersText: %v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("want no peers, got %+v", peers)
 	}
 }

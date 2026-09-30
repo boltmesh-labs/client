@@ -9,7 +9,7 @@ Flutter app over a local transport. The app therefore never runs `sudo`, `wg`,
 
 | Platform | Transport | Data plane | State |
 | --- | --- | --- | --- |
-| Linux | Unix socket, systemd socket-activation | kernel `wireguard` via `wg-quick` + `wgctrl` | shipping |
+| Linux | Unix socket, systemd socket-activation | kernel `wireguard` via `wg-quick` + `wgctrl`; in-process **AmneziaWG** over a tun for configs carrying the obfuscation directives | shipping |
 | Windows | named pipe `\\.\pipe\boltmesh\boltmeshd` | WireGuard-for-Windows tunnel service + `wireguard.dll` | shipping |
 | macOS | Unix socket, launchd LaunchDaemon | **userspace `wireguard-go` over `utun`** | **build-tagged, untested on hardware** |
 

@@ -223,8 +223,8 @@ func TestDarwinStatusProjectsPeers(t *testing.T) {
 	if !st.Up || st.Stage != protocol.StageConnected {
 		t.Fatalf("want connected, got %+v", st)
 	}
-	if st.PublicKey != mustHexDarwin(t, keyB) {
-		t.Errorf("peer key not projected: %q", st.PublicKey)
+	if st.PublicKey != keyB {
+		t.Errorf("peer key not projected as base64: %q", st.PublicKey)
 	}
 	if st.RxBytes != 11 || st.TxBytes != 22 {
 		t.Errorf("counters not projected: rx=%d tx=%d", st.RxBytes, st.TxBytes)

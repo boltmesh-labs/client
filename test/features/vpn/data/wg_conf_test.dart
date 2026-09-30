@@ -1,5 +1,8 @@
 import 'package:boltmesh/core/ip.dart';
+import 'package:boltmesh/features/vpn/data/models.dart';
+import 'package:boltmesh/features/vpn/data/platform_info.dart';
 import 'package:boltmesh/features/vpn/data/wg_conf.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -273,6 +276,153 @@ void main() {
       expect(
         () => allowedIPs(allowLocal: true, assignedIp: overlay, dns: 'nope'),
         throwsArgumentError,
+      );
+    });
+  });
+
+  group('buildWgQuickConfig obfuscation', () {
+    String buildConf({ObfuscationParams? obfuscation}) => buildWgQuickConfig(
+      privateKey: 'PRIV',
+      assignedIp: '10.8.0.5',
+      serverPublicKey: 'SRV',
+      endpointHost: '203.0.113.10',
+      endpointPort: 51820,
+      dns: '10.8.0.1',
+      obfuscation: obfuscation,
+    );
+
+    test('obfuscation params ride the interface section', () {
+      final conf = buildConf(
+        obfuscation: const ObfuscationParams(
+          jc: 3,
+          jmin: 40,
+          jmax: 70,
+          s1: 15,
+          s2: 17,
+          s3: 10,
+          s4: 5,
+          h1: [115, 120],
+          h2: [130, 130],
+          h3: [150, 160],
+          h4: [171, 171],
+        ),
+      );
+      // The exact directive block, in the order the helper's validation and
+      // the device's UAPI consume it, between DNS and the [Peer] section.
+      expect(
+        conf,
+        contains(
+          'DNS = 10.8.0.1\n'
+          'Jc = 3\n'
+          'Jmin = 40\n'
+          'Jmax = 70\n'
+          'S1 = 15\n'
+          'S2 = 17\n'
+          'S3 = 10\n'
+          'S4 = 5\n'
+          'H1 = 115-120\n'
+          'H2 = 130-130\n'
+          'H3 = 150-160\n'
+          'H4 = 171-171\n'
+          '\n'
+          '[Peer]',
+        ),
+      );
+    });
+
+    test('null obfuscation builds the classic native config', () {
+      final conf = buildConf();
+      expect(conf, isNot(contains('Jc =')));
+      expect(conf, isNot(contains('H1 =')));
+      // The native layout is unchanged: no stray blank lines between DNS
+      // and [Peer].
+      expect(conf, contains('DNS = 10.8.0.1\n\n[Peer]'));
+    });
+  });
+
+  group('Obfuscation', () {
+    test('decodes the backend descriptor shape', () {
+      final obf = Obfuscation.fromJson(const {
+        'mode': 'awg',
+        'params': {
+          'jc': 3,
+          'jmin': 40,
+          'jmax': 70,
+          's1': 15,
+          's2': 17,
+          's3': 10,
+          's4': 5,
+          'h1': [115, 120],
+          'h2': [130, 130],
+          'h3': [150, 160],
+          'h4': [171, 171],
+        },
+      });
+      expect(obf.isAwg, isTrue);
+      expect(obf.params!.jc, 3);
+      expect(obf.params!.h1, [115, 120]);
+    });
+
+    test('mode without a complete param set is not awg', () {
+      // A half-descriptor must never reach a conf: both tunnel ends must
+      // run identical parameters, and a partial set cannot handshake.
+      expect(const Obfuscation(mode: 'awg').isAwg, isFalse);
+      expect(
+        Obfuscation.fromJson(const {
+          'mode': 'awg',
+          'params': {
+            'jc': 3,
+            'jmin': 40,
+            'jmax': 70,
+            's1': 15,
+            's2': 17,
+            's3': 10,
+            // s4 missing
+            'h1': [115, 120],
+            'h2': [130, 130],
+            'h3': [150, 160],
+            'h4': [171, 171],
+          },
+        }).isAwg,
+        isFalse,
+      );
+      // A reversed range is malformed, not usable.
+      expect(
+        Obfuscation.fromJson(const {
+          'mode': 'awg',
+          'params': {
+            'jc': 3,
+            'jmin': 40,
+            'jmax': 70,
+            's1': 15,
+            's2': 17,
+            's3': 10,
+            's4': 5,
+            'h1': [120, 115],
+            'h2': [130, 130],
+            'h3': [150, 160],
+            'h4': [171, 171],
+          },
+        }).isAwg,
+        isFalse,
+      );
+    });
+
+    test('native descriptor decodes as not awg', () {
+      expect(const Obfuscation().isAwg, isFalse);
+      expect(Obfuscation.fromJson(const {'mode': ''}).isAwg, isFalse);
+    });
+  });
+
+  group('awgDataPlaneSupported', () {
+    test('linux helper only', () {
+      expect(awgDataPlaneSupported(platform: TargetPlatform.linux), isTrue);
+      expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isFalse);
+      expect(awgDataPlaneSupported(platform: TargetPlatform.android), isFalse);
+      expect(awgDataPlaneSupported(platform: TargetPlatform.macOS), isFalse);
+      expect(
+        awgDataPlaneSupported(platform: TargetPlatform.linux, web: true),
+        isFalse,
       );
     });
   });
