@@ -453,8 +453,18 @@ jobs:
       # later deleted is still caught, and the local hook cannot see that case
       # because it runs `--staged`. This repo's history is already clean, so it
       # needs no `.gitleaksignore`.
+      # The container runs as root while the workspace is owned by the runner
+      # user, so git refuses the repo as "dubious ownership" and scans nothing
+      # -- it still exits 0, so this fails silently. Mark the workspace safe via
+      # the environment rather than a config file, so it lands inside the
+      # container: `GIT_CONFIG_COUNT` is read by git itself and needs no
+      # writable HOME.
       - name: Scan for committed secrets
         uses: docker://zricethezav/gitleaks:v8.30.1
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: "*"
         with:
           args: git --redact --no-banner --verbose --exit-code 1 .
 
