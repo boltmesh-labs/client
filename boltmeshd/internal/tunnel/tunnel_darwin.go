@@ -140,7 +140,17 @@ func (m *Manager) clearDevice() {
 // Up validates the config, starts a userspace device, and applies it. An
 // existing tunnel is torn down first so the requested config is always the one
 // applied (never two live devices).
-func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Status, error) {
+func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
+	if transport != nil {
+		// Stream transport is Linux-only for now: the forwarder lifecycle
+		// and its bypass route live in the Linux data plane, and silently
+		// ignoring the spec would leave the tunnel on a dead loopback
+		// endpoint.
+		return nil, &protocol.OpError{
+			Code: protocol.CodeBadConfig,
+			Err:  errors.New("stream transport is not supported on this platform"),
+		}
+	}
 	// Validate before taking the lock: a malformed config must not consume
 	// the privileged operation slot or touch disk.
 	if err := config.Validate(wgQuickConfig); err != nil {

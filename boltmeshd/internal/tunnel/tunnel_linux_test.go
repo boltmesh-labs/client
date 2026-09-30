@@ -141,7 +141,7 @@ func TestUpFailsWithoutWgQuickAndWritesNothing(t *testing.T) {
 	m.lookup = findTool
 	overrideToolDirs(t, []string{t.TempDir()})
 
-	_, err := m.Up(context.Background(), validConfig)
+	_, err := m.Up(context.Background(), validConfig, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
 		t.Fatalf("Up(no wg-quick) = %v, want internal", err)
@@ -165,7 +165,7 @@ func TestUpWritesConfigAndRunsWgQuick(t *testing.T) {
 	calls, run := recordRuns()
 	m.run = run
 
-	status, err := m.Up(context.Background(), validConfig)
+	status, err := m.Up(context.Background(), validConfig, nil)
 	if err != nil {
 		t.Fatalf("Up() = %v", err)
 	}
@@ -201,7 +201,7 @@ func TestUpRejectsInvalidConfigWithoutPrivilege(t *testing.T) {
 	calls, run := recordRuns()
 	m.run = run
 
-	_, err := m.Up(context.Background(), "not a config")
+	_, err := m.Up(context.Background(), "not a config", nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
 		t.Fatalf("Up(invalid) error = %v, want bad_config", err)
@@ -219,7 +219,7 @@ func TestUpBouncesExistingLink(t *testing.T) {
 	calls, run := recordRuns()
 	m.run = run
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up() = %v", err)
 	}
 	if len(*calls) != 3 {
@@ -240,7 +240,7 @@ func TestUpOverwritesStaleConfig(t *testing.T) {
 	_, run := recordRuns()
 	m.run = run
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up() = %v", err)
 	}
 	data, err := os.ReadFile(m.configPath())
@@ -269,7 +269,7 @@ func TestUpRemovesConfigWhenWgQuickUpFails(t *testing.T) {
 		return nil, nil
 	}
 
-	_, err := m.Up(context.Background(), validConfig)
+	_, err := m.Up(context.Background(), validConfig, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
 		t.Fatalf("Up(failing wg-quick) = %v, want internal", err)
@@ -486,7 +486,7 @@ func TestCanceledUpCompletesCleanupBeforeReleasingGate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := m.Up(ctx, validConfig)
+		_, err := m.Up(ctx, validConfig, nil)
 		done <- err
 	}()
 	<-started
@@ -576,7 +576,7 @@ func TestQueuedOperationCanBeCanceledBeforeEnteringManager(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		if _, err := m.Up(context.Background(), validConfig); err != nil {
+		if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 			t.Errorf("Up() = %v", err)
 		}
 	}()

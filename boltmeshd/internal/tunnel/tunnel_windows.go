@@ -100,7 +100,16 @@ func NewManager(dir, iface string) *Manager {
 // Up validates the config, writes it to the protected path, and starts the
 // tunnel service. Any existing tunnel is torn down first so the requested
 // config is always the one applied.
-func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Status, error) {
+func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
+	if transport != nil {
+		// Stream transport is Linux-only for now (see the darwin backend):
+		// the Windows data plane has no forwarder lifecycle, and ignoring
+		// the spec would leave the tunnel on a dead loopback endpoint.
+		return nil, &protocol.OpError{
+			Code: protocol.CodeBadConfig,
+			Err:  errors.New("stream transport is not supported on this platform"),
+		}
+	}
 	// Validate before taking the lock: a malformed config must not consume
 	// the privileged operation slot or touch disk.
 	if err := config.Validate(wgQuickConfig); err != nil {

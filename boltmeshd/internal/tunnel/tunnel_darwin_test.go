@@ -91,7 +91,7 @@ func newDarwinManager(t *testing.T) (*Manager, *fakeTun, *fakeDevice) {
 func TestDarwinUpConfiguresDeviceAndNetwork(t *testing.T) {
 	m, ft, dev := newDarwinManager(t)
 
-	st, err := m.Up(context.Background(), validConfig)
+	st, err := m.Up(context.Background(), validConfig, nil)
 	if err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestDarwinUpRejectsBadConfigBeforeTouchingTheTunnel(t *testing.T) {
 	m, ft, _ := newDarwinManager(t)
 
 	// A PreUp hook is the injection vector config.Validate exists to stop.
-	_, err := m.Up(context.Background(), "[Interface]\nPreUp = touch /tmp/pwned\n")
+	_, err := m.Up(context.Background(), "[Interface]\nPreUp = touch /tmp/pwned\n", nil)
 	if err == nil {
 		t.Fatal("expected the hook to be rejected")
 	}
@@ -136,7 +136,7 @@ func TestDarwinUpFailureCleansUp(t *testing.T) {
 	m, ft, dev := newDarwinManager(t)
 	dev.setErr = errors.New("device refused the config")
 
-	_, err := m.Up(context.Background(), validConfig)
+	_, err := m.Up(context.Background(), validConfig, nil)
 	if err == nil {
 		t.Fatal("expected the failure to surface")
 	}
@@ -157,7 +157,7 @@ func TestDarwinUpFailureCleansUp(t *testing.T) {
 func TestDarwinDownIsIdempotent(t *testing.T) {
 	m, ft, dev := newDarwinManager(t)
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	for i := 0; i < 2; i++ {
@@ -183,10 +183,10 @@ func TestDarwinDownIsIdempotent(t *testing.T) {
 func TestDarwinUpReplacesAnExistingTunnel(t *testing.T) {
 	m, ft, _ := newDarwinManager(t)
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("first Up: %v", err)
 	}
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("second Up: %v", err)
 	}
 	if ft.created != 2 {
@@ -206,7 +206,7 @@ func TestDarwinStatusProjectsPeers(t *testing.T) {
 		txBytes:   22,
 	}})
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	dev.dumpBody = FormatPeersAsUAPI(51820, []peer{{
@@ -235,7 +235,7 @@ func TestDarwinStatusProjectsPeers(t *testing.T) {
 // would make the client tear down a working tunnel.
 func TestDarwinStatusReadErrorIsNotDisconnected(t *testing.T) {
 	m, _, dev := newDarwinManager(t)
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	dev.dumpErr = errors.New("device wedged")
@@ -291,7 +291,7 @@ func TestDarwinManagerHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := m.Up(ctx, validConfig); err == nil {
+	if _, err := m.Up(ctx, validConfig, nil); err == nil {
 		t.Fatal("a canceled request must not start a tunnel")
 	}
 	if ft.created != 0 {
@@ -305,7 +305,7 @@ func TestDarwinConfigDirIsCreated(t *testing.T) {
 	m.makeTun = &fakeTun{}
 	m.makeDevice = func(_ tun.Device) (wireguardDevice, error) { return &fakeDevice{}, nil }
 
-	if _, err := m.Up(context.Background(), validConfig); err != nil {
+	if _, err := m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {

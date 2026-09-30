@@ -107,6 +107,18 @@ type Manager struct {
 	makeAwgTun        func(name string, mtu int) (awgtun.Device, error)
 	makeAwgDevice     func(awgtun.Device) (awgDevice, error)
 	resolveHost       func(ctx context.Context, host string) ([]net.IP, error)
+
+	// Live stream transport: a locally-run forwarder carrying the tunnel's
+	// datagrams, plus the routes pinned for it. The forwarder is not a
+	// privilege boundary, but the daemon owns its lifecycle because the
+	// tunnel's lifecycle is the daemon's: an app-restarted client would
+	// orphan it, and only the daemon can pin its egress outside the tunnel.
+	// fwd is nil when no transport is live. The route work goes through
+	// run/lookup like every other privileged action; the process and
+	// readiness seams are replaced by tests.
+	fwd            *forwarder
+	startForwarder func(ctx context.Context, binary, configPath string) (func() error, error)
+	waitForwarder  func(ctx context.Context, addr string) error
 }
 
 // NewManager returns a Manager for iface storing its config in dir.
@@ -124,6 +136,8 @@ func NewManager(dir, iface string) *Manager {
 		resolveHost: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
+		startForwarder: startForwarderProcess,
+		waitForwarder:  waitForwarderListen,
 	}
 }
 
@@ -150,8 +164,10 @@ func (m *Manager) runWithTimeout(ctx context.Context, name string, args ...strin
 
 // Up validates the config, writes it to the root-only path, and starts the
 // tunnel. An existing tunnel is torn down first so the requested config is
-// always the one applied (never two live tunnels).
-func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Status, error) {
+// always the one applied (never two live tunnels). A non-nil [transport] adds
+// a locally-run forwarder carrying the tunnel's datagrams, started (and pinned
+// outside the tunnel's routes) before wg-quick runs and torn down with it.
+func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
 	// Validate before taking the lock: a malformed config must not consume
 	// the privileged operation slot or touch disk.
 	if err := config.Validate(wgQuickConfig); err != nil {
@@ -179,6 +195,16 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	// concept of the AmneziaWG parameters, and writing them to a wg-quick
 	// file would only fail at up time. Route it to the userspace data plane.
 	if awgObfuscated(parseWgQuick(wgQuickConfig)) {
+		if transport != nil {
+			// One rung at a time. A stream transport already carries the
+			// tunnel inside a camouflaged stream, so the obfuscation
+			// parameters would be redundant; combining them is a client-side
+			// decision this backend does not make on its own.
+			return nil, &protocol.OpError{
+				Code: protocol.CodeBadConfig,
+				Err:  errors.New("stream transport with an obfuscated config is not supported"),
+			}
+		}
 		return m.upObfuscated(ctx, wgQuickConfig)
 	}
 
@@ -188,7 +214,9 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	if err != nil {
 		return nil, err
 	}
-	if m.linkExists(m.iface) {
+	// A live forwarder counts as a live tunnel: the transport is torn down
+	// with the link it carries, so a retry must never leave one orphaned.
+	if m.linkExists(m.iface) || m.fwd != nil {
 		if err := m.down(ctx); err != nil {
 			return nil, err
 		}
@@ -198,6 +226,23 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 	}
 	if err := os.WriteFile(m.configPath(), []byte(wgQuickConfig), 0o600); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
+	}
+	// The forwarder and its bypass route come up *before* wg-quick: from the
+	// moment the tunnel's routes exist, the forwarder's own egress must
+	// already be pinned through the physical path, or its packets (and the
+	// WireGuard datagrams it carries) would loop back into the tunnel.
+	if transport != nil {
+		if err := m.bringUpTransport(ctx, transport); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			defer cancel()
+			if cleanupErr := m.cleanup(cleanupCtx, true); cleanupErr != nil {
+				return nil, &protocol.OpError{
+					Code: protocol.CodeInternal,
+					Err:  fmt.Errorf("stream transport: %w; cleanup failed: %w", err, cleanupErr),
+				}
+			}
+			return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("stream transport: %w", err)}
+		}
 	}
 	if err := m.runWithTimeout(ctx, wgQuick, "up", m.configPath()); err != nil {
 		// wg-quick can configure DNS before a later route or configuration
@@ -217,6 +262,25 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string) (*protocol.Statu
 			}
 		}
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("wg-quick up: %w", err)}
+	}
+	// wg-quick's strict-mode policy rules steer *unmarked* packets into its
+	// own routing table before the main one, and the forwarder is an
+	// unmarked process: the bypass route has to exist in those tables too, or
+	// the first packets after wg-quick up would be routed into the tunnel.
+	// Its handshakes retry, so the window is self-healing, but it is
+	// narrowed to this single call.
+	if transport != nil {
+		if err := m.pinTransportTables(ctx); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			defer cancel()
+			if cleanupErr := m.cleanup(cleanupCtx, true); cleanupErr != nil {
+				return nil, &protocol.OpError{
+					Code: protocol.CodeInternal,
+					Err:  fmt.Errorf("pin transport routes: %w; cleanup failed: %w", err, cleanupErr),
+				}
+			}
+			return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("pin transport routes: %w", err)}
+		}
 	}
 	return m.readDeviceStatus(ctx)
 }
@@ -327,10 +391,10 @@ func (m *Manager) down(ctx context.Context) error {
 	if m.awgLive() {
 		return m.teardownObfuscated(ctx)
 	}
-	// A normal down does not need to invoke wg-quick when the link is already
-	// absent. The resolver cleanup still runs: deleting a link does not remove
-	// a per-interface resolvconf/systemd-resolved entry.
-	return m.cleanup(ctx, m.linkExists(m.iface))
+	// A live forwarder counts even without a link: a forwarder that outlived
+	// a failed tunnel (or a daemon restart) must still be stopped and its
+	// routes swept, so it is torn down whenever either is present.
+	return m.cleanup(ctx, m.linkExists(m.iface) || m.fwd != nil)
 }
 
 // cleanup tears down the link and removes its resolver state. attemptDown is
@@ -382,6 +446,14 @@ func (m *Manager) cleanup(ctx context.Context, attemptDown bool) error {
 		if downErr != nil && linkPresent {
 			cleanupErrs = append(cleanupErrs, downErr)
 		}
+	}
+
+	// The stream transport goes down with the link it carries: stop the
+	// forwarder, then remove the routes pinned for it. No-op for a plain
+	// tunnel, and still run when the link is already gone (a forwarder can
+	// outlive a failed up).
+	if err := m.downTransport(ctx); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
 	}
 
 	if err := m.clearResolverState(ctx); err != nil {

@@ -15,7 +15,7 @@ import (
 
 type limitTestManager struct{}
 
-func (limitTestManager) Up(context.Context, string) (*protocol.Status, error) {
+func (limitTestManager) Up(context.Context, string, *protocol.TransportSpec) (*protocol.Status, error) {
 	return &protocol.Status{}, nil
 }
 

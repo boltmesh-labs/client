@@ -13,6 +13,47 @@ Flutter app over a local transport. The app therefore never runs `sudo`, `wg`,
 | Windows | named pipe `\\.\pipe\boltmesh\boltmeshd` | WireGuard-for-Windows tunnel service + `wireguard.dll` | shipping |
 | macOS | Unix socket, launchd LaunchDaemon | **userspace `wireguard-go` over `utun`** | **build-tagged, untested on hardware** |
 
+## Stream transport (Linux, opt-in per `up`)
+
+A client may send a `transport` spec with `up` (mode `stream`), which
+carries the tunnel's UDP datagrams to the real server inside a stream that
+middleboxes treat as ordinary TLS — the rung for networks that block or
+fingerprint WireGuard's own UDP. The peer's `Endpoint` is then a loopback
+address and the daemon runs a forwarder for the tunnel's lifetime:
+
+```text
+client ──unix socket──> boltmeshd (root)
+                         ├── forwarder  (unprivileged, own process group)
+                         │     127.0.0.1:51821 ──stream──> vpn.example.net:443
+                         └── wg-quick: Endpoint = 127.0.0.1:51821
+```
+
+The forwarder is not a privilege boundary, but the daemon owns its
+lifecycle because the tunnel's lifecycle is the daemon's: an app-restarted
+client would orphan it, and only the daemon can route around the tunnel. The
+client supplies the forwarder's configuration document verbatim (it tracks
+that tool's schema, the daemon does not) plus a **bare binary name**, which
+the daemon resolves under the same fixed tool directories as `wg-quick` and
+`ip` — never `PATH`, because it is executed as root. The document is written
+root-only beside the wg-quick config.
+
+Two routing facts make or break it, both handled in
+`internal/tunnel/transport_linux.go`:
+
+- The forwarder's own egress must never enter the tunnel it carries, so a
+  host route for the real server is pinned through the physical gateway
+  **before** `wg-quick up`.
+- `wg-quick`'s strict-mode policy rules steer *unmarked* packets — which is
+  every packet a separate forwarder process sends — into its own routing
+  table before the main one. The same pin is therefore installed in every
+  table an `not fwmark … table N` rule selects, parsed from `ip rule show`
+  after `wg-quick up` rather than predicted from the interface name.
+
+Stream transport is Linux-only for now; Windows and macOS reject the spec
+(`bad_config`) rather than silently ignoring it, since a silently ignored spec
+would leave the tunnel on a dead loopback endpoint. It is not combined with
+the AmneziaWG directives — one rung at a time.
+
 ## macOS design
 
 macOS has **no kernel WireGuard module**, and `wgctrl` — the library the Linux
@@ -33,30 +74,30 @@ client ──unix socket──> boltmeshd (root, LaunchDaemon)
 
 ### What this means for security
 
-* The client sends the same validated wg-quick text it sends everywhere.
+- The client sends the same validated wg-quick text it sends everywhere.
   `config.Validate` still rejects `PreUp`/`PostUp`/`PreDown`/`PostDown`/
   `SaveConfig`, so the client cannot turn `up` into root code execution.
-* `[Interface] Address` and `DNS` are **not** forwarded to the device: it
+- `[Interface] Address` and `DNS` are **not** forwarded to the device: it
   rejects unknown keys, and it has no concept of either. The backend applies
   them itself, which is also what lets one client config drive all three
   platforms.
-* Privileged tools (`ifconfig`, `route`, `netstat`) are resolved from a fixed
+- Privileged tools (`ifconfig`, `route`, `netstat`) are resolved from a fixed
   `/sbin:/usr/sbin:/bin:/usr/bin` list, never `PATH` — the daemon runs as root,
   so a caller-influenced `PATH` would otherwise execute as root.
-* The config directory must be root-owned and inaccessible beyond its owner, or
+- The config directory must be root-owned and inaccessible beyond its owner, or
   the daemon refuses to start: a user-writable config directory would let a
   standard account replace the config the daemon later reads.
-* The socket is `root:<group>` 0660 (empty group ⇒ `root:root` 0600).
+- The socket is `root:<group>` 0660 (empty group ⇒ `root:root` 0600).
 
 ### Honest status: this is not proven on hardware
 
 Everything in the macOS backend is behind `//go:build darwin`, so the Linux and
 Windows runners **cannot execute it**. What CI does verify:
 
-* it compiles for `darwin/amd64` and `darwin/arm64`;
-* `go vet` type-checks the darwin-tagged files **and their tests**;
-* `golangci-lint` runs with `GOOS=darwin`;
-* the UAPI translation layer (`internal/tunnel/uapi.go`) and the client's
+- it compiles for `darwin/amd64` and `darwin/arm64`;
+- `go vet` type-checks the darwin-tagged files **and their tests**;
+- `golangci-lint` runs with `GOOS=darwin`;
+- the UAPI translation layer (`internal/tunnel/uapi.go`) and the client's
   config validation are platform-independent and **are** unit-tested on Linux.
 
 What is **not** verified, because it needs a Mac with root: the utun lifecycle,
@@ -94,7 +135,7 @@ pre-created the pipe name cannot obtain a WireGuard config.
 
 JSON lines, persisted so a failure survives a restart:
 
-* Linux: `/var/log/boltmesh/boltmeshd.log`
-* Windows: `%ProgramData%\BoltMesh\logs\boltmeshd.log`
-* macOS: `/var/log/boltmesh/boltmeshd.log` (plus `/var/log/boltmesh/launchd.log`
+- Linux: `/var/log/boltmesh/boltmeshd.log`
+- Windows: `%ProgramData%\BoltMesh\logs\boltmeshd.log`
+- macOS: `/var/log/boltmesh/boltmeshd.log` (plus `/var/log/boltmesh/launchd.log`
   for anything launchd itself reports)

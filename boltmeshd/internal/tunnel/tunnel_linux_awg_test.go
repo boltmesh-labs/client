@@ -127,7 +127,7 @@ func (h *awgHarness) findCall(name string, args ...string) bool {
 func TestUpObfuscatedConfiguresDeviceAndNetwork(t *testing.T) {
 	h := newAwgHarness(t)
 
-	st, err := h.m.Up(context.Background(), obfuscatedConfig)
+	st, err := h.m.Up(context.Background(), obfuscatedConfig, nil)
 	if err != nil {
 		t.Fatalf("Up(obfuscatedConfig) = %v, want nil", err)
 	}
@@ -212,7 +212,7 @@ func TestUpObfuscatedResolvesHostnameEndpoint(t *testing.T) {
 	text := strings.Replace(obfuscatedConfig,
 		"Endpoint = 203.0.113.10:51820", "Endpoint = vpn.example.net:51820", 1)
 
-	if _, err := h.m.Up(context.Background(), text); err != nil {
+	if _, err := h.m.Up(context.Background(), text, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	if !h.findCall("ip", "route", "replace", "198.51.100.20/32", "via", "192.168.1.1", "dev", "eth0") {
@@ -227,7 +227,7 @@ func TestUpObfuscatedRejectsMissingEndpointBeforeCreatingAnything(t *testing.T) 
 	h := newAwgHarness(t)
 	text := strings.Replace(obfuscatedConfig, "Endpoint = 203.0.113.10:51820\n", "", 1)
 
-	_, err := h.m.Up(context.Background(), text)
+	_, err := h.m.Up(context.Background(), text, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
 		t.Fatalf("Up(no endpoint) = %v, want bad config", err)
@@ -250,7 +250,7 @@ func TestUpObfuscatedFailsClosedWhenEndpointUnreachable(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	_, err := h.m.Up(context.Background(), obfuscatedConfig)
+	_, err := h.m.Up(context.Background(), obfuscatedConfig, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
 		t.Fatalf("Up(unreachable) = %v, want internal", err)
@@ -267,7 +267,7 @@ func TestUpObfuscatedFailedStartRunsBoundedRecovery(t *testing.T) {
 	h := newAwgHarness(t)
 	h.dev.configureErr = errors.New("device rejected the config")
 
-	_, err := h.m.Up(context.Background(), obfuscatedConfig)
+	_, err := h.m.Up(context.Background(), obfuscatedConfig, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
 		t.Fatalf("Up(failing device) = %v, want internal", err)
@@ -303,7 +303,7 @@ func TestUpObfuscatedKeepsConfigWhenRecoveryCannotFinish(t *testing.T) {
 		return nil, errors.New("broken system")
 	}
 
-	_, err := h.m.Up(context.Background(), obfuscatedConfig)
+	_, err := h.m.Up(context.Background(), obfuscatedConfig, nil)
 	if err == nil {
 		t.Fatal("Up = nil, want the recovery failure")
 	}
@@ -314,7 +314,7 @@ func TestUpObfuscatedKeepsConfigWhenRecoveryCannotFinish(t *testing.T) {
 
 func TestDownObfuscatedTearsEverythingDown(t *testing.T) {
 	h := newAwgHarness(t)
-	if _, err := h.m.Up(context.Background(), obfuscatedConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), obfuscatedConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func TestDownObfuscatedTearsEverythingDown(t *testing.T) {
 
 func TestStatusPrefersTheLiveUserspaceDevice(t *testing.T) {
 	h := newAwgHarness(t)
-	if _, err := h.m.Up(context.Background(), obfuscatedConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), obfuscatedConfig, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	// The tun link exists (it is a netdev) and a kernel device read would
@@ -362,14 +362,14 @@ func TestStatusPrefersTheLiveUserspaceDevice(t *testing.T) {
 
 func TestNativeUpAfterObfuscatedTunnelBouncesIt(t *testing.T) {
 	h := newAwgHarness(t)
-	if _, err := h.m.Up(context.Background(), obfuscatedConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), obfuscatedConfig, nil); err != nil {
 		t.Fatalf("Up(obfuscated): %v", err)
 	}
 	linkUp := true
 	h.m.linkExists = func(string) bool { return linkUp }
 	h.m.device = func(string) (*wgtypes.Device, error) { return deviceWithPeers(t), nil }
 
-	if _, err := h.m.Up(context.Background(), validConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up(validConfig): %v", err)
 	}
 	if h.dev.closed != 1 {
@@ -386,14 +386,14 @@ func TestNativeUpAfterObfuscatedTunnelBouncesIt(t *testing.T) {
 func TestObfuscatedUpAfterNativeTunnelBouncesIt(t *testing.T) {
 	h := newAwgHarness(t)
 	h.m.device = func(string) (*wgtypes.Device, error) { return deviceWithPeers(t), nil }
-	if _, err := h.m.Up(context.Background(), validConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up(validConfig): %v", err)
 	}
 	if !h.findCall(wgQuickBinary, "up", h.m.configPath()) {
 		t.Fatalf("the native up never ran wg-quick:\n%v", h.callStrings())
 	}
 
-	if _, err := h.m.Up(context.Background(), obfuscatedConfig); err != nil {
+	if _, err := h.m.Up(context.Background(), obfuscatedConfig, nil); err != nil {
 		t.Fatalf("Up(obfuscatedConfig): %v", err)
 	}
 	// The lingering native config is swept before the userspace up writes
@@ -436,7 +436,7 @@ func TestSplitTunnelRoutesMirrorAllowedIPs(t *testing.T) {
 	text := strings.Replace(obfuscatedConfig,
 		"AllowedIPs = 0.0.0.0/0", "AllowedIPs = 1.0.0.0/8, 8.8.8.8/32, fd00::/8", 1)
 
-	if _, err := h.m.Up(context.Background(), text); err != nil {
+	if _, err := h.m.Up(context.Background(), text, nil); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	for _, want := range []string{
@@ -462,7 +462,7 @@ func TestUpObfuscatedRejectsBadMTU(t *testing.T) {
 	h := newAwgHarness(t)
 	text := strings.Replace(obfuscatedConfig, "DNS = 10.8.0.1", "DNS = 10.8.0.1\nMTU = 99", 1)
 
-	_, err := h.m.Up(context.Background(), text)
+	_, err := h.m.Up(context.Background(), text, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
 		t.Fatalf("Up(bad MTU) = %v, want bad config", err)
@@ -475,7 +475,7 @@ func TestUpObfuscatedRejectsBadMTU(t *testing.T) {
 func TestObfuscatedConfigSurvivesReUp(t *testing.T) {
 	h := newAwgHarness(t)
 	for i := 0; i < 2; i++ {
-		if _, err := h.m.Up(context.Background(), obfuscatedConfig); err != nil {
+		if _, err := h.m.Up(context.Background(), obfuscatedConfig, nil); err != nil {
 			t.Fatalf("Up #%d: %v", i+1, err)
 		}
 	}

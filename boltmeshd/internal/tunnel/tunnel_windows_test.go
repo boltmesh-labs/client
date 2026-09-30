@@ -541,7 +541,7 @@ func TestUpWritesConfigAndStartsService(t *testing.T) {
 	m, svc, dev := newTestManager(t)
 	dev.peers = []peer{{publicKey: "pub", endpoint: "203.0.113.10:51820", lastHandshake: time.Unix(2000, 0), rxBytes: 5, txBytes: 6}}
 
-	status, err := m.Up(context.Background(), validConfig)
+	status, err := m.Up(context.Background(), validConfig, nil)
 	if err != nil {
 		t.Fatalf("Up() = %v", err)
 	}
@@ -570,7 +570,7 @@ func TestUpReportsMissingWireGuardServiceBeforeTouchingTunnel(t *testing.T) {
 	want := errors.New("file not found")
 	m.stat = func(string) (os.FileInfo, error) { return nil, want }
 
-	_, err := m.Up(context.Background(), validConfig)
+	_, err := m.Up(context.Background(), validConfig, nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
 		t.Fatalf("Up() = %v, want internal error", err)
@@ -589,7 +589,7 @@ func TestUpReportsMissingWireGuardServiceBeforeTouchingTunnel(t *testing.T) {
 func TestUpRejectsInvalidConfigWithoutTouchingService(t *testing.T) {
 	m, svc, _ := newTestManager(t)
 
-	_, err := m.Up(context.Background(), "not a config")
+	_, err := m.Up(context.Background(), "not a config", nil)
 	var opErr *protocol.OpError
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
 		t.Fatalf("Up(invalid) = %v, want bad_config", err)

@@ -41,7 +41,7 @@ type shutdownSequenceTestManager struct {
 	downCalled chan struct{}
 }
 
-func (m *shutdownSequenceTestManager) Up(ctx context.Context, _ string) (*protocol.Status, error) {
+func (m *shutdownSequenceTestManager) Up(ctx context.Context, _ string, _ *protocol.TransportSpec) (*protocol.Status, error) {
 	close(m.upStarted)
 	<-ctx.Done()
 	close(m.upCanceled)

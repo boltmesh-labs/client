@@ -48,9 +48,11 @@ const responseWriteTimeout = 5 * time.Second
 const maxConcurrentConnections = 32
 
 // Manager is the tunnel surface the server serves. *tunnel.Manager satisfies
-// it; tests substitute a fake.
+// it; tests substitute a fake. The transport spec is nil for a plain tunnel
+// and non-nil for a stream transport, whose local forwarder the manager runs
+// for the tunnel's lifetime.
 type Manager interface {
-	Up(ctx context.Context, wgQuickConfig string) (*protocol.Status, error)
+	Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error)
 	Down(ctx context.Context) (*protocol.Status, error)
 	Status(ctx context.Context) (*protocol.Status, error)
 }
@@ -284,7 +286,7 @@ func (s *Server) dispatch(ctx context.Context, req *protocol.Request) protocol.R
 		}
 		return protocol.OK(id, status)
 	case protocol.OpUp:
-		status, err := s.manager.Up(ctx, *req.Config)
+		status, err := s.manager.Up(ctx, *req.Config, req.Transport)
 		if err != nil {
 			return s.failure(id, "up", err)
 		}

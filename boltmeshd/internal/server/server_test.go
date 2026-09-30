@@ -29,7 +29,7 @@ type fakeManager struct {
 	downErr   error
 }
 
-func (f *fakeManager) Up(_ context.Context, wgQuickConfig string) (*protocol.Status, error) {
+func (f *fakeManager) Up(_ context.Context, wgQuickConfig string, _ *protocol.TransportSpec) (*protocol.Status, error) {
 	if f.upErr != nil {
 		return nil, f.upErr
 	}
@@ -58,7 +58,7 @@ type cancelOnContextManager struct {
 	canceled chan struct{}
 }
 
-func (m *cancelOnContextManager) Up(ctx context.Context, _ string) (*protocol.Status, error) {
+func (m *cancelOnContextManager) Up(ctx context.Context, _ string, _ *protocol.TransportSpec) (*protocol.Status, error) {
 	close(m.started)
 	<-ctx.Done()
 	close(m.canceled)
