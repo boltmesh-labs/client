@@ -122,17 +122,18 @@ bool isBackendCorroborated({
 ///
 /// Same-region-first, then global lowest-load: servers in [currentRegionId]
 /// (excluding [currentServerId]) win by lowest `activePeers`; when the
-/// region has no other capacity, the lowest-load server anywhere wins —
-/// unless [stayInRegion] is set (explicit user server pin), in which case
-/// cross-region moves are forbidden and null is returned instead.
+/// region has no other capacity, the lowest-load server anywhere wins.
 /// A null [currentRegionId] (unpinned quick-connect) picks globally.
+///
+/// [currentRegionId] is a preference, not a boundary: a pinned server whose
+/// region is full or gone still roams, and the caller drops the pin to Auto
+/// when the pick leaves the region (see `_recordAutoFailoverSuccess`).
 /// The picked server deterministically excludes the dead one. Null when no
-/// other server has capacity.
+/// other server has capacity anywhere.
 String? pickFailoverTarget({
   required List<Region> regions,
   required String? currentRegionId,
   required String currentServerId,
-  bool stayInRegion = false,
 }) {
   DiscoveryServer? bestInRegion;
   DiscoveryServer? bestGlobal;
@@ -150,6 +151,5 @@ String? pickFailoverTarget({
       }
     }
   }
-  final best = stayInRegion ? bestInRegion : (bestInRegion ?? bestGlobal);
-  return best?.id;
+  return (bestInRegion ?? bestGlobal)?.id;
 }

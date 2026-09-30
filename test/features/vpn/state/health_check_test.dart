@@ -1499,22 +1499,25 @@ void main() {
     expect(events, contains('POST:/vpn-devices/dev-1/switch'));
   });
 
-  test('pinned region never switches regions, surfaces error', () async {
+  test('pinned server with a dead region roams and drops the pin', () async {
     final events = <String>[];
-    final (container, tunnel) = await seedConnected(
+    final (container, _) = await seedConnected(
       events,
       (o) {
         if (o.path.endsWith('/config')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
+        if (o.path.endsWith('/switch')) return dialJsonSrv9();
         throw StateError('unexpected ${o.path}');
       },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
       gatewayProbe: support.FakeGatewayProbe(null),
       controlProbe: support.FakeControlProbe(true),
     );
     final ctl = container.read(connectionProvider.notifier);
-    // Explicit server tap: r1 holds only the dead srv-1, r2 has capacity
-    // that must NOT be used (an explicit pin stays in its own region).
+    // Explicit server tap: r1 holds only the dead srv-1, r2 has capacity.
+    // The pin is a preference, not a boundary — the move roams rather than
+    // stranding the session on a dead server.
     ctl.selectTarget(serverId: 'srv-1', explicitTarget: true);
 
     for (var i = 0; i < 2; i++) {
@@ -1522,19 +1525,92 @@ void main() {
     }
 
     final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.error);
-    expect(state.message, contains('selected region'));
-    expect(state.dial?.serverId, 'srv-1');
-    expect(state.lastStage, isNull);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-9');
     expect(state.autoFailoverAttempts, 1);
-    expect(events, contains('GET:/vpn-regions'));
+    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    // The pin is void once its region is gone, so it drops to Auto instead
+    // of persisting a server in a region the user never chose.
+    expect(state.serverId, isNull);
+    expect(state.explicitTarget, isFalse);
+    expect(state.healthNote, contains('R2'));
+    expect(state.healthNote, contains('Back on Auto'));
+  });
+
+  test('a pinned server missing from discovery still roams', () async {
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        // srv-1 is gone from discovery entirely: the parent region cannot
+        // be resolved, which used to mean the pinned no-capacity error.
+        if (o.path.endsWith('/vpn-regions')) {
+          return [
+            {
+              'id': 'r2',
+              'name': 'R2',
+              'country_code': null,
+              'servers': [serverJson('srv-9', 'nine', 1)],
+            },
+          ];
+        }
+        if (o.path.endsWith('/switch')) return dialJsonSrv9();
+        throw StateError('unexpected ${o.path}');
+      },
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.selectTarget(serverId: 'srv-1', explicitTarget: true);
+
+    for (var i = 0; i < 2; i++) {
+      await stallOnce(ctl);
+    }
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-9');
+    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    // A pin whose server vanished is void whatever the replacement is.
+    expect(state.serverId, isNull);
+    expect(state.explicitTarget, isFalse);
+  });
+
+  test('a pinned server keeps its pin when the whole fleet is empty', () async {
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        if (o.path.endsWith('/vpn-regions')) {
+          return regionsList(twoServers().sublist(0, 1));
+        }
+        throw StateError('unexpected ${o.path}');
+      },
+      gatewayProbe: support.FakeGatewayProbe(null),
+      controlProbe: support.FakeControlProbe(true),
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.selectTarget(serverId: 'srv-1', explicitTarget: true);
+
+    for (var i = 0; i < 2; i++) {
+      await stallOnce(ctl);
+    }
+
+    // No capacity anywhere, so there is nothing to roam to: the converged
+    // no-capacity path bounces the old tunnel and keeps the pin intact.
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-1');
+    expect(state.serverId, 'srv-1');
+    expect(state.explicitTarget, isTrue);
+    expect(state.autoFailoverAttempts, 1);
+    expect(state.healthNote, contains('No other server'));
     expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));
-    // The tunnel was stopped for discovery and never restarted: the last
-    // tunnel event is the stop (cycle 1's heal restarts, then the
-    // failover stops for good).
-    final tunnelEvents = events.where((e) => e.startsWith('tunnel:')).toList();
-    expect(tunnelEvents, isNotEmpty);
-    expect(tunnelEvents.last, 'tunnel:stop');
   });
 
   test('pinned server allows same-region moves', () async {

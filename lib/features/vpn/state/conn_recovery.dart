@@ -170,10 +170,11 @@ extension ConnectionRecovery on ConnectionController {
   /// over the direct network (the live tunnel points at the dead server,
   /// and status polls through it are what timed out in the first place).
   /// Picks same-region-first, then global lowest-load (see
-  /// [pickFailoverTarget]) — unless the target is an explicit user pin,
-  /// which never leaves the selected region and surfaces an error when it
-  /// has no capacity left. Transport failures restart the old tunnel and
-  /// stay connected so the next health tick retries until
+  /// [pickFailoverTarget]). An explicit user pin is only a preference: when
+  /// its region has no other capacity, or the pinned server is gone from
+  /// discovery, the move roams anyway and the pin drops to Auto rather than
+  /// stranding the session on a dead server. Transport failures restart the
+  /// old tunnel and stay connected so the next health tick retries until
   /// [ConnectionTuning.maxAutoFailovers] is spent; a 404 forgets the device
   /// like `pollStatusOnce` does. The budget is charged per committed
   /// attempt (a tunnel stop, a resolved target), not per entry: a call the
@@ -370,37 +371,15 @@ extension ConnectionRecovery on ConnectionController {
       }
     }
     if (!sessionCurrent()) return;
-    final target = _pickFailoverTarget(regions, oldDial);
+    final pick = _pickFailoverTarget(regions, oldDial);
+    final target = pick.serverId;
     if (target == null) {
       // Nowhere to move: the client deliberately bounces the old tunnel
       // instead, which is a committed move attempt like any other (the
-      // budget is what keeps the stall from re-discovering forever).
+      // budget is what keeps the stall from re-discovering forever). A pin
+      // lands here too, but only when the whole deployment is out of
+      // capacity — a dead *region* roams rather than stopping here.
       chargeAttempt();
-      if (snap.explicitTarget) {
-        // Pinned server with no same-region capacity: never roam
-        // across regions. The tunnel is down before the error is surfaced
-        // so no tunnel runs behind the error.
-        final pinned = snap.serverId ?? oldDial.serverName;
-        AppLog.info('failover pinned no-capacity ($pinned)');
-        if (!tunnelDown) {
-          await _stopTunnel('auto-failover');
-          if (!sessionCurrent()) return;
-          tunnelDown = true;
-        }
-        if (!sessionCurrent()) return;
-        _stopPolling();
-        _pollsSinceRotate = 0;
-        snap = snap.copyWith(
-          phase: ConnPhase.error,
-          message:
-              'No servers available in the selected region ($why). '
-              'Pick another region or tap Connect to retry.',
-          healthNote: null,
-          backendIssue: null,
-          lastStage: null,
-        );
-        return;
-      }
       AppLog.info('failover no-capacity server=${oldDial.serverName}');
       // Nowhere to move (single-server deployment?): restart the old
       // tunnel like an offline heal. The failover budget keeps the
@@ -481,6 +460,8 @@ extension ConnectionRecovery on ConnectionController {
         await _rebindAfterPeerless(
           id: id,
           target: target,
+          crossRegion: pick.crossRegion,
+          regionName: pick.regionName,
           why: why,
           attempt: attempt,
           tunnelDown: tunnelDown,
@@ -564,25 +545,50 @@ extension ConnectionRecovery on ConnectionController {
       );
       return;
     }
-    _recordAutoFailoverSuccess(dial, target, attempt, why);
+    await _recordAutoFailoverSuccess(
+      dial,
+      target,
+      attempt,
+      why,
+      crossRegion: pick.crossRegion,
+      regionName: pick.regionName,
+    );
   }
 
-  void _recordAutoFailoverSuccess(
+  Future<void> _recordAutoFailoverSuccess(
     DialParams dial,
     String? target,
     int attempt,
-    String why,
-  ) {
+    String why, {
+    required bool crossRegion,
+    String? regionName,
+  }) async {
     // [_startWith] resets heal health; re-assert the failover budget and
     // grant the new server fresh heals.
     snap = snap.copyWith(autoFailoverAttempts: attempt, autoHealAttempts: 0);
-    // A pinned server re-pins onto the move so reconnects keep it; an
-    // unpinned (Auto) state stays unpinned so later connects re-pick.
+    // A same-region move re-pins onto the new server so reconnects keep it;
+    // a cross-region move voids the pin instead (the region the user chose is
+    // gone), and an unpinned (Auto) state stays unpinned either way so later
+    // connects re-pick.
     if (snap.serverId != null) {
-      selectTarget(serverId: target);
+      if (crossRegion) {
+        // The pin's region was dead or gone, so the pin is void: drop to Auto
+        // rather than persisting a server in a region the user never chose.
+        // [selectAuto] awaits the write, so a racing saved-target read cannot
+        // resurrect the dead pin.
+        await selectAuto();
+        snap = snap.copyWith(
+          healthNote:
+              'Moved to ${regionName ?? 'another region'} — the selected '
+              'region is unavailable. Back on Auto.',
+        );
+      } else {
+        selectTarget(serverId: target);
+      }
     }
     AppLog.info(
-      'failover ok ($why) attempt=$attempt server=${dial.serverName}',
+      'failover ok ($why) attempt=$attempt server=${dial.serverName}'
+      '${crossRegion ? ' cross-region' : ''}',
     );
   }
 
@@ -592,6 +598,8 @@ extension ConnectionRecovery on ConnectionController {
   Future<void> _rebindAfterPeerless({
     required String id,
     required String? target,
+    required bool crossRegion,
+    required String? regionName,
     required String why,
     required int attempt,
     required bool tunnelDown,
@@ -611,7 +619,14 @@ extension ConnectionRecovery on ConnectionController {
       if (sessionEpoch != _sessionEpoch) return;
       await _startWith(fresh, sessionEpoch: sessionEpoch);
       if (sessionEpoch != _sessionEpoch) return;
-      _recordAutoFailoverSuccess(fresh, target, attempt, why);
+      await _recordAutoFailoverSuccess(
+        fresh,
+        target,
+        attempt,
+        why,
+        crossRegion: crossRegion,
+        regionName: regionName,
+      );
     } catch (e) {
       if (sessionEpoch != _sessionEpoch) return;
       final vpnErr = asVpnError(e);
@@ -630,28 +645,50 @@ extension ConnectionRecovery on ConnectionController {
   }
 
   /// Resolves the failover server for [oldDial] against fresh [regions].
-  /// An explicit user server pin constrains the move to that server's
-  /// parent region (resolved via discovery): same-region moves stay
-  /// allowed, but never across regions. An unresolvable parent means no
-  /// verifiable same-region capacity, so the pinned no-capacity error
-  /// applies instead of a cross-region move.
-  String? _pickFailoverTarget(List<Region> regions, DialParams oldDial) {
-    final explicit = snap.explicitTarget;
-    String? failoverRegionId;
-    if (explicit) {
+  ///
+  /// An explicit user server pin resolves its parent region (via discovery)
+  /// purely as a *preference*: same-region siblings are tried first, but when
+  /// the pinned region has no other capacity — or the pinned server is gone
+  /// from discovery entirely — the move roams to the lowest-load server
+  /// anywhere rather than stranding the session on a dead one.
+  ///
+  /// [crossRegion] reports that the pick left the pinned region so the
+  /// caller can drop the pin to Auto instead of persisting a server the user
+  /// never chose. An unresolvable parent counts as cross-region: a pin whose
+  /// server vanished is void whatever the replacement is.
+  ({String? serverId, bool crossRegion, String? regionName})
+  _pickFailoverTarget(List<Region> regions, DialParams oldDial) {
+    Region? pinnedRegion;
+    if (snap.explicitTarget) {
       final pinnedServer = snap.serverId ?? oldDial.serverId;
       for (final r in regions) {
         if (r.servers.any((s) => s.id == pinnedServer)) {
-          failoverRegionId = r.id;
+          pinnedRegion = r;
           break;
         }
       }
     }
-    return pickFailoverTarget(
+    final target = pickFailoverTarget(
       regions: regions,
-      currentRegionId: failoverRegionId,
+      currentRegionId: pinnedRegion?.id,
       currentServerId: oldDial.serverId,
-      stayInRegion: explicit,
+    );
+    if (target == null) {
+      return (serverId: null, crossRegion: false, regionName: null);
+    }
+    Region? targetRegion;
+    for (final r in regions) {
+      if (r.servers.any((s) => s.id == target)) {
+        targetRegion = r;
+        break;
+      }
+    }
+    final crossRegion =
+        snap.explicitTarget && pinnedRegion?.id != targetRegion?.id;
+    return (
+      serverId: target,
+      crossRegion: crossRegion,
+      regionName: targetRegion?.name,
     );
   }
 

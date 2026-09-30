@@ -304,7 +304,7 @@ void main() {
       );
     });
 
-    test('stayInRegion keeps same-region moves', () {
+    test('a pinned region only biases the order', () {
       final regions = [
         region('us', [server('dead'), server('b', peers: 5)]),
         region('eu', [server('c', peers: 1)]),
@@ -313,12 +313,13 @@ void main() {
         regions: regions,
         currentRegionId: 'us',
         currentServerId: 'dead',
-        stayInRegion: true,
       );
+      // The busier same-region sibling still wins over the emptier region:
+      // a pin is a preference, not a hard constraint.
       expect(target, 'b');
     });
 
-    test('stayInRegion blocks cross-region fallback', () {
+    test('a dead pinned region falls back across regions', () {
       final regions = [
         region('us', [server('dead')]),
         region('eu', [server('c', peers: 7), server('d', peers: 2)]),
@@ -328,13 +329,12 @@ void main() {
           regions: regions,
           currentRegionId: 'us',
           currentServerId: 'dead',
-          stayInRegion: true,
         ),
-        isNull,
+        'd',
       );
     });
 
-    test('stayInRegion without a region never moves', () {
+    test('a null region (unpinned) picks the global lowest load', () {
       final regions = [
         region('us', [server('a', peers: 9)]),
         region('eu', [server('b', peers: 3)]),
@@ -344,9 +344,8 @@ void main() {
           regions: regions,
           currentRegionId: null,
           currentServerId: 'a',
-          stayInRegion: true,
         ),
-        isNull,
+        'b',
       );
     });
   });

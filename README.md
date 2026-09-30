@@ -609,8 +609,9 @@ rest of the pipeline (which files, when, verify) is unchanged.
   while manual switch/rotate keep the 10s one.
 - Ladder & budgets: offline restart on the cached config (zero API calls) →
   after one same-server restart, the next corroborated stall moves servers
-  (same region first, then global lowest-load; an explicit pin errors out
-  instead of roaming). At most 3 moves per outage window, then two trailing
+  (same region first, then global lowest-load; an explicit pin only biases
+  that order — if its region is dead or gone, the move roams and the pin
+  drops back to Auto). At most 3 moves per outage window, then two trailing
   same-server restarts, after which recovery is surfaced as an actionable
   error instead of restarting a proven-dead config forever. A successful
   status poll ends the outage and restores the budget only when the handshake

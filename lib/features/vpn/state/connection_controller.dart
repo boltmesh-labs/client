@@ -425,9 +425,11 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> releaseDevice() => _releaseDeviceOp();
 
   /// Records the pinned server: null means Auto (unpinned). [explicitTarget]
-  /// marks a manual user tap (constrains auto-failover to the server's
-  /// region); null preserves the current flag for internal re-pins (canonical
-  /// pins, failover moves). Persisted best-effort so disconnect → connect and
+  /// marks a manual user tap; it biases auto-failover toward the server's
+  /// region without forbidding a cross-region move (a dead region roams and
+  /// drops the pin, see `_recordAutoFailoverSuccess`). null preserves the
+  /// current flag for internal re-pins (canonical pins, same-region
+  /// failover moves). Persisted best-effort so disconnect → connect and
   /// restarts redial the same server; failures only log.
   void selectTarget({required String? serverId, bool? explicitTarget}) {
     final explicit = explicitTarget ?? state.explicitTarget;
