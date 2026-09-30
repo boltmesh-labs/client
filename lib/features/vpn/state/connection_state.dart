@@ -14,12 +14,13 @@ abstract class ConnState with _$ConnState {
     @Default(ConnPhase.idle) ConnPhase phase,
     @Default('') String message,
     DialParams? dial,
-    String? regionId,
+    // The pinned server (Regions tab selection). Null means Auto: every
+    // connect re-picks the backend's lowest-load server.
     String? serverId,
-    // True when the pinned target came from an explicit user tap (Regions
-    // tab server/region selection). Auto-picked Quick Connect targets leave
-    // this false, so dead-server failover may still roam globally; an
-    // explicit pin constrains failover to the selected region instead.
+    // True when the pinned server came from an explicit user tap (Regions
+    // tab selection). Auto-picked Quick Connect targets leave this false, so
+    // dead-server failover may still roam globally; an explicit pin
+    // constrains failover to the server's region instead.
     @Default(false) bool explicitTarget,
     DeviceStatus? deviceStatus,
     DateTime? lastStatusAt,

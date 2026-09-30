@@ -30,7 +30,6 @@ void main() {
   test('omitted nullable args keep, explicit null clears', () {
     const full = ConnState(
       dial: _dial,
-      regionId: 'r-1',
       serverId: 's-1',
       deviceStatus: _status,
       healthNote: 'stale',
@@ -39,14 +38,13 @@ void main() {
 
     final kept = full.copyWith(message: 'x');
     expect(kept.dial, _dial);
-    expect(kept.regionId, 'r-1');
+    expect(kept.serverId, 's-1');
     expect(kept.deviceStatus, _status);
     expect(kept.healthNote, 'stale');
     expect(kept.lastStage, VpnStage.connected);
 
     final cleared = full.copyWith(
       dial: null,
-      regionId: null,
       serverId: null,
       deviceStatus: null,
       lastStatusAt: null,
@@ -54,7 +52,6 @@ void main() {
       lastStage: null,
     );
     expect(cleared.dial, isNull);
-    expect(cleared.regionId, isNull);
     expect(cleared.serverId, isNull);
     expect(cleared.deviceStatus, isNull);
     expect(cleared.healthNote, isNull);
@@ -76,7 +73,7 @@ void main() {
     expect(cleared.txBytes, isNull);
   });
 
-  test('selectTarget always replaces both sides', () {
+  test('selectTarget replaces the pinned server and null clears it', () {
     final container = ProviderContainer(
       overrides: [
         networkMonitorProvider.overrideWithValue(
@@ -87,21 +84,14 @@ void main() {
     addTearDown(container.dispose);
     final ctl = container.read(connectionProvider.notifier);
 
-    // Pin a server, then Quick Connect a region: the stale server must not
-    // survive (wrong-target bug: keep-semantics provisioned to s-1 while
-    // the UI showed r-2).
-    ctl.selectTarget(regionId: null, serverId: 's-1');
-    ctl.selectTarget(regionId: 'r-2', serverId: null);
+    ctl.selectTarget(serverId: 's-1');
+    ctl.selectTarget(serverId: 's-2');
     var state = container.read(connectionProvider);
-    expect(state.regionId, 'r-2');
-    expect(state.serverId, isNull);
-
-    // Mirror: pin a region, then tap a server.
-    ctl.selectTarget(regionId: 'r-1', serverId: null);
-    ctl.selectTarget(regionId: null, serverId: 's-2');
-    state = container.read(connectionProvider);
-    expect(state.regionId, isNull);
     expect(state.serverId, 's-2');
+
+    ctl.selectTarget(serverId: null);
+    state = container.read(connectionProvider);
+    expect(state.serverId, isNull);
   });
 
   test('selectTarget explicit flag defaults false, preserves, overrides', () {
@@ -116,23 +106,23 @@ void main() {
     final ctl = container.read(connectionProvider.notifier);
 
     // Auto pins leave the flag false.
-    ctl.selectTarget(regionId: 'r-1', serverId: null);
+    ctl.selectTarget(serverId: null);
     expect(container.read(connectionProvider).explicitTarget, isFalse);
 
     // Manual taps set it.
-    ctl.selectTarget(regionId: 'r-1', serverId: null, explicitTarget: true);
+    ctl.selectTarget(serverId: 's-1', explicitTarget: true);
     expect(container.read(connectionProvider).explicitTarget, isTrue);
 
     // Internal re-pins (null) preserve it across target changes.
-    ctl.selectTarget(regionId: null, serverId: 's-2');
+    ctl.selectTarget(serverId: 's-2');
     var state = container.read(connectionProvider);
     expect(state.serverId, 's-2');
     expect(state.explicitTarget, isTrue);
 
     // Auto paths clear it explicitly.
-    ctl.selectTarget(regionId: 'r-9', serverId: null, explicitTarget: false);
+    ctl.selectTarget(serverId: 's-9', explicitTarget: false);
     state = container.read(connectionProvider);
-    expect(state.regionId, 'r-9');
+    expect(state.serverId, 's-9');
     expect(state.explicitTarget, isFalse);
   });
 }

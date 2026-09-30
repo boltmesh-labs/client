@@ -222,7 +222,6 @@ class FakeDeviceStore extends DeviceStore {
       ..remove('name')
       ..remove('idem')
       ..remove('idem_target')
-      ..remove('last_region')
       ..remove('last_server')
       ..remove('last_explicit')
       ..remove('last_dial');
@@ -289,15 +288,13 @@ class FakeDeviceStore extends DeviceStore {
   bool _lastTargetHookSpent = false;
 
   @override
-  Future<({String? regionId, String? serverId, bool explicitTarget})>
-  lastTarget() async {
+  Future<({String? serverId, bool explicitTarget})> lastTarget() async {
     final hook = lastTargetHook;
     if (hook != null && !_lastTargetHookSpent) {
       _lastTargetHookSpent = true;
       await hook();
     }
     return (
-      regionId: _m['last_region'],
       serverId: _m['last_server'],
       explicitTarget: _m['last_explicit'] == '1',
     );
@@ -305,11 +302,9 @@ class FakeDeviceStore extends DeviceStore {
 
   @override
   Future<void> setLastTarget({
-    required String? regionId,
     required String? serverId,
     required bool explicitTarget,
   }) async {
-    _m['last_region'] = regionId;
     _m['last_server'] = serverId;
     _m['last_explicit'] = explicitTarget ? '1' : '0';
   }

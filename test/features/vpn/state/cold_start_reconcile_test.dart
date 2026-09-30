@@ -103,11 +103,7 @@ void main() {
       final store = ColdStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      await store.setLastTarget(
-        regionId: null,
-        serverId: 'srv-1',
-        explicitTarget: true,
-      );
+      await store.setLastTarget(serverId: 'srv-1', explicitTarget: true);
       final tunnel = ColdTunnel(events, stage: VpnStage.connected);
       final (container, ctl) = coldContainer(
         store: store,
@@ -142,11 +138,7 @@ void main() {
         // The pin outlived the peer: the restored tunnel is on srv-1 while
         // storage still names srv-2.
         await store.setLastDialJson(jsonEncode(dialJson()));
-        await store.setLastTarget(
-          regionId: null,
-          serverId: 'srv-2',
-          explicitTarget: true,
-        );
+        await store.setLastTarget(serverId: 'srv-2', explicitTarget: true);
         final tunnel = ColdTunnel(events, stage: VpnStage.connected);
         final (container, ctl) = coldContainer(
           store: store,
@@ -199,7 +191,6 @@ void main() {
       expect(state.dial?.serverId, 'srv-1');
       // No saved pin: the restored session stays unpinned (Auto) instead
       // of collapsing onto the restored server.
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
       expect(state.explicitTarget, isFalse);
       expect(events, isNot(contains('tunnel:start')));

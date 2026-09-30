@@ -65,11 +65,7 @@ void main() {
       await store.setDeviceName('Old Phone');
       await store.setProvisionKey('idem');
       await store.setProvisionTarget('r|s');
-      await store.setLastTarget(
-        regionId: 'r',
-        serverId: null,
-        explicitTarget: true,
-      );
+      await store.setLastTarget(serverId: 's1', explicitTarget: true);
       await store.setLastDialJson('{}');
       await store.setAllowLocal(false);
 
@@ -83,7 +79,6 @@ void main() {
       expect(await store.provisionKey(), isNull);
       expect(await store.provisionTarget(), isNull);
       final target = await store.lastTarget();
-      expect(target.regionId, isNull);
       expect(target.serverId, isNull);
       expect(target.explicitTarget, isFalse);
       expect(await store.lastDialJson(), isNull);
@@ -101,44 +96,24 @@ void main() {
     await store.setKeypair(privateKey: 'priv', publicKey: 'pub');
     await store.setDeviceName('Phone');
     await store.setProvisionKey('idem');
-    await store.setLastTarget(
-      regionId: null,
-      serverId: 's1',
-      explicitTarget: true,
-    );
+    await store.setLastTarget(serverId: 's1', explicitTarget: true);
     await store.setLastDialJson('{}');
 
     expect(storage.values.keys, [DeviceStore.identityKey]);
   });
 
-  test(
-    'the target is one value, never a torn region/server/explicit triple',
-    () async {
-      final storage = MapSecureStorage();
-      final store = DeviceStore(storage);
-      await store.setLastTarget(
-        regionId: null,
-        serverId: 's1',
-        explicitTarget: true,
-      );
-      await store.setLastTarget(
-        regionId: 'r1',
-        serverId: null,
-        explicitTarget: false,
-      );
+  test('the target is one value, never a torn server/explicit pair', () async {
+    final storage = MapSecureStorage();
+    final store = DeviceStore(storage);
+    await store.setLastTarget(serverId: 's1', explicitTarget: true);
+    await store.setLastTarget(serverId: 's2', explicitTarget: false);
 
-      // A single key carries the whole target: there is no second write whose
-      // interleaving could persist both sides of two different selections.
-      expect(storage.values.keys, [DeviceStore.identityKey]);
-      final decoded =
-          jsonDecode(storage.values[DeviceStore.identityKey]!) as Map;
-      expect(decoded['lastTarget'], {
-        'regionId': 'r1',
-        'serverId': null,
-        'explicit': false,
-      });
-    },
-  );
+    // A single key carries the whole target: there is no second write whose
+    // interleaving could persist both halves of two different selections.
+    expect(storage.values.keys, [DeviceStore.identityKey]);
+    final decoded = jsonDecode(storage.values[DeviceStore.identityKey]!) as Map;
+    expect(decoded['lastTarget'], {'serverId': 's2', 'explicit': false});
+  });
 
   test('a target write queued before clearDevice cannot resurrect it', () async {
     // Reproduces the leak: selectTarget fires an unawaited write, then the
@@ -150,7 +125,6 @@ void main() {
     storage.writeGates.add(gate);
 
     final write = store.setLastTarget(
-      regionId: null,
       serverId: 'old-user-server',
       explicitTarget: true,
     );
@@ -163,7 +137,6 @@ void main() {
 
     final target = await store.lastTarget();
     expect(target.serverId, isNull);
-    expect(target.regionId, isNull);
     expect(storage.values, isNot(contains(DeviceStore.identityKey)));
   });
 
@@ -173,16 +146,8 @@ void main() {
     final firstGate = Completer<void>();
     storage.writeGates.add(firstGate); // hold the first write only
 
-    final first = store.setLastTarget(
-      regionId: null,
-      serverId: 's1',
-      explicitTarget: true,
-    );
-    final second = store.setLastTarget(
-      regionId: null,
-      serverId: 's2',
-      explicitTarget: false,
-    );
+    final first = store.setLastTarget(serverId: 's1', explicitTarget: true);
+    final second = store.setLastTarget(serverId: 's2', explicitTarget: false);
     await Future<void>.delayed(Duration.zero);
     firstGate.complete();
     await first;
@@ -199,7 +164,7 @@ void main() {
       DeviceStore.identityKey: jsonEncode({
         'deviceId': 'dev-1',
         'deviceName': 'Old Phone',
-        'lastTarget': {'regionId': null, 'serverId': 's', 'explicit': true},
+        'lastTarget': {'serverId': 's', 'explicit': true},
       }),
     });
     final store = DeviceStore(storage);
@@ -219,18 +184,6 @@ void main() {
     expect((await store.lastTarget()).serverId, isNull);
     expect(storage.deleteCount, 2);
     expect(storage.values, isEmpty);
-  });
-
-  test('setLastTarget rejects a two-sided target', () {
-    final store = DeviceStore(MapSecureStorage());
-    expect(
-      () => store.setLastTarget(
-        regionId: 'r',
-        serverId: 's',
-        explicitTarget: true,
-      ),
-      throwsA(isA<AssertionError>()),
-    );
   });
 
   test('setDeviceName enforces the backend length contract', () async {
@@ -293,27 +246,17 @@ void main() {
     expect(await store.allowLocal(), isTrue);
   });
 
-  test('lastTarget round-trips and clears one side at a time', () async {
+  test('lastTarget round-trips the server pin', () async {
     final store = DeviceStore(MapSecureStorage());
 
-    await store.setLastTarget(
-      regionId: 'r1',
-      serverId: null,
-      explicitTarget: true,
-    );
+    await store.setLastTarget(serverId: 's1', explicitTarget: true);
     var target = await store.lastTarget();
-    expect(target.regionId, 'r1');
-    expect(target.serverId, isNull);
+    expect(target.serverId, 's1');
     expect(target.explicitTarget, isTrue);
 
-    await store.setLastTarget(
-      regionId: null,
-      serverId: 's1',
-      explicitTarget: false,
-    );
+    await store.setLastTarget(serverId: null, explicitTarget: false);
     target = await store.lastTarget();
-    expect(target.regionId, isNull);
-    expect(target.serverId, 's1');
+    expect(target.serverId, isNull);
     expect(target.explicitTarget, isFalse);
   });
 

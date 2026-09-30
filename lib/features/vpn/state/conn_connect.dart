@@ -99,7 +99,8 @@ extension ConnectionConnect on ConnectionController {
   /// ephemeral until the POST succeeds and is only then persisted, so a
   /// timeout can't clobber the working identity. Explicit [regionId]/
   /// [serverId] dial that target for this call only; nulls fall back to the
-  /// pinned target in [snap] (both null = backend global auto-pick).
+  /// pinned server in [snap] (serverId only, both null = backend global
+  /// auto-pick).
   ///
   /// [cancelToken] aborts the in-flight POST when the caller's probe times
   /// out; a cancelled (or already-cancelled) bind never persists its key, so
@@ -128,7 +129,7 @@ extension ConnectionConnect on ConnectionController {
       deviceId: deviceId,
       publicKey: kp.publicKey,
       serverId: serverId ?? snap.serverId,
-      regionId: regionId ?? snap.regionId,
+      regionId: regionId,
       cancelToken: cancelToken,
     );
     if (!sessionCurrent()) {
@@ -205,10 +206,7 @@ extension ConnectionConnect on ConnectionController {
             final dial = reconciled.dial;
             await _startWith(dial, sessionEpoch: sessionEpoch);
             if (sessionEpoch != _sessionEpoch) return;
-            await _pinCanonicalTarget(
-              dial,
-              regionRequest: snap.regionId != null,
-            );
+            _pinCanonicalTarget(dial);
             if (sessionEpoch != _sessionEpoch) return;
             return;
           } catch (e2) {
@@ -244,7 +242,7 @@ extension ConnectionConnect on ConnectionController {
               deviceId: retryId,
               publicKey: kp.publicKey,
               serverId: oneShotServerId ?? snap.serverId,
-              regionId: oneShotRegionId ?? snap.regionId,
+              regionId: oneShotRegionId,
             );
             if (sessionEpoch != _sessionEpoch) return;
             await _device.setKeypair(
@@ -384,33 +382,26 @@ extension ConnectionConnect on ConnectionController {
 
   /// Drops a leftover persisted pin once Quick Connect commits to Auto.
   ///
-  /// Both sticky branches above normally make this a no-op: a pin in [snap]
-  /// is redialed as-is, and a pin only in storage is rehydrated by the
-  /// saved-target read. So the Auto branch is reached with a pin still in
-  /// storage only when that read failed (a locked keychain) — and a pin left
-  /// behind there is the one shape that outlives the session: the next cold
-  /// start rehydrates it through [_restoreColdSession] and the app sticks to
-  /// a target the user has since left behind.
+  /// A pin in [snap] is redialed as-is, and a pin only in storage is
+  /// rehydrated by the saved-target read. So the Auto branch is reached with
+  /// a pin still in storage only when that read failed (a locked keychain) —
+  /// and a pin left behind there is the one shape that outlives the session:
+  /// the next cold start rehydrates it through [_restoreColdSession] and the
+  /// app sticks to a target the user has since left behind.
   ///
   /// Deliberately independent of how the connect that follows ends: the
   /// decision to be in Auto mode, not that connect's outcome, is what a
-  /// persisted pin has to agree with. In-memory state is already unpinned
-  /// here (the sticky branches return first, and the Auto path never pins),
-  /// so only storage is touched. [isSuperseded] guards the read and the write:
-  /// a Disconnect or a newer session landing in between may have re-pinned,
-  /// and an abandoned op must not clear that. An already-unpinned store is
-  /// left alone (no needless secure-storage write).
+  /// persisted pin has to agree with. [isSuperseded] guards the read and the
+  /// write: a Disconnect or a newer session landing in between may have
+  /// re-pinned, and an abandoned op must not clear that. An already-unpinned
+  /// store is left alone (no needless secure-storage write).
   Future<void> _clearPersistedPin(bool Function() isSuperseded) async {
     if (isSuperseded()) return;
     try {
       final saved = await _device.lastTarget();
-      if (saved.regionId == null && saved.serverId == null) return;
+      if (saved.serverId == null) return;
       if (isSuperseded()) return;
-      await _device.setLastTarget(
-        regionId: null,
-        serverId: null,
-        explicitTarget: false,
-      );
+      await _device.setLastTarget(serverId: null, explicitTarget: false);
     } catch (e) {
       AppLog.error('auto connect clear persisted pin failed', e);
     }
@@ -419,21 +410,19 @@ extension ConnectionConnect on ConnectionController {
   /// Quick Connect shared by the Home power button and the Regions
   /// Quick-Connect tile.
   ///
-  /// Sticky when a target is pinned: it redials as-is via [connect] (or
-  /// [switchServer] when connected). When nothing is pinned (Auto, e.g.
-  /// after [selectAuto]) the lowest-load region with capacity
-  /// ([autoPickRegion]) is dialed one-shot via [_autoConnectRegion]: the
-  /// state stays unpinned, so every Auto connect re-picks fresh and the
+  /// Sticky when a server is pinned: it is discovery-validated via
+  /// [_pinnedConnectOp] (or [switchServer] when connected). When nothing is
+  /// pinned (Auto, e.g. after [selectAuto]) the lowest-load region with
+  /// capacity ([autoPickRegion]) is dialed one-shot via [_autoConnectRegion]:
+  /// the state stays unpinned, so every Auto connect re-picks fresh and the
   /// next disconnect → Connect moves again instead of sticking to the old
   /// server. While connected, an Auto call no-ops when the live server is
   /// already inside the best region, else it switches one-shot without
-  /// pinning. Delegates without holding the mutex: connected →
-  /// [switchServer] (keeps the same-target no-op), otherwise
-  /// [_autoConnectRegion] (which probes then reuses/switches/connects).
-  /// Never pre-pins before a switch: that would trip the same-target skip
-  /// check. A stale pin surfaces the backend error with the pin kept (no
-  /// silent auto-pick fallback). Committing to Auto also drops any pin left
-  /// in storage by an earlier session ([_clearPersistedPin]) — before the
+  /// pinning. Delegates without holding the mutex: connected → [switchServer]
+  /// (keeps the same-target no-op), otherwise discovery then
+  /// reuse/switch/connect. Never pre-pins before a switch: that would trip
+  /// the same-target skip check. Committing to Auto also drops any pin left in
+  /// storage by an earlier session ([_clearPersistedPin]) — before the
   /// connected one-shot switch and the already-on-best-region no-op, not just
   /// the first connect of a session. The whole discovery/probe sequence is
   /// lock-free by design, so it snapshots [_teardownEpoch] up front and
@@ -451,18 +440,19 @@ extension ConnectionConnect on ConnectionController {
     // Same as the switch op: a stale failure must not leak into this one's
     // feedback.
     snap = snap.copyWith(opFailed: false);
-    // Sticky reconnect: the last selected server/region redials as-is, so
-    // disconnect → Connect stays on the same target.
-    if (snap.serverId != null || snap.regionId != null) {
+    // Sticky reconnect: the last selected server redials, so disconnect →
+    // Connect stays on the same target once discovery confirms it still
+    // exists.
+    if (snap.serverId != null) {
       if (snap.phase == ConnPhase.connected) {
         await _switchServerOp(
-          regionId: snap.regionId,
+          regionId: null,
           serverId: snap.serverId,
           expectedTeardown: teardownEpoch,
         );
         return;
       }
-      await _connectOp(expectedTeardown: teardownEpoch);
+      await _pinnedConnectOp(expectedTeardown: teardownEpoch);
       return;
     }
     // Restart survival: the in-memory pin is gone but the persisted one
@@ -473,21 +463,20 @@ extension ConnectionConnect on ConnectionController {
       if (superseded() || snap.phase == ConnPhase.working) {
         return;
       }
-      if (saved.serverId != null || saved.regionId != null) {
+      if (saved.serverId != null) {
         if (snap.phase == ConnPhase.connected) {
           await _switchServerOp(
-            regionId: saved.regionId,
+            regionId: null,
             serverId: saved.serverId,
             expectedTeardown: teardownEpoch,
           );
           return;
         }
         selectTarget(
-          regionId: saved.regionId,
           serverId: saved.serverId,
           explicitTarget: saved.explicitTarget,
         );
-        await _connectOp(expectedTeardown: teardownEpoch);
+        await _pinnedConnectOp(expectedTeardown: teardownEpoch);
         return;
       }
     } catch (e) {
@@ -512,6 +501,70 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     if (superseded()) return;
+    await _connectAutoWith(regions, expectedTeardown: teardownEpoch);
+  }
+
+  /// Discovery-validated connect onto the pinned server.
+  ///
+  /// Tapping Connect while disconnected with a server pinned re-fetches the
+  /// region list every time (the backend allows 60s client caching, but a
+  /// re-pick must not trust a stale cache). The pin is honored only while the
+  /// server is still listed:
+  ///  - listed → dial it as usual (config reuse or a fresh bind; pin kept);
+  ///  - gone → fall back to Auto ([_connectAutoWith]) and drop the stale pin;
+  ///  - discovery failed → best-effort dial the pin as-is, since the dial
+  ///    itself is the authoritative attempt.
+  Future<void> _pinnedConnectOp({int? expectedTeardown}) async {
+    final sessionEpoch = _sessionEpoch;
+    final teardownEpoch = expectedTeardown ?? _teardownEpoch;
+    bool superseded() =>
+        sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
+    final pinned = snap.serverId;
+    if (pinned == null) {
+      await _connectOp(expectedTeardown: teardownEpoch);
+      return;
+    }
+    final List<Region> regions;
+    try {
+      regions = await _api.regions();
+    } catch (e) {
+      if (superseded()) return;
+      AppLog.error(
+        'pinned connect discovery failed',
+        asVpnError(e)?.message ?? e,
+      );
+      await _connectOp(expectedTeardown: teardownEpoch);
+      return;
+    }
+    if (superseded()) return;
+    final stillListed = regions.any(
+      (r) => r.servers.any((s) => s.id == pinned),
+    );
+    if (stillListed) {
+      // Confirmed still serving: dial it exactly as before (config reuse or a
+      // fresh bind), keeping the pin.
+      await _connectOp(expectedTeardown: teardownEpoch);
+      return;
+    }
+    AppLog.info('pinned server gone -> auto-pick');
+    // Abandoning a vanished server: clear the pin (in-memory + storage) so
+    // the UI stops highlighting it and the next connect re-picks cleanly.
+    selectTarget(serverId: null, explicitTarget: false);
+    if (superseded()) return;
+    await _connectAutoWith(regions, expectedTeardown: teardownEpoch);
+  }
+
+  /// Dials Auto against a freshly fetched [regions] list: the lowest-load
+  /// region with capacity, one-shot (never pins). Shared by the unpinned
+  /// Quick Connect path and the stale-pin fallback.
+  Future<void> _connectAutoWith(
+    List<Region> regions, {
+    int? expectedTeardown,
+  }) async {
+    final sessionEpoch = _sessionEpoch;
+    final teardownEpoch = expectedTeardown ?? _teardownEpoch;
+    bool superseded() =>
+        sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     final best = autoPickRegion(regions);
     if (best == null) {
       AppLog.info('quick connect: no capacity');

@@ -18,7 +18,7 @@ Widget homeConnectedPreview() {
     connState: const ConnState(
       phase: ConnPhase.connected,
       dial: previewDial,
-      regionId: 'r-fra',
+      serverId: 'srv-fra-1',
       deviceStatus: DeviceStatus(
         deviceId: 'dev-preview',
         status: 'active',

@@ -15,7 +15,7 @@ extension ConnectionProvision on ConnectionController {
       if (!sessionCurrent()) return;
       AppLog.info(
         'provision start device=${AppLog.redact(existing)} '
-        'region=${regionId ?? snap.regionId ?? '<auto>'} '
+        'region=${regionId ?? '<auto>'} '
         'server=${serverId ?? snap.serverId ?? '<auto>'}',
       );
       if (existing != null) {
@@ -29,7 +29,7 @@ extension ConnectionProvision on ConnectionController {
       // a retry with a different target mints a fresh pair, otherwise the
       // same key with a different body 409s forever (body conflict).
       final target =
-          'region=${regionId ?? snap.regionId ?? ''}'
+          'region=${regionId ?? ''}'
           '|server=${serverId ?? snap.serverId ?? ''}';
       String? storedTarget;
       try {
@@ -64,7 +64,7 @@ extension ConnectionProvision on ConnectionController {
       }
       final name = await _device.deviceName() ?? 'BoltMesh Device';
       if (!sessionCurrent()) return;
-      final targetRegionId = regionId ?? snap.regionId;
+      final targetRegionId = regionId;
       final targetServerId = serverId ?? snap.serverId;
       // Pin to finals: the closure below can't see the null-promotion of
       // the mutable [pub]/[idem] locals.

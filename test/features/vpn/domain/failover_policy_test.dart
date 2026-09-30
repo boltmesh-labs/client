@@ -260,8 +260,7 @@ void main() {
         currentRegionId: 'us',
         currentServerId: 'dead',
       );
-      expect(target?.serverId, 'b');
-      expect(target?.regionId, isNull);
+      expect(target, 'b');
     });
 
     test('falls back to global when the region has no other capacity', () {
@@ -274,7 +273,7 @@ void main() {
         currentRegionId: 'us',
         currentServerId: 'dead',
       );
-      expect(target?.serverId, 'd');
+      expect(target, 'd');
     });
 
     test('unpinned picks global lowest load', () {
@@ -287,7 +286,7 @@ void main() {
         currentRegionId: null,
         currentServerId: 'a',
       );
-      expect(target?.serverId, 'b');
+      expect(target, 'b');
     });
 
     test('null when no other server has capacity', () {
@@ -316,7 +315,7 @@ void main() {
         currentServerId: 'dead',
         stayInRegion: true,
       );
-      expect(target?.serverId, 'b');
+      expect(target, 'b');
     });
 
     test('stayInRegion blocks cross-region fallback', () {

@@ -424,29 +424,15 @@ class ConnectionController extends Notifier<ConnState> {
   /// sign-out state.
   Future<void> releaseDevice() => _releaseDeviceOp();
 
-  /// Records the exact pinned target: both sides are always replaced, so
-  /// callers must pass the full pair with exactly one side non-null
-  /// (the Regions tab passes an explicit null on the unselected side).
-  /// [explicitTarget] marks a manual user tap (constrains auto-failover to
-  /// the region); null preserves the current flag for internal re-pins
-  /// (canonical pins, failover moves). Persisted best-effort so disconnect
-  /// → connect and restarts redial the same target; failures only log.
-  void selectTarget({
-    required String? regionId,
-    required String? serverId,
-    bool? explicitTarget,
-  }) {
+  /// Records the pinned server: null means Auto (unpinned). [explicitTarget]
+  /// marks a manual user tap (constrains auto-failover to the server's
+  /// region); null preserves the current flag for internal re-pins (canonical
+  /// pins, failover moves). Persisted best-effort so disconnect → connect and
+  /// restarts redial the same server; failures only log.
+  void selectTarget({required String? serverId, bool? explicitTarget}) {
     final explicit = explicitTarget ?? state.explicitTarget;
-    state = state.copyWith(
-      regionId: regionId,
-      serverId: serverId,
-      explicitTarget: explicit,
-    );
-    _persistTarget(
-      regionId: regionId,
-      serverId: serverId,
-      explicitTarget: explicit,
-    );
+    state = state.copyWith(serverId: serverId, explicitTarget: explicit);
+    _persistTarget(serverId: serverId, explicitTarget: explicit);
   }
 
   /// Fire-and-forget persist that never throws: the async body catches
@@ -455,14 +441,12 @@ class ConnectionController extends Notifier<ConnState> {
   /// [DeviceStore] serializes the write in call order, so this one-liner
   /// cannot land after a later [clearDevice] and resurrect the old target.
   void _persistTarget({
-    required String? regionId,
     required String? serverId,
     required bool explicitTarget,
   }) {
     unawaited(() async {
       try {
         await _device.setLastTarget(
-          regionId: regionId,
           serverId: serverId,
           explicitTarget: explicitTarget,
         );
@@ -472,66 +456,30 @@ class ConnectionController extends Notifier<ConnState> {
     }());
   }
 
-  /// Clears any pinned region/server back to Auto (unpinned, non-explicit)
-  /// and awaits the persist, so a following [quickConnect] can't resurrect
-  /// the old pin from a racing saved-target read. Never throws: storage
-  /// failures only log.
+  /// Clears the pinned server back to Auto (unpinned, non-explicit) and
+  /// awaits the persist, so a following [quickConnect] can't resurrect the
+  /// old pin from a racing saved-target read. Never throws: storage failures
+  /// only log.
   Future<void> selectAuto() async {
-    state = state.copyWith(
-      regionId: null,
-      serverId: null,
-      explicitTarget: false,
-    );
+    state = state.copyWith(serverId: null, explicitTarget: false);
     try {
-      await _device.setLastTarget(
-        regionId: null,
-        serverId: null,
-        explicitTarget: false,
-      );
+      await _device.setLastTarget(serverId: null, explicitTarget: false);
     } catch (e) {
       AppLog.error('select auto persist failed', e);
     }
   }
 
-  /// Pins the canonical target from a freshly loaded [dial] (server truth,
-  /// never request params): a server-targeted request pins
-  /// `dial.serverId`; a region-targeted request pins the parent region of
-  /// `dial.serverId` resolved via discovery, falling back to a server pin
-  /// when discovery fails or the server is unknown. Best-effort: never
-  /// throws, so a discovery blip can't fail an otherwise good reconnect.
+  /// Pins the canonical server from a freshly loaded [dial] (server truth,
+  /// never request params). Best-effort: never throws.
   ///
   /// With [preserveAuto] (the connect-path default) an unpinned (Auto)
   /// state is left alone: Auto reconnects must not collapse into a server
   /// pin. Switch-path callers pass false: an explicit switch carries user
   /// intent even when the pin hasn't landed in [snap] yet (e.g. an
   /// already-bound 409 before the post-success pin).
-  Future<void> _pinCanonicalTarget(
-    DialParams dial, {
-    required bool regionRequest,
-    bool preserveAuto = true,
-  }) async {
-    if (preserveAuto && snap.regionId == null && snap.serverId == null) {
-      return;
-    }
-    if (!regionRequest) {
-      selectTarget(regionId: null, serverId: dial.serverId);
-      return;
-    }
-    try {
-      final regions = await _api.regions();
-      for (final r in regions) {
-        if (r.servers.any((s) => s.id == dial.serverId)) {
-          selectTarget(regionId: r.id, serverId: null);
-          return;
-        }
-      }
-      AppLog.info(
-        'canonical pin: server ${dial.serverId} not in discovery -> server pin',
-      );
-    } catch (e) {
-      AppLog.error('canonical pin region resolve failed', e);
-    }
-    selectTarget(regionId: null, serverId: dial.serverId);
+  void _pinCanonicalTarget(DialParams dial, {bool preserveAuto = true}) {
+    if (preserveAuto && snap.serverId == null) return;
+    selectTarget(serverId: dial.serverId);
   }
 
   /// Arms the 429 cooldown from [e] when it is a rate-limit rejection:

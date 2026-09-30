@@ -367,41 +367,12 @@ void main() {
     await seedConnected(container, store, tunnel);
     // An explicit pin on the live server short-circuits before any key
     // generation or API call (the empty key queue below would throw).
-    container
-        .read(connectionProvider.notifier)
-        .selectTarget(regionId: null, serverId: 'srv-1');
+    container.read(connectionProvider.notifier).selectTarget(serverId: 'srv-1');
     events.clear();
 
     await container
         .read(connectionProvider.notifier)
         .switchServer(regionId: null, serverId: 'srv-1');
-
-    expect(events, isEmpty);
-    expect(container.read(connectionProvider).phase, ConnPhase.connected);
-  });
-
-  test('switch to the current region makes no API call', () async {
-    final events = <String>[];
-    final store = FakeStore();
-    final keys = FakeKeys(const []);
-    final api = VpnApi(
-      recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        throw StateError('unexpected ${o.path}');
-      }),
-    );
-    final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
-    await seedConnected(container, store, tunnel);
-    // Simulate a quick-connect to region r-1, then re-select it.
-    container
-        .read(connectionProvider.notifier)
-        .selectTarget(regionId: 'r-1', serverId: null);
-    events.clear();
-
-    await container
-        .read(connectionProvider.notifier)
-        .switchServer(regionId: 'r-1', serverId: null);
 
     expect(events, isEmpty);
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
@@ -432,7 +403,6 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.serverId, 'srv-1');
-    expect(state.regionId, isNull);
     expect(state.explicitTarget, isTrue);
     expect(state.opFailed, isFalse);
     final saved = await store.lastTarget();
@@ -466,7 +436,7 @@ void main() {
       // "Already connected to ..." and did nothing at all.
       container
           .read(connectionProvider.notifier)
-          .selectTarget(regionId: null, serverId: 'srv-1');
+          .selectTarget(serverId: 'srv-1');
 
       await container
           .read(connectionProvider.notifier)
@@ -499,11 +469,9 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-1');
-    expect(state.regionId, isNull);
     expect(state.serverId, isNull);
     expect(state.explicitTarget, isFalse);
     final saved = await store.lastTarget();
-    expect(saved.regionId, isNull);
     expect(saved.serverId, isNull);
     expect(saved.explicitTarget, isFalse);
   });
@@ -530,7 +498,7 @@ void main() {
     ctl.debugTunnel = FakeTunnel(events);
 
     // Stale pin: server s-1 selected earlier, now Quick Connect to r-2.
-    ctl.selectTarget(regionId: null, serverId: 's-1');
+    ctl.selectTarget(serverId: 's-1');
 
     await ctl.switchServer(regionId: 'r-2', serverId: null);
 
@@ -542,8 +510,7 @@ void main() {
     expect(provisionBody!.containsKey('server_id'), isFalse);
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
-    expect(state.regionId, 'r-2');
-    expect(state.serverId, isNull);
+    expect(state.serverId, 'srv-r2');
   });
 
   test('provision retry reuses the same keypair and idempotency key', () async {
@@ -1263,7 +1230,7 @@ void main() {
     },
   ];
 
-  test('already-bound region switch while idle loads config and pins parent region', () async {
+  test('already-bound region switch while idle loads config and pins the bound server', () async {
     final events = <String>[];
     final store = FakeStore();
     await store.setDeviceId('dev-1');
@@ -1293,56 +1260,14 @@ void main() {
       'POST:/vpn-devices/dev-1/switch',
       'GET:/vpn-devices/dev-1/config',
       'tunnel:start',
-      'GET:/vpn-regions',
     ]);
     // The ephemeral switch key is discarded; the working key survives.
     expect(await store.privateKey(), 'OLD-PRIV');
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-1');
-    expect(state.regionId, 'r-1');
-    expect(state.serverId, isNull);
+    expect(state.serverId, 'srv-1');
   });
-
-  test(
-    'already-bound region switch falls back to server pin when discovery fails',
-    () async {
-      final events = <String>[];
-      final store = FakeStore();
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/switch')) throw alreadyConnected(o);
-          if (o.path.endsWith('/config')) return dialJson();
-          if (o.path.endsWith('/vpn-regions')) throw networkTimeout(o);
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(store: store, keys: keys, api: api);
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-        events,
-      );
-
-      await container
-          .read(connectionProvider.notifier)
-          .switchServer(regionId: 'r-1', serverId: null);
-
-      expect(events, [
-        'POST:/vpn-devices/dev-1/switch',
-        'GET:/vpn-devices/dev-1/config',
-        'tunnel:start',
-        'GET:/vpn-regions',
-      ]);
-      expect(await store.privateKey(), 'OLD-PRIV');
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-1');
-      expect(state.regionId, isNull);
-      expect(state.serverId, 'srv-1');
-    },
-  );
 
   test(
     'already-bound server switch while connected restarts on dial server',
@@ -1383,7 +1308,6 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
-      expect(state.regionId, isNull);
       expect(state.serverId, 'srv-1');
     },
   );
@@ -1451,7 +1375,6 @@ void main() {
         final state = container.read(connectionProvider);
         expect(state.phase, ConnPhase.connected);
         expect(state.dial?.serverId, 'srv-b');
-        expect(state.regionId, isNull);
         expect(state.serverId, isNull);
         expect(state.explicitTarget, isFalse);
       },
@@ -1500,7 +1423,6 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-best');
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
       expect(state.explicitTarget, isFalse);
     });
@@ -1541,7 +1463,6 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-b');
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
     });
 
@@ -1566,7 +1487,6 @@ void main() {
       // one-shot, staying unpinned (Auto).
       await container.read(connectionProvider.notifier).quickConnect();
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      expect(container.read(connectionProvider).regionId, isNull);
       expect(container.read(connectionProvider).serverId, isNull);
     });
 
@@ -1593,13 +1513,16 @@ void main() {
       expect(events, ['GET:/vpn-regions']);
     });
 
-    test('idle with pinned server reuses it without discovery', () async {
+    test('idle with pinned server re-fetches discovery and dials it', () async {
       final events = <String>[];
       final store = FakeStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final api = VpnApi(
         recordingDio(events, (o) {
+          if (o.path.endsWith('/vpn-regions')) {
+            return [regionJson('r-1', 'srv-1', 1)];
+          }
           if (o.path.endsWith('/config')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
@@ -1611,26 +1534,37 @@ void main() {
       );
       final ctl = container.read(connectionProvider.notifier);
       ctl.debugTunnel = FakeTunnel(events);
-      ctl.selectTarget(regionId: null, serverId: 'srv-1');
+      ctl.selectTarget(serverId: 'srv-1');
 
       events.clear();
       await ctl.quickConnect();
 
-      // Sticky: no discovery fetch, straight to config + tunnel start.
-      expect(events, ['GET:/vpn-devices/dev-1/config', 'tunnel:start']);
+      // Every pinned connect re-fetches discovery to confirm the server is
+      // still listed before dialing it.
+      expect(events, [
+        'GET:/vpn-regions',
+        'GET:/vpn-devices/dev-1/config',
+        'tunnel:start',
+      ]);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.serverId, 'srv-1');
     });
 
-    test('idle with pinned region reuses it without discovery', () async {
+    test('idle with a gone pinned server falls back to auto', () async {
       final events = <String>[];
       final store = FakeStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/vpn-regions')) {
+            return [regionJson('r-best', 'srv-b', 1)];
+          }
+          // Auto probes server truth, then reuses the live peer as-is.
+          if (o.path.endsWith('/config')) {
+            return dialJson(serverId: 'srv-b', serverName: 'b');
+          }
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1641,15 +1575,25 @@ void main() {
       );
       final ctl = container.read(connectionProvider.notifier);
       ctl.debugTunnel = FakeTunnel(events);
-      ctl.selectTarget(regionId: 'r-1', serverId: null);
+      ctl.selectTarget(serverId: 'srv-gone', explicitTarget: true);
 
       events.clear();
       await ctl.quickConnect();
 
-      expect(events, ['GET:/vpn-devices/dev-1/config', 'tunnel:start']);
+      // The vanished pin is dropped and the lowest-load region is dialed
+      // one-shot (the state stays unpinned).
+      expect(events, [
+        'GET:/vpn-regions',
+        'GET:/vpn-devices/dev-1/config',
+        'tunnel:start',
+      ]);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
-      expect(state.regionId, 'r-1');
+      expect(state.dial?.serverId, 'srv-b');
+      expect(state.serverId, isNull);
+      expect(state.explicitTarget, isFalse);
+      final saved = await store.lastTarget();
+      expect(saved.serverId, isNull);
     });
 
     test('disconnect keeps pin, quickConnect redials same server', () async {
@@ -1663,7 +1607,10 @@ void main() {
             return {'disconnected_peers': 1};
           }
           if (o.path.endsWith('/vpn-regions')) {
-            return [regionJson('r-other', 'srv-other', 0)];
+            return [
+              regionJson('r-1', 'srv-1', 0),
+              regionJson('r-other', 'srv-other', 0),
+            ];
           }
           throw StateError('unexpected ${o.path}');
         }),
@@ -1674,7 +1621,7 @@ void main() {
       // Simulate a server tap, then a graceful disconnect.
       container
           .read(connectionProvider.notifier)
-          .selectTarget(regionId: null, serverId: 'srv-1');
+          .selectTarget(serverId: 'srv-1');
       await container.read(connectionProvider.notifier).disconnect();
       expect(container.read(connectionProvider).phase, ConnPhase.idle);
       expect(container.read(connectionProvider).serverId, 'srv-1');
@@ -1682,8 +1629,12 @@ void main() {
 
       await container.read(connectionProvider.notifier).quickConnect();
 
-      // Same server, and no auto-pick discovery went out.
-      expect(events, ['GET:/vpn-devices/dev-1/config', 'tunnel:start']);
+      // The pin survives the disconnect and discovery confirms it.
+      expect(events, [
+        'GET:/vpn-regions',
+        'GET:/vpn-devices/dev-1/config',
+        'tunnel:start',
+      ]);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
@@ -1694,13 +1645,12 @@ void main() {
       final store = FakeStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      await store.setLastTarget(
-        regionId: null,
-        serverId: 'srv-1',
-        explicitTarget: true,
-      );
+      await store.setLastTarget(serverId: 'srv-1', explicitTarget: true);
       final api = VpnApi(
         recordingDio(events, (o) {
+          if (o.path.endsWith('/vpn-regions')) {
+            return [regionJson('r-1', 'srv-1', 0)];
+          }
           if (o.path.endsWith('/config')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
@@ -1716,7 +1666,11 @@ void main() {
 
       await container.read(connectionProvider.notifier).quickConnect();
 
-      expect(events, ['GET:/vpn-devices/dev-1/config', 'tunnel:start']);
+      expect(events, [
+        'GET:/vpn-regions',
+        'GET:/vpn-devices/dev-1/config',
+        'tunnel:start',
+      ]);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.serverId, 'srv-1');
@@ -1734,17 +1688,15 @@ void main() {
         ),
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.selectTarget(regionId: null, serverId: 'srv-1');
+      ctl.selectTarget(serverId: 'srv-1');
 
       await ctl.selectAuto();
 
       final state = container.read(connectionProvider);
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
       expect(state.explicitTarget, isFalse);
       // Awaited persist: a following quickConnect can't resurrect the pin.
       final saved = await store.lastTarget();
-      expect(saved.regionId, isNull);
       expect(saved.serverId, isNull);
       expect(saved.explicitTarget, isFalse);
     });
@@ -1761,11 +1713,7 @@ void main() {
         // when that read fails (locked keychain) — the one state where a stale
         // pin could otherwise outlive the Auto connect and be rehydrated by
         // the next cold restore.
-        await store.setLastTarget(
-          regionId: null,
-          serverId: 'srv-old',
-          explicitTarget: true,
-        );
+        await store.setLastTarget(serverId: 'srv-old', explicitTarget: true);
         store.lastTargetHook = () async => throw StateError('keychain locked');
         final api = VpnApi(
           recordingDio(events, (o) {
@@ -1799,7 +1747,6 @@ void main() {
         expect(state.dial?.serverId, 'srv-b');
         expect(state.serverId, isNull);
         final saved = await store.lastTarget();
-        expect(saved.regionId, isNull);
         expect(saved.serverId, isNull);
         expect(saved.explicitTarget, isFalse);
       },
@@ -1828,11 +1775,7 @@ void main() {
         final container = makeContainer(store: store, keys: keys, api: api);
         final tunnel = FakeTunnel(events);
         await seedConnected(container, store, tunnel);
-        await store.setLastTarget(
-          regionId: null,
-          serverId: 'srv-old',
-          explicitTarget: true,
-        );
+        await store.setLastTarget(serverId: 'srv-old', explicitTarget: true);
         // Same one-shot read failure as above, so the connected Auto branch
         // (a one-shot switch, no bind) is the path under test.
         store.lastTargetHook = () async => throw StateError('keychain locked');
@@ -1845,7 +1788,6 @@ void main() {
         expect(state.dial?.serverId, 'srv-b');
         expect(state.serverId, isNull);
         final saved = await store.lastTarget();
-        expect(saved.regionId, isNull);
         expect(saved.serverId, isNull);
         expect(saved.explicitTarget, isFalse);
       },
@@ -1908,7 +1850,6 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
       expect(state.message, contains('Already connected to'));
     });
@@ -1945,7 +1886,6 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       // One-shot: the move lands without pinning, so the next connect
       // re-picks instead of sticking to srv-2.
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
       expect(state.explicitTarget, isFalse);
     });
@@ -1990,7 +1930,6 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-b');
-      expect(state.regionId, isNull);
       expect(state.serverId, isNull);
     });
 

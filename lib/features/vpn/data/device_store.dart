@@ -18,9 +18,9 @@ const maxDeviceNameLength = 64;
 /// name, pending provisioning key/target, the last selected target and the
 /// cached dial — lives in one JSON document under [identityKey]. A single
 /// entry makes [clearDevice] one atomic delete, so a failed wipe can never
-/// strand a subset of the identity, and the last-target triple
-/// (`regionId` + `serverId` + `explicit`) is written as one value instead of
-/// three independent keys that could interleave and persist both sides.
+/// strand a subset of the identity, and the last-target pair
+/// (`serverId` + `explicit`) is written as one value instead of two
+/// independent keys that could interleave and persist a stale half.
 ///
 /// Every mutation is serialized through [_mutex] in call order. Two writers
 /// can no longer race a read-modify-write, and a wipe can never complete
@@ -151,45 +151,31 @@ class DeviceStore {
   );
 
   /// Last user-selected connection target. Persisted so a disconnect →
-  /// connect (and a restart with a GC'd peer) redials the same server or
-  /// region instead of auto-picking. Exactly one side is non-null by
-  /// contract (see `selectTarget`); both null means Auto. [explicitTarget]
-  /// records whether the pin came from a manual tap (constrains auto-failover
-  /// to the region) or an auto-pick (failover may roam globally). Cleared with
-  /// the device on logout or session revocation so it never leaks into the
-  /// next login.
-  Future<({String? regionId, String? serverId, bool explicitTarget})>
-  lastTarget() async {
+  /// connect (and a restart with a GC'd peer) redials the same server
+  /// instead of auto-picking. Null means Auto. [explicitTarget] records
+  /// whether the pin came from a manual tap (constrains auto-failover to the
+  /// server's region) or an auto-pick (failover may roam globally). Cleared
+  /// with the device on logout or session revocation so it never leaks into
+  /// the next login.
+  Future<({String? serverId, bool explicitTarget})> lastTarget() async {
     final t = (await _doc())['lastTarget'];
     if (t is Map) {
       return (
-        regionId: t['regionId'] is String ? t['regionId'] as String : null,
         serverId: t['serverId'] is String ? t['serverId'] as String : null,
         explicitTarget: t['explicit'] == true,
       );
     }
-    return (regionId: null, serverId: null, explicitTarget: false);
+    return (serverId: null, explicitTarget: false);
   }
 
-  /// Writes the whole target as one value, so `regionId`, `serverId` and the
-  /// explicit flag always land together and can never be a mix of two calls.
+  /// Writes the whole target as one value, so `serverId` and the explicit
+  /// flag always land together and can never be a mix of two calls.
   Future<void> setLastTarget({
-    required String? regionId,
     required String? serverId,
     required bool explicitTarget,
-  }) {
-    assert(
-      regionId == null || serverId == null,
-      'a target pins at most one of regionId/serverId',
-    );
-    return _mutate(
-      (d) => d['lastTarget'] = {
-        'regionId': regionId,
-        'serverId': serverId,
-        'explicit': explicitTarget,
-      },
-    );
-  }
+  }) => _mutate(
+    (d) => d['lastTarget'] = {'serverId': serverId, 'explicit': explicitTarget},
+  );
 
   /// Last known-good dial params as a JSON string (see `DialParams.toJson`).
   /// Written on every successful tunnel start, read only by cold-start

@@ -118,18 +118,17 @@ bool isBackendCorroborated({
     pollFailures >= pollThreshold ||
     _backendQuiet(lastStatusAt: lastStatusAt, now: now, quietFor: quietFor);
 
-/// Picks the replacement target for an automatic failover.
+/// Picks the replacement server for an automatic failover.
 ///
 /// Same-region-first, then global lowest-load: servers in [currentRegionId]
 /// (excluding [currentServerId]) win by lowest `activePeers`; when the
 /// region has no other capacity, the lowest-load server anywhere wins —
-/// unless [stayInRegion] is set (explicit user region/server pin), in which
-/// case cross-region moves are forbidden and null is returned instead.
+/// unless [stayInRegion] is set (explicit user server pin), in which case
+/// cross-region moves are forbidden and null is returned instead.
 /// A null [currentRegionId] (unpinned quick-connect) picks globally.
-/// Always server-targeted (never region-targeted): a region move could
-/// reassign the same dead server, while a server move deterministically
-/// excludes it. Null when no other server has capacity.
-({String? regionId, String? serverId})? pickFailoverTarget({
+/// The picked server deterministically excludes the dead one. Null when no
+/// other server has capacity.
+String? pickFailoverTarget({
   required List<Region> regions,
   required String? currentRegionId,
   required String currentServerId,
@@ -152,6 +151,5 @@ bool isBackendCorroborated({
     }
   }
   final best = stayInRegion ? bestInRegion : (bestInRegion ?? bestGlobal);
-  if (best == null) return null;
-  return (regionId: null, serverId: best.id);
+  return best?.id;
 }

@@ -166,11 +166,8 @@ extension ConnectionColdStart on ConnectionController {
       // auto-pin fallback below compare against user intent.
       try {
         final saved = await _device.lastTarget();
-        if ((saved.serverId != null || saved.regionId != null) &&
-            snap.regionId == null &&
-            snap.serverId == null) {
+        if (saved.serverId != null && snap.serverId == null) {
           snap = snap.copyWith(
-            regionId: saved.regionId,
             serverId: saved.serverId,
             explicitTarget: saved.explicitTarget,
           );

@@ -377,10 +377,10 @@ extension ConnectionRecovery on ConnectionController {
       // budget is what keeps the stall from re-discovering forever).
       chargeAttempt();
       if (snap.explicitTarget) {
-        // Pinned region/server with no same-region capacity: never roam
+        // Pinned server with no same-region capacity: never roam
         // across regions. The tunnel is down before the error is surfaced
         // so no tunnel runs behind the error.
-        final pinned = snap.regionId ?? snap.serverId ?? oldDial.serverName;
+        final pinned = snap.serverId ?? oldDial.serverName;
         AppLog.info('failover pinned no-capacity ($pinned)');
         if (!tunnelDown) {
           await _stopTunnel('auto-failover');
@@ -444,13 +444,8 @@ extension ConnectionRecovery on ConnectionController {
       // up; stop only on transport failure, then retry direct. App-level
       // errors keep the tunnel up and fall back to the old dial below.
       final switched = await _postViaTunnelOrDirect(
-        post: ({Duration? timeout}) => _switchPost(
-          id,
-          kp.publicKey,
-          target.regionId,
-          target.serverId,
-          timeout: timeout,
-        ),
+        post: ({Duration? timeout}) =>
+            _switchPost(id, kp.publicKey, null, target, timeout: timeout),
         wasConnected: !tunnelDown,
         stopLabel: 'auto-failover',
         initiallyDown: tunnelDown,
@@ -574,17 +569,17 @@ extension ConnectionRecovery on ConnectionController {
 
   void _recordAutoFailoverSuccess(
     DialParams dial,
-    ({String? regionId, String? serverId}) target,
+    String? target,
     int attempt,
     String why,
   ) {
     // [_startWith] resets heal health; re-assert the failover budget and
     // grant the new server fresh heals.
     snap = snap.copyWith(autoFailoverAttempts: attempt, autoHealAttempts: 0);
-    // A pinned target re-pins onto the move so reconnects keep it; an
+    // A pinned server re-pins onto the move so reconnects keep it; an
     // unpinned (Auto) state stays unpinned so later connects re-pick.
-    if (snap.regionId != null || snap.serverId != null) {
-      selectTarget(regionId: target.regionId, serverId: target.serverId);
+    if (snap.serverId != null) {
+      selectTarget(serverId: target);
     }
     AppLog.info(
       'failover ok ($why) attempt=$attempt server=${dial.serverName}',
@@ -596,7 +591,7 @@ extension ConnectionRecovery on ConnectionController {
   /// restarting the stale cached dial.
   Future<void> _rebindAfterPeerless({
     required String id,
-    required ({String? regionId, String? serverId}) target,
+    required String? target,
     required String why,
     required int attempt,
     required bool tunnelDown,
@@ -610,8 +605,7 @@ extension ConnectionRecovery on ConnectionController {
       }
       final fresh = await _bindFreshPeer(
         id,
-        regionId: target.regionId,
-        serverId: target.serverId,
+        serverId: target,
         sessionEpoch: sessionEpoch,
       );
       if (sessionEpoch != _sessionEpoch) return;
@@ -635,19 +629,16 @@ extension ConnectionRecovery on ConnectionController {
     }
   }
 
-  /// Resolves the failover target for [oldDial] against fresh [regions].
-  /// An explicit user pin constrains the move to the selected region: a
-  /// region pin applies directly, a server pin resolves to its parent
-  /// region via discovery (same-region moves stay allowed). An
-  /// unresolvable parent means no verifiable same-region capacity, so the
-  /// pinned no-capacity error applies instead of a cross-region move.
-  ({String? regionId, String? serverId})? _pickFailoverTarget(
-    List<Region> regions,
-    DialParams oldDial,
-  ) {
+  /// Resolves the failover server for [oldDial] against fresh [regions].
+  /// An explicit user server pin constrains the move to that server's
+  /// parent region (resolved via discovery): same-region moves stay
+  /// allowed, but never across regions. An unresolvable parent means no
+  /// verifiable same-region capacity, so the pinned no-capacity error
+  /// applies instead of a cross-region move.
+  String? _pickFailoverTarget(List<Region> regions, DialParams oldDial) {
     final explicit = snap.explicitTarget;
-    String? failoverRegionId = snap.regionId;
-    if (explicit && failoverRegionId == null) {
+    String? failoverRegionId;
+    if (explicit) {
       final pinnedServer = snap.serverId ?? oldDial.serverId;
       for (final r in regions) {
         if (r.servers.any((s) => s.id == pinnedServer)) {

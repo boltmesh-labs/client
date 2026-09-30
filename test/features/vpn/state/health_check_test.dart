@@ -1347,7 +1347,6 @@ void main() {
     expect(state.dial?.serverId, 'srv-2');
     // Unpinned (Auto) failover roams without pinning: the next connect
     // re-picks instead of sticking to the failover target.
-    expect(state.regionId, isNull);
     expect(state.serverId, isNull);
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);
@@ -1514,9 +1513,9 @@ void main() {
       controlProbe: support.FakeControlProbe(true),
     );
     final ctl = container.read(connectionProvider.notifier);
-    // Explicit region tap: r1 holds only the dead srv-1, r2 has capacity
-    // that must NOT be used.
-    ctl.selectTarget(regionId: 'r1', serverId: null, explicitTarget: true);
+    // Explicit server tap: r1 holds only the dead srv-1, r2 has capacity
+    // that must NOT be used (an explicit pin stays in its own region).
+    ctl.selectTarget(serverId: 'srv-1', explicitTarget: true);
 
     for (var i = 0; i < 2; i++) {
       await stallOnce(ctl);
@@ -1557,7 +1556,7 @@ void main() {
     );
     final ctl = container.read(connectionProvider.notifier);
     // Explicit server tap: srv-2 in the same region stays a valid target.
-    ctl.selectTarget(regionId: null, serverId: 'srv-1', explicitTarget: true);
+    ctl.selectTarget(serverId: 'srv-1', explicitTarget: true);
 
     for (var i = 0; i < 2; i++) {
       await stallOnce(ctl);
@@ -1718,7 +1717,6 @@ void main() {
     state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
-    expect(state.regionId, isNull);
     expect(state.serverId, isNull);
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);
@@ -2050,7 +2048,6 @@ void main() {
     state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
-    expect(state.regionId, isNull);
     expect(state.serverId, isNull);
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);

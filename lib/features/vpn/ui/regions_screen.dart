@@ -89,9 +89,9 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
     showSwitchFeedback(context, ref.read(connectionProvider));
   }
 
-  Future<void> _switchTo({String? regionId, String? serverId}) async {
+  Future<void> _switchTo(String serverId) async {
     final ctl = ref.read(connectionProvider.notifier);
-    await ctl.switchServer(regionId: regionId, serverId: serverId);
+    await ctl.switchServer(regionId: null, serverId: serverId);
     if (!mounted) return;
     showSwitchFeedback(context, ref.read(connectionProvider));
   }
@@ -134,11 +134,10 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
   Widget build(BuildContext context) {
     final regions = _regions;
     final conn = ref.watch(
-      connectionProvider.select((c) => (c.phase, c.regionId, c.serverId)),
+      connectionProvider.select((c) => (c.phase, c.serverId)),
     );
     final busy = conn.$1 == ConnPhase.working;
-    final pinnedRegionId = conn.$2;
-    final pinnedServerId = conn.$3;
+    final pinnedServerId = conn.$2;
     final l10n = AppLocalizations.of(context);
 
     return Scaffold(
@@ -210,10 +209,7 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
                               // Auto is selected iff nothing is pinned; a
                               // server row only highlights when explicitly
                               // pinned, so Auto never marks a server.
-                              selected:
-                                  best != null &&
-                                  pinnedRegionId == null &&
-                                  pinnedServerId == null,
+                              selected: best != null && pinnedServerId == null,
                               onTap: _quickConnect,
                             ),
                             const Divider(),
@@ -233,7 +229,7 @@ class _RegionsScreenState extends ConsumerState<RegionsScreen> {
                         load: regionLoad(r),
                         busy: busy,
                         selectedServerId: pinnedServerId,
-                        onServerTap: (id) => _switchTo(serverId: id),
+                        onServerTap: _switchTo,
                       );
                     },
                   );

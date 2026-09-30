@@ -26,31 +26,16 @@ extension ConnectionSwitch on ConnectionController {
     // nothing is "already connected" below that, and the backend's
     // already-bound 409 is answered with a config reload in the catch, so a
     // missed skip costs one request rather than a stranded tunnel.
-    //
-    // A region request keeps comparing against the pin: the dial names a
-    // server, so live truth cannot answer it, and the pin is exactly the
-    // "I picked this region" intent that a switch back to it would 409 on.
-    // Both sides still read the same source, and a target always holds
-    // exactly one side, so a stale value on the other side can never leak
-    // into a switch.
     final live = snap.phase == ConnPhase.connected ? snap.dial?.serverId : null;
     final sameServer = serverId != null && serverId == live;
-    final sameRegion =
-        live != null && regionId != null && regionId == snap.regionId;
-    if (sameServer || sameRegion) {
-      AppLog.info(
-        'switch skipped: already on ${serverId ?? 'region=$regionId'}',
-      );
+    if (sameServer) {
+      AppLog.info('switch skipped: already on $serverId');
       // No tunnel work needed, but an explicit tap still carries pin intent:
       // Auto (unpinned) tapping the live server must land pinned so the
       // Regions tab highlights it. One-shot Auto moves (pinTarget false)
       // stay unpinned.
       if (pinTarget) {
-        selectTarget(
-          regionId: regionId,
-          serverId: serverId,
-          explicitTarget: explicitTarget,
-        );
+        selectTarget(serverId: serverId, explicitTarget: explicitTarget);
       }
       snap = snap.copyWith(
         message:
@@ -109,12 +94,12 @@ extension ConnectionSwitch on ConnectionController {
         // slot (both inners are lock-free), so no other op can interleave
         // between them. Never release/re-acquire here: that breaks the
         // serialization the mutex exists to guarantee.
+        // Replace any stale pin with the requested target first: a
+        // region-targeted switch has no server yet, so this clears the old
+        // one (otherwise `_provision` would carry it as `snap.serverId`);
+        // the connect below adopts the bound dial and pins it.
         if (pinTarget) {
-          selectTarget(
-            regionId: regionId,
-            serverId: serverId,
-            explicitTarget: explicitTarget,
-          );
+          selectTarget(serverId: serverId, explicitTarget: explicitTarget);
         }
         await _provision(
           regionId: regionId,
@@ -123,6 +108,15 @@ extension ConnectionSwitch on ConnectionController {
         );
         await _connectBody(sessionEpoch: sessionEpoch);
         if (sessionEpoch != _sessionEpoch) return;
+        if (pinTarget) {
+          final dial = snap.dial;
+          if (dial != null) {
+            selectTarget(
+              serverId: dial.serverId,
+              explicitTarget: explicitTarget,
+            );
+          }
+        }
         return;
       }
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Switching…');
@@ -195,13 +189,13 @@ extension ConnectionSwitch on ConnectionController {
       if (sessionEpoch != _sessionEpoch) return;
       await _startWith(dial, sessionEpoch: sessionEpoch);
       if (sessionEpoch != _sessionEpoch) return;
-      // Record the exact new target (one side is null by contract) so the
-      // Regions tab highlights it and reconnects keep it. One-shot Auto
-      // moves skip this so the state stays unpinned.
+      // Record the exact bound server so the Regions tab highlights it and
+      // reconnects keep it (a region-targeted switch pins the server the
+      // backend picked). One-shot Auto moves skip this so the state stays
+      // unpinned.
       if (pinTarget) {
         selectTarget(
-          regionId: regionId,
-          serverId: serverId,
+          serverId: serverId ?? dial.serverId,
           explicitTarget: explicitTarget,
         );
       }
@@ -241,11 +235,7 @@ extension ConnectionSwitch on ConnectionController {
           // pinning; explicit moves re-pin the canonical target (user
           // intent, even though the post-success pin hasn't landed yet).
           if (pinTarget) {
-            await _pinCanonicalTarget(
-              dial,
-              regionRequest: regionId != null,
-              preserveAuto: false,
-            );
+            _pinCanonicalTarget(dial, preserveAuto: false);
           }
           if (sessionEpoch != _sessionEpoch) return;
           return;
@@ -259,20 +249,9 @@ extension ConnectionSwitch on ConnectionController {
       if (vpnErr?.kind == ApiErrorKind.noActivePeer && id != null) {
         // The device exists but holds no peer (disconnected or GC'd while
         // idle): there is nothing to switch, so bind a fresh peer directly
-        // on the requested target instead of failing. The target is pinned
-        // first because [_bindFreshPeer] dials whatever is pinned.
+        // on the requested target instead of failing.
         AppLog.info('switch peerless -> bind fresh peer on new target');
         try {
-          // The target is pinned first because [_bindFreshPeer] dials
-          // whatever is pinned — unless this is a one-shot Auto move,
-          // which passes the target directly so the state stays unpinned.
-          if (pinTarget) {
-            selectTarget(
-              regionId: regionId,
-              serverId: serverId,
-              explicitTarget: explicitTarget,
-            );
-          }
           // [_startWith] only stops a previous tunnel when already
           // `connected`; the switch may have left one running while
           // `working`, so stop explicitly to never run two live tunnels
@@ -281,6 +260,11 @@ extension ConnectionSwitch on ConnectionController {
             await _stopTunnel('switch');
             if (sessionEpoch != _sessionEpoch) return;
             tunnelDown = true;
+          }
+          // Replace any stale pin so a region-targeted bind can't fall back
+          // to it via `_bindFreshPeer`'s `snap.serverId` default.
+          if (pinTarget) {
+            selectTarget(serverId: serverId, explicitTarget: explicitTarget);
           }
           final fresh = await _bindFreshPeer(
             id,
@@ -294,6 +278,12 @@ extension ConnectionSwitch on ConnectionController {
           serverCommitted = true;
           await _startWith(fresh, sessionEpoch: sessionEpoch);
           if (sessionEpoch != _sessionEpoch) return;
+          if (pinTarget) {
+            selectTarget(
+              serverId: fresh.serverId,
+              explicitTarget: explicitTarget,
+            );
+          }
           return;
         } catch (e2) {
           if (sessionEpoch != _sessionEpoch) return;
