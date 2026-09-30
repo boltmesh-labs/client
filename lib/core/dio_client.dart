@@ -18,7 +18,7 @@ import 'tls_pinning_stub.dart'
 const _insecureReleaseMessage =
     'API_BASE_URL must use https:// in release builds. Set it to an https:// '
     'URL with --dart-define=API_BASE_URL=https://host/v1, or put it in .env '
-    'and build via `dart run tool/run_flutter.dart build ...`.';
+    'and build with --dart-define-from-file=.env.';
 
 /// True when a release build points at cleartext HTTP. Debug/profile keep
 /// `http://localhost` for the local `podman-compose` stack.

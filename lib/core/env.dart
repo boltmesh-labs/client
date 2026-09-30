@@ -7,7 +7,7 @@
 // fresh clone runs against localhost with no configuration. Any other API —
 // the real backend included — comes from `API_BASE_URL`, supplied either as
 // `--dart-define=API_BASE_URL=...` or through `.env` via
-// `dart run tool/run_flutter.dart run`. Release builds still refuse a
+// `flutter run --dart-define-from-file=.env`. Release builds still refuse a
 // cleartext `http://` URL (see `dio_client.dart`); the production URL is
 // pinned per job in `distribute_options.yaml`, which is why CI needs no
 // `.env` of its own.
@@ -50,7 +50,7 @@ class Env {
 
   /// Public site where accounts are created, shown on the login screen. Set
   /// it with `--dart-define=WEBSITE_URL=...` or through `.env` via
-  /// `dart run tool/run_flutter.dart run`; release jobs pin it in
+  /// `--dart-define-from-file=.env`; release jobs pin it in
   /// `distribute_options.yaml`.
   ///
   /// Empty (the default, and every plain `flutter run` that reads no `.env`)

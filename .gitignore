@@ -33,5 +33,6 @@ boltmeshd/bin
 coverage
 
 # ---> Local build configuration
-# Compile-time defines for tool/run_flutter.dart; commit .env.example instead.
+# Compile-time defines read by `flutter --dart-define-from-file=.env`;
+# commit .env.example instead.
 .env

@@ -49,18 +49,19 @@ loop): see [SETUP.md](SETUP.md).
 The API URL is a compile-time constant, and it defaults to the local
 `podman-compose` stack from the [`infra`](https://github.com/boltmesh-labs/infra)
 repo (`http://localhost:8000/v1`) — so a fresh clone runs against localhost
-with no configuration. To build against another API, put it in `.env`:
+with no configuration. To build against another API, put it in `.env` and
+hand that file to Flutter:
 
 ```sh
 cp .env.example .env          # then edit API_BASE_URL
-dart run tool/run_flutter.dart run
+flutter run --dart-define-from-file=.env
 ```
 
-`tool/run_flutter.dart` forwards every `.env` entry to `flutter` as a
-`--dart-define` and passes all other arguments through untouched, so it works
-for `run`, `build`, and anything else. Plain `flutter run` and the IDE's run
-buttons still work — they just add no defines and get the localhost default.
-`.env` is gitignored; `.env.example` is the committed template.
+`--dart-define-from-file` is Flutter's own flag: every entry in `.env` becomes
+a compile-time define, so it works for `run`, `build`, and anything else. Plain
+`flutter run` and the IDE's run buttons still work — they just pass no file and
+get the localhost default. `.env` is gitignored; `.env.example` is the
+committed template.
 
 Every entry is a compile-time `--dart-define`, and `.env` is the preferred
 place for all of them. Besides `API_BASE_URL`, these are understood:
@@ -116,10 +117,9 @@ lib/
 
 `test/` mirrors `lib/`, including `test/app/` and the `ui/` trees
 (`features/auth/ui/`, `features/vpn/ui/`). Cross-cutting suites
-(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root and
-`test/tool/` covers `tool/run_flutter.dart`; shared doubles live in
-`test/support/fakes.dart` (state suites layer fixtures on
-`test/support/vpn_harness.dart`).
+(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root;
+shared doubles live in `test/support/fakes.dart` (state suites layer fixtures
+on `test/support/vpn_harness.dart`).
 
 ## Platform status
 

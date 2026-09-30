@@ -128,10 +128,9 @@ bash tool/check_generated.sh
 
 `test/` mirrors `lib/` (`app/`, `core/`, `features/auth/{data,state,ui}/`,
 `features/vpn/{data,domain,state,ui}/`). Cross-cutting suites
-(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root and
-`test/tool/` covers `tool/run_flutter.dart`; shared doubles live in
-`test/support/fakes.dart` (state suites layer fixtures on
-`test/support/vpn_harness.dart`).
+(`widget_test.dart`, `regions_refresh_test.dart`) stay at the `test/` root;
+shared doubles live in `test/support/fakes.dart` (state suites layer fixtures
+on `test/support/vpn_harness.dart`).
 
 ## Documentation
 
