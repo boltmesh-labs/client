@@ -33,14 +33,13 @@ func TestWGStructLayout(t *testing.T) {
 	if size := int(unsafe.Sizeof(wgPeer{})); size != 136 {
 		t.Fatalf("wgPeer size = %d, want 136", size)
 	}
-	peer := wgPeer{}
-	if off := int(unsafe.Offsetof(peer.Endpoint)); off != 76 {
+	if off := int(unsafe.Offsetof(wgPeer{}.Endpoint)); off != 76 {
 		t.Fatalf("wgPeer.Endpoint offset = %d, want 76", off)
 	}
-	if off := int(unsafe.Offsetof(peer.TxBytes)); off != 104 {
+	if off := int(unsafe.Offsetof(wgPeer{}.TxBytes)); off != 104 {
 		t.Fatalf("wgPeer.TxBytes offset = %d, want 104", off)
 	}
-	if off := int(unsafe.Offsetof(peer.LastHandshake)); off != 120 {
+	if off := int(unsafe.Offsetof(wgPeer{}.LastHandshake)); off != 120 {
 		t.Fatalf("wgPeer.LastHandshake offset = %d, want 120", off)
 	}
 }

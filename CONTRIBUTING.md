@@ -42,7 +42,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ## Local Hooks
 
-Install the git hook once after cloning. It runs the same checks CI does, so a
+Install the git hook once after cloning. It runs the checks CI does not, so a
 violation is caught before you push:
 
 ```bash
@@ -51,8 +51,7 @@ pre-commit run --all-files   # optional: the whole tree, not just staged files
 ```
 
 Some hooks need a toolchain (Flutter, Go, golangci-lint) that not every machine
-has. To run everything else, skip those by id — the same escape hatch the CI
-`pre-commit` job uses:
+has. To run everything else, skip those by id:
 
 ```bash
 SKIP=dart-format,flutter-analyze,go-fmt-boltmeshd,golangci-lint-boltmeshd,golangci-lint-boltmeshd-windows,golangci-lint-boltmeshd-darwin,go-vet-boltmeshd-darwin,go-test-boltmeshd,go-mod-tidy-boltmeshd,check-generated,flutter-lockfile pre-commit run --all-files

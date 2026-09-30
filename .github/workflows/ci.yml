@@ -26,62 +26,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The hooks in `.pre-commit-config.yaml` are the repo's documented local
-  # gate, but until now nothing in CI ran them, so `actionlint`, `gitleaks`,
-  # `shellcheck`, `prettier`, `markdownlint` and the repository-hygiene guards
-  # only ever ran on a contributor's machine while `SECURITY.md` presented them
-  # as enforced. Running the same config here keeps the two in step: a hook added
-  # to that file is enforced in CI without editing this workflow.
-  pre-commit:
-    name: "Pre-commit hooks"
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      # pre-commit/action installs pre-commit itself via pip; pinning the
-      # interpreter keeps that resolution off whatever ships on the image.
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-
-      # Not for linting this repo's own Go code — every such hook is skipped
-      # below. The `actionlint` and `gitleaks` hooks in the upstream configs are
-      # `language: golang`, so pre-commit compiles them into isolated
-      # environments and needs a Go toolchain to do so. Pinning it keeps that
-      # build reproducible.
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.26"
-          cache: false
-
-      - name: Run pre-commit on all files
-        uses: pre-commit/action@v3.0.1
-        # Everything skipped here is enforced by a dedicated job running the
-        # same command, so this job stays a fast gate:
-        #   validate          -> check-generated, flutter-lockfile (via its
-        #                        `pub get --enforce-lockfile`), dart-format,
-        #                        flutter-analyze
-        #   validate-boltmeshd -> go-fmt-boltmeshd, golangci-lint-boltmeshd
-        #                        (linux/windows/darwin), go-vet-boltmeshd-darwin
-        #                        (its `GOOS=darwin go vet`), go-test-boltmeshd,
-        #                        and go-mod-tidy-boltmeshd (its own
-        #                        `go mod tidy -diff` step)
-        # What remains runs against no repo toolchain at all: the
-        # pre-commit-hooks hygiene guards, actionlint, gitleaks, shellcheck,
-        # prettier and markdownlint. shellcheck and node (for pre-commit to
-        # build the two `language: node` envs) come from the ubuntu-latest
-        # image.
-        env:
-          SKIP: >-
-            check-generated,flutter-lockfile,dart-format,flutter-analyze,
-            go-fmt-boltmeshd,go-vet-boltmeshd-darwin,go-test-boltmeshd,
-            go-mod-tidy-boltmeshd,
-            golangci-lint-boltmeshd,golangci-lint-boltmeshd-windows,
-            golangci-lint-boltmeshd-darwin
+  # The hooks in `.pre-commit-config.yaml` are the repo's documented local gate
+  # and are mostly not re-checked in CI. The `validate*` jobs run the Flutter and
+  # Go commands independently, and the `security` job runs `gitleaks`; everything
+  # else in that file is covered by running the hooks locally, as documented in
+  # CONTRIBUTING.md.
 
   # Dependabot covers four ecosystems here, but nothing checked the actions
   # and build tooling a PR actually pulls in. This catches a newly introduced
@@ -121,8 +70,8 @@ jobs:
 
       - name: Install dependencies
         # --enforce-lockfile fails instead of silently rewriting pubspec.lock.
-        # This is now the only place the lockfile is enforced: the pre-commit
-        # job skips the flutter-lockfile hook (see that step's SKIP list).
+        # This is the only place the lockfile is enforced; the `flutter-lockfile`
+        # pre-commit hook is local-only.
         run: flutter pub get --enforce-lockfile
 
       # Regenerates l10n/build_runner output and fails if it differs from the
@@ -404,8 +353,8 @@ jobs:
           fi
 
       # `-diff` prints the required change instead of writing it, so this is
-      # check-only and cannot leave the tree dirty. The pre-commit job skips the
-      # `go-mod-tidy-boltmeshd` hook for exactly this step.
+      # check-only and cannot leave the tree dirty. The `go-mod-tidy-boltmeshd`
+      # pre-commit hook is local-only.
       - name: Check go.mod/go.sum are tidy
         run: go mod tidy -diff
 
@@ -486,8 +435,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          # Full history: gitleaks scans commits rather than the working tree, so
+          # a secret committed earlier and deleted later is still caught. The
+          # local hook structurally cannot see that case, because it only ever
+          # looks at staged files. `version` matches the pinned hook rev. Runs
+          # before Trivy so a leak fails the job without also paying for the
+          # filesystem scan.
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v3
+        with:
+          version: v8.30.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Trivy Filesystem Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
