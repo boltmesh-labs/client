@@ -252,6 +252,24 @@ Tunnel actions go through the privileged `boltmeshd` helper; without it the
 GUI launches but VPN operations fail with "helper socket unavailable".
 [boltmeshd/README.md](boltmeshd/README.md).
 
+On a host with no hardware 3D acceleration — a VM, a remote desktop, or a bare
+Raspberry Pi — the window renders, but moving the mouse over it makes the whole
+UI blank out and come back on each frame. Nothing in the app reacts to the
+pointer; the fault is the renderer. Flutter defaults to Impeller, whose OpenGLES
+backend misbehaves against Mesa's `llvmpipe` software rasterizer. Confirm it with
+`glxinfo -B`, which reports `Accelerated: no` and a `SVGA3D`/`llvmpipe` renderer
+string, and the engine log line `Using the Impeller rendering backend
+(OpenGLESSDF)`. Fall back to Skia, which is correct on software GL:
+
+```bash
+flutter run -d linux --no-enable-impeller
+```
+
+This is a host property, so the flag stays on the command line rather than in the
+tree. The real fix is 3D acceleration on the host: enable the hypervisor's 3D
+adapter, or attach the VM's display to a `virtio-gpu` device, where Mesa's virtio
+driver provides a genuine Vulkan/GL stack and Impeller can stay on.
+
 ## Next
 
 [README.md](README.md) covers the run-time `--dart-define`s, platform notes,
