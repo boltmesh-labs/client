@@ -1,17 +1,19 @@
 //go:build linux
 
 // The stream transport rung: the tunnel's WireGuard endpoint points at a
-// loopback address, and a locally-run forwarder carries those datagrams to
-// the real server over a stream that middleboxes treat as ordinary TLS. It
-// is the rung for networks that block or fingerprint WireGuard's own UDP.
+// loopback address, and an in-process bridge (internal/stream) carries those
+// datagrams to the real server inside a TLS session that middleboxes treat as
+// ordinary HTTPS. It is the rung for networks that block or fingerprint
+// WireGuard's own UDP.
 //
-// Two things make or break this file, and both are about the forwarder's own
+// One thing makes or break this file, and it is about the transport's own
 // egress:
 //
-//  1. The bypass route. The forwarder is an ordinary process, so its packets
-//     follow the normal routing table — which, once the tunnel is up, routes
-//     them *into* the tunnel they carry. A host route for the real server
-//     through the physical gateway is installed before wg-quick runs.
+//  1. The bypass route. The bridge dials from this process like any other
+//     socket, so its packets follow the normal routing table — which, once the
+//     tunnel is up, routes them *into* the tunnel they carry. A host route for
+//     the real server through the physical gateway is installed before wg-quick
+//     runs.
 //  2. The extra tables. wg-quick's strict-mode policy rules steer unmarked
 //     packets into its own table before the main one, so a main-table pin
 //     alone is not enough: the same host route is installed in every table
@@ -24,40 +26,30 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
-	"time"
 
 	"boltmeshd/internal/protocol"
+	"boltmeshd/internal/stream"
 )
 
-const (
-	// forwarderReadyTimeout bounds how long an up waits for the forwarder's
-	// local listener. It is started explicitly, so this only has to cover
-	// process exec plus the tool's own startup; a forwarder that never binds
-	// is a broken install, not a slow one.
-	forwarderReadyTimeout = 5 * time.Second
-	// forwarderReadyInterval is the poll cadence for the listener.
-	forwarderReadyInterval = 100 * time.Millisecond
-	// forwarderStopGrace bounds the wait for a forwarder that was asked to
-	// stop before it is killed, so a clean exit is observed and an
-	// unresponsive one cannot hold the tunnel teardown.
-	forwarderStopGrace = 2 * time.Second
-	// transportConfigSuffix names the forwarder's root-only document next to
-	// the wg-quick config, so one directory owns the tunnel's state.
-	transportConfigSuffix = ".forwarder.json"
-)
+// streamClient is the part of the in-process transport the Manager drives:
+// its lifetime, and nothing else. The datagram path, the TLS session, and
+// every credential decision belong to internal/stream; keeping the seam to
+// the lifecycle is what lets the privileged route work be tested without a
+// node.
+type streamClient interface {
+	Start()
+	Stop() error
+}
 
-// forwarder is a running stream forwarder and the routes pinned for it.
-type forwarder struct {
-	spec       protocol.TransportSpec
-	configPath string
-	stop       func() error
-	// pins are the host routes installed for the forwarder's upstream, in
+// liveTransport is a running stream transport and the routes pinned for it.
+// The bridge itself belongs to internal/stream; this is only the daemon's
+// record of it and of the state teardown has to undo.
+type liveTransport struct {
+	spec   protocol.TransportSpec
+	client streamClient
+	// pins are the host routes installed for the transport's server, in
 	// every table they were installed in. Teardown removes exactly these.
 	pins []transportPin
 	// via/dev is the physical path the pins use, resolved once at up.
@@ -73,16 +65,14 @@ type transportPin struct {
 	table  int
 }
 
-// forwarderConfigPath is where the forwarder's document is written, inside
-// the daemon-owned config directory and root-only like the wg-quick config.
-func (m *Manager) forwarderConfigPath() string {
-	return m.configPath() + transportConfigSuffix
-}
-
-// bringUpTransport writes the forwarder's document, pins its upstream through
-// the physical path, starts the forwarder, and waits for it to listen. Called
-// before wg-quick so the very first forwarder packet is already routed
-// outside the tunnel.
+// bringUpTransport starts the in-process stream transport and pins its server
+// through the physical path. Called before wg-quick so the very first
+// transport packet is already routed outside the tunnel.
+//
+// The transport binds its loopback socket before this returns, so the tunnel
+// never meets a refused port; the TLS session behind it comes up on its own
+// and the tunnel's own handshake timer covers the wait. That ordering is why
+// there is no readiness wait here.
 func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.TransportSpec) error {
 	if err := spec.Validate(); err != nil {
 		return &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
@@ -91,75 +81,86 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 	if err != nil {
 		return err
 	}
-	// Resolve the binary before writing anything: a missing tool must not
-	// leave a privileged config behind. Resolution is against the fixed tool
-	// directories, never PATH — the daemon runs it as root.
-	binary, err := m.tool(spec.Binary)
+	client, err := m.streamTransport(spec, m.noteStreamSession)
 	if err != nil {
-		return err
+		return &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
 	}
 
-	host, _ := splitUpstream(spec.Upstream)
-	ips, err := m.resolveUpstream(ctx, host)
+	host, port := splitServer(spec.Server)
+	ips, err := m.resolveServer(ctx, host)
 	if err != nil {
 		return err
 	}
 	if len(ips) == 0 {
-		return fmt.Errorf("stream transport upstream %s resolved to no addresses", host)
-	}
-
-	if err := os.MkdirAll(m.dir, 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	configPath := m.forwarderConfigPath()
-	if err := os.WriteFile(configPath, []byte(spec.Config), 0o600); err != nil {
-		return fmt.Errorf("write forwarder config: %w", err)
+		return fmt.Errorf("stream transport server %s resolved to no addresses", host)
 	}
 
 	// Pin the first address through the physical path and start; the rest of
 	// the pins reuse the same via/dev.
-	fwd := &forwarder{spec: *spec, configPath: configPath}
+	tr := &liveTransport{spec: *spec, client: client}
 	for _, ip := range ips {
 		via, dev, err := m.physicalRouteFor(ctx, ipTool, ip)
 		if err != nil {
 			return err
 		}
-		fwd.via, fwd.dev = via, dev
+		tr.via, tr.dev = via, dev
 		mainPin := transportPin{prefix: hostPrefixFor(ip), v6: ip.To4() == nil}
 		if err := m.pinRouteVia(ctx, ipTool, mainPin, via, dev); err != nil {
 			return err
 		}
 		// Record it as a main-table pin so teardown removes exactly what was
 		// installed, in every table.
-		fwd.pins = append(fwd.pins, mainPin)
+		tr.pins = append(tr.pins, mainPin)
 	}
 
-	stop, err := m.startForwarder(ctx, binary, configPath)
-	if err != nil {
-		return fmt.Errorf("start forwarder: %w", err)
-	}
-	fwd.stop = stop
-	// Record the live forwarder *before* waiting for readiness: a forwarder
-	// that never binds must still be stoppable by the recovery pass.
-	m.fwd = fwd
-	if err := m.waitForwarder(ctx, spec.Listen); err != nil {
-		return fmt.Errorf("forwarder did not start listening on %s: %w", spec.Listen, err)
-	}
+	// Record the live transport before starting it: one that fails to start
+	// must still be stoppable by the recovery pass.
+	m.transport = tr
+	client.Start()
 	slog.Info(
-		"stream forwarder started",
+		"stream transport started",
 		"interface", m.iface,
 		"listen", spec.Listen,
-		"binary", spec.Binary,
+		"deliver", spec.Deliver,
+		"server", net.JoinHostPort(host, port),
 	)
 	return nil
+}
+
+// newStreamClient builds the in-process transport from a validated spec. The
+// credentials are decoded here, once, and never logged: the log line above
+// names the addresses only.
+func newStreamClient(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error) {
+	psk, err := spec.StreamPSK()
+	if err != nil {
+		return nil, err
+	}
+	clientID, err := spec.StreamClientID()
+	if err != nil {
+		return nil, err
+	}
+	pins, err := spec.StreamSPKIPins()
+	if err != nil {
+		return nil, err
+	}
+	return stream.NewClient(stream.ClientConfig{
+		ListenAddr:  spec.Listen,
+		DeliverAddr: spec.Deliver,
+		ServerAddr:  spec.Server,
+		ServerName:  spec.ServerName,
+		SPKIPins:    pins,
+		PSK:         psk,
+		ClientID:    clientID,
+		OnSession:   onSession,
+	})
 }
 
 // pinTransportTables installs the bypass route in every routing table
 // wg-quick's policy rules select for *unmarked* packets. Called right after
 // wg-quick up: the rules (and their tables) only exist from that point on.
 func (m *Manager) pinTransportTables(ctx context.Context) error {
-	fwd := m.fwd
-	if fwd == nil {
+	tr := m.transport
+	if tr == nil {
 		return nil
 	}
 	ipTool, err := m.tool(ipBinary)
@@ -171,9 +172,9 @@ func (m *Manager) pinTransportTables(ctx context.Context) error {
 		return err
 	}
 	// Snapshot the prefixes and copy them per table: the loop appends to
-	// fwd.pins, which would otherwise be the slice it is ranging over.
-	prefixes := make([]transportPin, 0, len(fwd.pins))
-	prefixes = append(prefixes, fwd.pins...)
+	// tr.pins, which would otherwise be the slice it is ranging over.
+	prefixes := make([]transportPin, 0, len(tr.pins))
+	prefixes = append(prefixes, tr.pins...)
 	for _, table := range tables {
 		for _, pin := range prefixes {
 			withTable := pin
@@ -181,43 +182,39 @@ func (m *Manager) pinTransportTables(ctx context.Context) error {
 			if err := m.pinRoute(ctx, ipTool, withTable); err != nil {
 				return err
 			}
-			fwd.pins = append(fwd.pins, withTable)
+			tr.pins = append(tr.pins, withTable)
 		}
 	}
 	return nil
 }
 
-// downTransport stops the forwarder and removes the routes pinned for it,
-// then deletes its root-only document. Idempotent: a no-op when no transport
-// is live, and every step is best-effort-tolerated so one failure cannot
-// strand the rest of the teardown.
+// downTransport stops the transport and removes the routes pinned for it.
+// Idempotent: a no-op when no transport is live, and every step is
+// best-effort-tolerated so one failure cannot strand the rest of the teardown.
 func (m *Manager) downTransport(ctx context.Context) error {
-	fwd := m.fwd
-	if fwd == nil {
+	tr := m.transport
+	if tr == nil {
 		return nil
 	}
-	m.fwd = nil
+	m.transport = nil
 
 	var errs []error
 	ipTool, ipErr := m.tool(ipBinary)
-	// The forwarder stops first: once it is gone nothing can use the pinned
+	// The transport stops first: once it is gone nothing can use the pinned
 	// routes, so removing them is the safe order.
-	if fwd.stop != nil {
-		if err := fwd.stop(); err != nil {
-			errs = append(errs, fmt.Errorf("stop forwarder: %w", err))
+	if tr.client != nil {
+		if err := tr.client.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("stop stream transport: %w", err))
 		}
 	}
 	if ipErr != nil {
 		errs = append(errs, ipErr)
 	} else {
-		for _, pin := range fwd.pins {
+		for _, pin := range tr.pins {
 			if err := m.unpinRoute(ctx, ipTool, pin); err != nil {
 				errs = append(errs, err)
 			}
 		}
-	}
-	if err := os.Remove(fwd.configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		errs = append(errs, fmt.Errorf("remove forwarder config: %w", err))
 	}
 	if len(errs) > 0 {
 		return &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(errs...)}
@@ -225,14 +222,41 @@ func (m *Manager) downTransport(ctx context.Context) error {
 	return nil
 }
 
+// transportErrorCode reports the protocol code a transport failure should
+// surface as. Only a bad-config error carries its own; anything else is a
+// daemon fault by default. The client's reaction depends on the distinction —
+// a bad spec means it must not retry this region, an internal error may be
+// transient — so it is worth preserving rather than flattening.
+func transportErrorCode(err error) string {
+	var opErr *protocol.OpError
+	if errors.As(err, &opErr) && opErr.Code == protocol.CodeBadConfig {
+		return protocol.CodeBadConfig
+	}
+	return protocol.CodeInternal
+}
+
+// noteStreamSession records the transport's session transitions in the log.
+//
+// A session that will not come up is the interesting case, and it is *not* a
+// tunnel failure: the client already demotes on its own health policy, and
+// this path has no view of the tunnel's state to act on. So it logs and
+// nothing else — the daemon does not second-guess the ladder.
+func (m *Manager) noteStreamSession(up bool, err error) {
+	if up {
+		slog.Info("stream transport session established", "interface", m.iface)
+		return
+	}
+	slog.Warn("stream transport session unavailable", "interface", m.iface, "error", err)
+}
+
 // pinRoute installs (replacing any existing) the bypass host route for one
 // address in the main table or a named one.
 func (m *Manager) pinRoute(ctx context.Context, ipTool string, pin transportPin) error {
-	return m.pinRouteVia(ctx, ipTool, pin, m.fwd.via, m.fwd.dev)
+	return m.pinRouteVia(ctx, ipTool, pin, m.transport.via, m.transport.dev)
 }
 
 // pinRouteVia is [Manager.pinRoute] with an explicit physical path, so the
-// first pin works before the live forwarder is recorded.
+// first pin works before the live transport is recorded.
 func (m *Manager) pinRouteVia(ctx context.Context, ipTool string, pin transportPin, via, dev string) error {
 	args := []string{"route", "replace", pin.prefix}
 	if pin.v6 {
@@ -272,7 +296,7 @@ func (m *Manager) unpinRoute(ctx context.Context, ipTool string, pin transportPi
 
 // unmarkedRouteTables returns the non-main routing tables that wg-quick's
 // policy rules select for packets *without* the interface's fwmark — which is
-// every packet a separate forwarder process sends. Parsed from `ip rule show`
+// every packet the transport's own dialer sends. Parsed from `ip rule show`
 // rather than predicted from the interface name, so it stays correct across
 // wg-quick versions and table-number choices.
 func (m *Manager) unmarkedRouteTables(ctx context.Context, ipTool string) ([]int, error) {
@@ -286,7 +310,7 @@ func (m *Manager) unmarkedRouteTables(ctx context.Context, ipTool string) ([]int
 // parseUnmarkedRuleTables extracts the table of every `not … fwmark <mark> …
 // table <id>` / `… lookup <id>` rule. A rule that selects packets *with* the
 // mark (the device's own handshake path) is skipped: only the unmarked path
-// is the forwarder's, and wg-quick already handles the marked one.
+// is the liveTransport's, and wg-quick already handles the marked one.
 func parseUnmarkedRuleTables(rules string) []int {
 	var tables []int
 	seen := map[int]bool{}
@@ -336,21 +360,20 @@ func indexToken(fields []string, want string) int {
 	return -1
 }
 
-// splitUpstream splits the transport's upstream into host and port. A bare
-// host is legal (the envelope validation already rejected an empty or
-// malformed one); stream transports all dial TLS, so 443 is the implied
-// port.
-func splitUpstream(upstream string) (string, string) {
-	if host, port, err := net.SplitHostPort(upstream); err == nil {
+// splitServer splits the transport's server into host and port. A bare host is
+// legal (the envelope validation already rejected an empty or malformed one);
+// stream transports all dial TLS, so 443 is the implied port.
+func splitServer(server string) (string, string) {
+	if host, port, err := net.SplitHostPort(server); err == nil {
 		return strings.TrimSpace(host), port
 	}
-	return strings.TrimSpace(upstream), "443"
+	return strings.TrimSpace(server), "443"
 }
 
-// resolveUpstream turns the upstream host into addresses. A literal IP needs
-// no resolver; a hostname does, and the *current* (physical) resolver is the
+// resolveServer turns the server host into addresses. A literal IP needs no
+// resolver; a hostname does, and the *current* (physical) resolver is the
 // right one: the transport comes up before any tunnel DNS state exists.
-func (m *Manager) resolveUpstream(ctx context.Context, host string) ([]net.IP, error) {
+func (m *Manager) resolveServer(ctx context.Context, host string) ([]net.IP, error) {
 	if literal := net.ParseIP(host); literal != nil {
 		return []net.IP{literal}, nil
 	}
@@ -365,66 +388,4 @@ func (m *Manager) resolveUpstream(ctx context.Context, host string) ([]net.IP, e
 		return nil, fmt.Errorf("resolve stream transport upstream %s: %w", host, err)
 	}
 	return ips, nil
-}
-
-// startForwarderProcess launches the forwarder in its own process group, the
-// same discipline as every other privileged exec: a group kill on stop so a
-// descendant cannot outlive the tunnel, and no PATH lookup (the caller
-// resolved the absolute path under the fixed tool directories).
-func startForwarderProcess(ctx context.Context, binary, configPath string) (func() error, error) {
-	// Detach from the request context: the forwarder must outlive the `up`
-	// that started it and live until the matching down.
-	cmd := exec.Command(binary, "--config", configPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
-	var stopOnce sync.Once
-	stop := func() error {
-		var stopErr error
-		stopOnce.Do(func() {
-			// Ask first, then kill the group: a clean exit reclaims the
-			// forwarder's own state, and the group kill bounds the wait.
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			select {
-			case <-done:
-			case <-time.After(forwarderStopGrace):
-				stopErr = terminateProcessGroup(cmd)
-			}
-		})
-		return stopErr
-	}
-	return stop, nil
-}
-
-// waitForwarderListen blocks until the forwarder accepts a TCP connection on
-// addr or the timeout expires. TCP is the readiness signal because every
-// stream forwarder exposes a local control/inbound listener; a UDP-only
-// forwarder would need a different probe.
-func waitForwarderListen(ctx context.Context, addr string) error {
-	deadline := time.Now().Add(forwarderReadyTimeout)
-	dialer := net.Dialer{Timeout: forwarderReadyInterval}
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("no listener on %s within %s", addr, forwarderReadyTimeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(forwarderReadyInterval):
-		}
-	}
 }

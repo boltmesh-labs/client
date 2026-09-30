@@ -1,15 +1,16 @@
 //go:build linux
 
-// Behavior suite for the stream transport rung. The forwarder process and
-// its readiness probe are fakes; the privileged work (writing the
-// root-only document, pinning and removing routes) goes through the same
-// recorded run seam the wg-quick suite uses.
+// Behavior suite for the stream transport rung. The transport itself is a
+// fake — its lifecycle is two calls, and internal/stream has its own suite —
+// while the privileged work (pinning and removing routes, ordering against
+// wg-quick) goes through the same recorded run seam the wg-quick suite uses.
 package tunnel
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
-	"os"
+	"net"
 	"strings"
 	"testing"
 
@@ -39,29 +40,59 @@ const wgQuickRuleOutput = `0:	from all lookup local
 32767:	from all lookup main suppress_prefixlength 0
 `
 
+// fakeStream is the transport double: it records the credentials it was built
+// from and counts its lifecycle, so the privileged side can be tested without
+// a node or a real TLS session.
+type fakeStream struct {
+	spec      protocol.TransportSpec
+	started   int
+	stopped   int
+	onSession func(bool, error)
+}
+
+func (f *fakeStream) Start() { f.started++ }
+
+func (f *fakeStream) Stop() error {
+	f.stopped++
+	return nil
+}
+
 type transportHarness struct {
 	m       *Manager
 	calls   *[]transportRunCall
 	dev     *fakeAwgDevice
-	stopped int
-	started []string // forwarder config paths passed to the start seam
-	tunMade int
+	streams []*fakeStream
+	// buildErr, when set, fails the transport constructor: the stand-in for
+	// a bad listen address or an unresolvable node.
+	buildErr error
+	// passSpec records the spec handed to the constructor, so the test can
+	// assert the daemon did not rewrite the client's credentials.
+	passSpec *protocol.TransportSpec
+	tunMade  int
 }
+
+func b64(n int) string { return base64.StdEncoding.EncodeToString(make([]byte, n)) }
 
 func streamSpec() *protocol.TransportSpec {
 	return &protocol.TransportSpec{
-		Mode:     protocol.TransportModeStream,
-		Listen:   "127.0.0.1:51821",
-		Upstream: "203.0.113.10:443",
-		Config:   `{"inbounds":[{"type":"mixed"}]}`,
-		Binary:   "boltmesh-forwarder",
+		Mode:       protocol.TransportModeStream,
+		Listen:     "127.0.0.1:51821",
+		Deliver:    "127.0.0.1:51820",
+		Server:     "203.0.113.10:443",
+		ServerName: "vpn.example.net",
+		SPKIPins:   []string{b64(32)},
+		PSK:        b64(32),
+		ClientID:   b64(16),
 	}
 }
 
-// nativeConfig points the peer at the loopback listen address, as the client
-// does for the stream rung.
+// streamConfig points the peer at the loopback listen address and pins the
+// local listen port, as the client does for the stream rung. The pinned port
+// is what the transport delivers the node's datagrams to, so it cannot be
+// left to the kernel's choice.
 const streamConfig = `[Interface]
 PrivateKey = ` + keyA + `
+ListenPort = 51820
 Address = 10.8.0.5/32
 DNS = 10.8.0.1
 
@@ -91,11 +122,18 @@ func newTransportHarness(t *testing.T, linkUp bool) *transportHarness {
 		return []byte("ok"), nil
 	}
 	h := &transportHarness{m: m, calls: calls, dev: awg.dev}
-	m.startForwarder = func(_ context.Context, _ string, configPath string) (func() error, error) {
-		h.started = append(h.started, configPath)
-		return func() error { h.stopped++; return nil }, nil
+	m.streamTransport = func(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error) {
+		if h.buildErr != nil {
+			return nil, h.buildErr
+		}
+		// Copy: the Manager keeps its own reference in forwarder.spec, and a
+		// test that mutates the spec afterwards must not reach into it.
+		held := *spec
+		h.passSpec = &held
+		f := &fakeStream{spec: held, onSession: onSession}
+		h.streams = append(h.streams, f)
+		return f, nil
 	}
-	m.waitForwarder = func(context.Context, string) error { return nil }
 	return h
 }
 
@@ -116,15 +154,19 @@ func (h *transportHarness) has(name string, args ...string) bool {
 	return false
 }
 
-func TestUpWithStreamTransportPinsUpstreamBeforeWgQuick(t *testing.T) {
-	h := newTransportHarness(t, false)
-
+func (h *transportHarness) up(t *testing.T) {
+	t.Helper()
 	if _, err := h.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
 		t.Fatalf("Up = %v, want nil", err)
 	}
+}
+
+func TestUpWithStreamTransportPinsServerBeforeWgQuick(t *testing.T) {
+	h := newTransportHarness(t, false)
+	h.up(t)
 
 	// The bypass route must be installed before wg-quick runs: from the
-	// moment the tunnel's routes exist, the forwarder's egress would be
+	// moment the tunnel's routes exist, the transport's egress would be
 	// routed into the tunnel it carries.
 	var pinIdx, wgIdx = -1, -1
 	for i, c := range *h.calls {
@@ -147,37 +189,50 @@ func TestUpWithStreamTransportPinsUpstreamBeforeWgQuick(t *testing.T) {
 	if !h.has("ip", "route", "replace", "203.0.113.10/32", "via", "192.168.1.1", "dev", "eth0") {
 		t.Errorf("bypass route not pinned through the physical path:\n%v", h.callStrings())
 	}
-	// The forwarder is started with the root-only document and waited for.
-	if len(h.started) != 1 {
-		t.Fatalf("forwarder started %d times, want 1", len(h.started))
-	}
-	info, err := os.Stat(h.started[0])
-	if err != nil {
-		t.Fatalf("forwarder config: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("forwarder config mode = %v, want 0600", info.Mode().Perm())
-	}
-	data, err := os.ReadFile(h.started[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"type":"mixed"`) {
-		t.Errorf("forwarder config document = %q, want the client's document verbatim", data)
-	}
 	// wg-quick saw a config whose endpoint is the loopback listen address.
 	if !h.has(wgQuickBinary, "up", h.m.configPath()) {
 		t.Errorf("wg-quick up missing:\n%v", h.callStrings())
 	}
 }
 
-func TestUpWithStreamTransportPinsWgQuickTables(t *testing.T) {
+func TestUpStartsTheTransportWithTheClientsOwnCredentials(t *testing.T) {
 	h := newTransportHarness(t, false)
-	if _, err := h.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
+	spec := streamSpec()
+	if _, err := h.m.Up(context.Background(), streamConfig, spec); err != nil {
 		t.Fatalf("Up = %v, want nil", err)
 	}
+	if len(h.streams) != 1 {
+		t.Fatalf("transport built %d times, want 1", len(h.streams))
+	}
+	if h.streams[0].started != 1 {
+		t.Errorf("transport started %d times, want 1", h.streams[0].started)
+	}
+	// The daemon must not rewrite what the client sent: the pin set, the PSK,
+	// and the client id are the control plane's, not the daemon's.
+	got := h.passSpec
+	if got.Listen != spec.Listen || got.Deliver != spec.Deliver || got.Server != spec.Server {
+		t.Errorf("daemon rewrote the addresses: %+v", got)
+	}
+	if got.PSK != spec.PSK || got.ClientID != spec.ClientID || len(got.SPKIPins) != 1 || got.SPKIPins[0] != spec.SPKIPins[0] {
+		t.Errorf("daemon rewrote the credentials: %+v", got)
+	}
+	// And they are the ones that decode to the sizes the derivation needs.
+	if _, err := got.StreamPSK(); err != nil {
+		t.Errorf("StreamPSK: %v", err)
+	}
+	if _, err := got.StreamClientID(); err != nil {
+		t.Errorf("StreamClientID: %v", err)
+	}
+	if _, err := got.StreamSPKIPins(); err != nil {
+		t.Errorf("StreamSPKIPins: %v", err)
+	}
+}
 
-	// wg-quick's strict-mode rules steer *unmarked* packets (the forwarder)
+func TestUpWithStreamTransportPinsWgQuickTables(t *testing.T) {
+	h := newTransportHarness(t, false)
+	h.up(t)
+
+	// wg-quick's strict-mode rules steer *unmarked* packets (the transport)
 	// into its own table before the main one, so the bypass route has to
 	// exist there too.
 	if !h.has("ip", "rule", "show") {
@@ -194,18 +249,16 @@ func TestUpWithStreamTransportPinsWgQuickTables(t *testing.T) {
 	}
 }
 
-func TestDownTearsDownForwarderAndEveryPinnedRoute(t *testing.T) {
+func TestDownTearsDownTheTransportAndEveryPinnedRoute(t *testing.T) {
 	h := newTransportHarness(t, true)
-	if _, err := h.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
-		t.Fatalf("Up = %v, want nil", err)
-	}
+	h.up(t)
 	*h.calls = (*h.calls)[:0]
 
 	if _, err := h.m.Down(context.Background()); err != nil {
 		t.Fatalf("Down = %v, want nil", err)
 	}
-	if h.stopped != 1 {
-		t.Errorf("forwarder stopped %d times, want exactly 1", h.stopped)
+	if h.streams[0].stopped != 1 {
+		t.Errorf("transport stopped %d times, want exactly 1", h.streams[0].stopped)
 	}
 	// Both the main-table pin and the wg-quick-table pin are removed.
 	if !h.has("ip", "route", "del", "203.0.113.10/32") {
@@ -214,30 +267,25 @@ func TestDownTearsDownForwarderAndEveryPinnedRoute(t *testing.T) {
 	if !h.has("ip", "route", "del", "203.0.113.10/32", "table", "51820") {
 		t.Errorf("wg-quick-table bypass route left behind:\n%v", h.callStrings())
 	}
-	if _, err := os.Stat(h.m.forwarderConfigPath()); !os.IsNotExist(err) {
-		t.Error("forwarder config survived a successful teardown")
-	}
-	if h.m.fwd != nil {
-		t.Error("live forwarder marker survived a successful teardown")
+	if h.m.transport != nil {
+		t.Error("live transport marker survived a successful teardown")
 	}
 }
 
 func TestUpWithStreamTransportTearsDownBeforeRetry(t *testing.T) {
 	h := newTransportHarness(t, true)
-	if _, err := h.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
-		t.Fatalf("Up = %v, want nil", err)
-	}
-	stoppedBefore := h.stopped
+	h.up(t)
+	stoppedBefore := h.streams[0].stopped
 
-	// A retry (native config, no transport) must not orphan the forwarder.
+	// A retry (native config, no transport) must not orphan the transport.
 	if _, err := h.m.Up(context.Background(), validConfig, nil); err != nil {
 		t.Fatalf("Up(native) = %v, want nil", err)
 	}
-	if h.stopped != stoppedBefore+1 {
-		t.Errorf("forwarder stopped %d times, want the retry to stop it once more (%d)", h.stopped, stoppedBefore+1)
+	if h.streams[0].stopped != stoppedBefore+1 {
+		t.Errorf("transport stopped %d times, want the retry to stop it once more (%d)", h.streams[0].stopped, stoppedBefore+1)
 	}
-	if h.m.fwd != nil {
-		t.Error("retry left a live forwarder marker")
+	if h.m.transport != nil {
+		t.Error("retry left a live transport marker")
 	}
 }
 
@@ -250,17 +298,17 @@ func TestUpRejectsTransportWithObfuscatedConfig(t *testing.T) {
 	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
 		t.Fatalf("Up(obfuscated + transport) = %v, want bad config", err)
 	}
-	if h.tunMade != 0 || len(h.started) != 0 {
-		t.Error("a rejected combination must not create a data plane or a forwarder")
+	if h.tunMade != 0 || len(h.streams) != 0 {
+		t.Error("a rejected combination must not create a data plane or a transport")
 	}
-	if h.m.fwd != nil {
-		t.Error("a rejected combination left a live forwarder marker")
+	if h.m.transport != nil {
+		t.Error("a rejected combination left a live transport marker")
 	}
 }
 
 func TestUpWithStreamTransportRecoversWhenWgQuickFails(t *testing.T) {
 	h := newTransportHarness(t, false)
-	// Fail wg-quick only; the forwarder and its pins must still be swept.
+	// Fail wg-quick only; the transport and its pins must still be swept.
 	m := h.m
 	run := m.run
 	m.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -275,61 +323,73 @@ func TestUpWithStreamTransportRecoversWhenWgQuickFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Up = nil, want the wg-quick failure")
 	}
-	if h.stopped != 1 {
-		t.Errorf("forwarder stopped %d times after a failed up, want 1", h.stopped)
+	if h.streams[0].stopped != 1 {
+		t.Errorf("transport stopped %d times after a failed up, want 1", h.streams[0].stopped)
 	}
-	if h.m.fwd != nil {
-		t.Error("a failed up left a live forwarder marker")
+	if h.m.transport != nil {
+		t.Error("a failed up left a live transport marker")
 	}
 	if !h.has("ip", "route", "del", "203.0.113.10/32") {
 		t.Errorf("bypass route left behind after a failed up:\n%v", h.callStrings())
 	}
-	if _, err := os.Stat(h.m.forwarderConfigPath()); !os.IsNotExist(err) {
-		t.Error("forwarder config left behind after a failed up")
-	}
 }
 
-func TestUpWithStreamTransportFailsClosedWhenForwarderNeverListens(t *testing.T) {
+func TestUpWithStreamTransportFailsClosedWhenTheTransportCannotBeBuilt(t *testing.T) {
 	h := newTransportHarness(t, false)
-	h.m.waitForwarder = func(context.Context, string) error {
-		return errors.New("no listener within 5s")
-	}
+	// A listen address the daemon cannot bind, or a credential it cannot
+	// decode, must not bring a tunnel up on a dead loopback endpoint.
+	h.buildErr = errors.New("bind 127.0.0.1:51821: address already in use")
 
 	_, err := h.m.Up(context.Background(), streamConfig, streamSpec())
 	if err == nil {
-		t.Fatal("Up = nil, want the readiness failure")
+		t.Fatal("Up = nil, want the transport-construction failure")
 	}
-	// The recovery pass stops the forwarder it started rather than leaving
-	// a process behind a "failed" up.
-	if h.stopped != 1 {
-		t.Errorf("forwarder stopped %d times, want 1", h.stopped)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
+		t.Fatalf("Up = %v, want a bad-config error", err)
 	}
-	// wg-quick never ran: the tunnel is not brought up on a dead forwarder.
+	// wg-quick never ran: the tunnel is not brought up on a dead transport.
 	if h.has(wgQuickBinary) {
-		t.Errorf("wg-quick ran despite an unready forwarder:\n%v", h.callStrings())
+		t.Errorf("wg-quick ran despite an unbuildable transport:\n%v", h.callStrings())
+	}
+	if h.m.transport != nil {
+		t.Error("a failed up left a live transport marker")
 	}
 }
 
-func TestUpWithStreamTransportFailsClosedWithoutForwarderBinary(t *testing.T) {
+func TestUpWithStreamTransportRejectsAnInvalidSpecBeforeAnything(t *testing.T) {
 	h := newTransportHarness(t, false)
-	// A missing binary must not leave a privileged document behind, and
-	// must never start a tunnel.
-	h.m.lookup = func(name string) (string, error) {
-		if name == streamSpec().Binary {
-			return "", errors.New("not found under the fixed tool directories")
-		}
-		return name, nil
-	}
+	// A spec the envelope rejects must not reach the transport at all: the
+	// check is the daemon's own defence against a client that skips its own.
+	spec := streamSpec()
+	spec.SPKIPins = nil
 
-	_, err := h.m.Up(context.Background(), streamConfig, streamSpec())
-	if err == nil {
-		t.Fatal("Up = nil, want the missing-binary failure")
+	_, err := h.m.Up(context.Background(), streamConfig, spec)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
+		t.Fatalf("Up(no pins) = %v, want a bad-config error", err)
 	}
-	if len(h.started) != 0 {
-		t.Error("a forwarder was started without a resolvable binary")
+	if len(h.streams) != 0 {
+		t.Error("a transport was built from a spec that failed validation")
 	}
-	if h.has(wgQuickBinary) {
-		t.Errorf("wg-quick ran despite a missing forwarder binary:\n%v", h.callStrings())
+	if h.has("ip", "route", "replace", "203.0.113.10/32") {
+		t.Error("a bypass route was pinned for a spec that failed validation")
+	}
+}
+
+func TestUpWithStreamTransportResolvesTheServerThroughThePhysicalResolver(t *testing.T) {
+	h := newTransportHarness(t, false)
+	// A literal server address needs no resolver, so a machine with no DNS
+	// configured at all can still come up on the rung.
+	spec := streamSpec()
+	spec.Server = "203.0.113.10:443"
+	m := h.m
+	m.resolveHost = func(context.Context, string) ([]net.IP, error) {
+		t.Error("a literal server address must not hit the resolver")
+		return nil, errors.New("unreachable")
+	}
+	if _, err := m.Up(context.Background(), streamConfig, spec); err != nil {
+		t.Fatalf("Up = %v, want nil", err)
 	}
 }
 
@@ -352,7 +412,7 @@ func TestParseUnmarkedRuleTables(t *testing.T) {
 			want: []int{51820},
 		},
 		{
-			name: "marked rules and the main table are not the forwarder's path",
+			name: "marked rules and the main table are not the transport's path",
 			rules: `0:	from all lookup local
 32766:	from all lookup 51820 suppress_prefixlength 0
 32767:	from all lookup main suppress_prefixlength 0
@@ -390,17 +450,17 @@ func TestParseUnmarkedRuleTables(t *testing.T) {
 	}
 }
 
-func TestSplitUpstreamDefaultsToTLSPort(t *testing.T) {
-	host, port := splitUpstream("vpn.example.net:8443")
+func TestSplitServerDefaultsToTLSPort(t *testing.T) {
+	host, port := splitServer("vpn.example.net:8443")
 	if host != "vpn.example.net" || port != "8443" {
-		t.Errorf("splitUpstream(host:port) = %q,%q", host, port)
+		t.Errorf("splitServer(host:port) = %q,%q", host, port)
 	}
-	host, port = splitUpstream("vpn.example.net")
+	host, port = splitServer("vpn.example.net")
 	if host != "vpn.example.net" || port != "443" {
-		t.Errorf("splitUpstream(bare host) = %q,%q, want 443 default", host, port)
+		t.Errorf("splitServer(bare host) = %q,%q, want 443 default", host, port)
 	}
-	host, port = splitUpstream("[2001:db8::1]:443")
+	host, port = splitServer("[2001:db8::1]:443")
 	if host != "2001:db8::1" || port != "443" {
-		t.Errorf("splitUpstream(v6) = %q,%q", host, port)
+		t.Errorf("splitServer(v6) = %q,%q", host, port)
 	}
 }

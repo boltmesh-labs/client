@@ -7,10 +7,11 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -23,66 +24,94 @@ const Version = 1
 // Request-envelope limits. The ID is opaque correlation data, not free text:
 // bounding its length and charset keeps it cheap to echo and impossible to
 // smuggle control bytes or unbounded data through. Capabilities are short
-// lowercase tokens, so they get the same treatment. The transport spec is
-// the client's authored forwarder document plus the two addresses the
-// daemon acts on, so it gets the same bounding.
+// lowercase tokens, so they get the same treatment. The transport spec
+// carries a small, fixed set of addresses and credentials, so it is bounded
+// the same way.
 const (
 	MaxIDLength  = 64
 	MaxCaps      = 16
 	MaxCapLength = 32
-	// MaxForwarderConfigSize bounds the opaque forwarder configuration
-	// document. Real ones are a few KiB of JSON; 256 KiB is generous while
-	// still refusing memory-exhaustion payloads (and it lands in a root-only
-	// file).
-	MaxForwarderConfigSize = 256 * 1024
-	// MaxTransportListenPort / MaxTransportUpstreamPort bound the two
-	// addresses. Ports are uint16 by construction; the upper bounds only
-	// reject the zero port, which is never dialable.
-	MaxTransportListenPort   = 65535
-	MaxTransportUpstreamPort = 65535
+	// MaxTransportPort bounds a transport port. Ports are uint16 by
+	// construction; the upper bound only rejects the zero port, which is
+	// never dialable.
+	MaxTransportPort = 65535
+	// MaxTransportServerName bounds the TLS server name (an SNI, so a
+	// hostname or a short IP literal).
+	MaxTransportServerName = 253
+	// MaxTransportSPKIPins bounds how many certificate pins a node may
+	// offer, so a node rotating its key can ship the next pin alongside the
+	// current one without the field becoming an open list.
+	MaxTransportSPKIPins = 4
+	// MaxTransportSecretSize bounds a base64 credential field. The real
+	// values are 32 bytes (32 base64 characters) and 16 bytes; the headroom
+	// only exists so a future key size is not an envelope change.
+	MaxTransportSecretSize = 128
 )
 
-// Transport modes. `stream` carries the tunnel's UDP datagrams inside a
-// locally-run forwarder's stream transport (for networks that block
-// non-TLS WireGuard UDP, or fingerprint it). The WireGuard endpoint in the
-// config is then a loopback address and `upstream` names the real server the
-// forwarder dials.
+// Transport modes. `stream` carries the tunnel's UDP datagrams inside a TLS
+// session the daemon runs itself (for networks that block non-TLS WireGuard
+// UDP, or fingerprint it). The WireGuard endpoint in the config is then a
+// loopback address and `server` names the real node the session goes to.
 const TransportModeStream = "stream"
 
 // TransportSpec is the optional `up` transport the daemon must run for the
-// tunnel. The client authors both halves: `config` is the complete document
-// handed to the forwarder binary verbatim (the client tracks that tool's
-// schema, the daemon does not), while `listen` and `upstream` are the two
-// addresses the daemon acts on itself — `listen` is what it waits for before
-// reporting the tunnel up, and `upstream` is what it pins through the
-// physical path so the forwarder's own egress can never loop into the tunnel
-// it carries.
+// tunnel: everything `internal/stream` needs to carry the tunnel's datagrams
+// to the node, and the two local addresses it needs to do so.
 //
-// The forwarder is not a privilege boundary (it binds a loopback port and
-// dials out), but its lifecycle is owned by the daemon because the tunnel's
-// is: an app-restarted client would otherwise orphan it, and only the daemon
-// can install the bypass route.
+// It is a credential set, not a program. The daemon runs the transport
+// in-process (root-only, no external binary, so there is nothing to sign,
+// ship, or fingerprint), which is why this carries the node's certificate
+// pins and the device's pre-shared key instead of a configuration document.
+// The client is the only side that knows those values, and it obtains them
+// from the control plane the same way it obtains the tunnel's keys.
+//
+// Lifecycle is the daemon's because the tunnel's is: an app-restarted client
+// would otherwise orphan the transport, and only the daemon can install the
+// bypass route that keeps the transport's own egress out of the tunnel it
+// carries.
+//
+// PSK is a secret: it is never logged, never echoed in an error, and never
+// written to disk. It travels over the daemon's local socket, which is the
+// same channel the tunnel's own private key already travels on.
 type TransportSpec struct {
 	// Mode is [TransportModeStream].
 	Mode string `json:"mode"`
 	// Listen is the loopback `host:port` the tunnel's peer Endpoint points
-	// at (the forwarder's local inbound).
+	// at: the transport's local inbound, where the tunnel's datagrams
+	// arrive.
 	Listen string `json:"listen"`
-	// Upstream is the `host[:port]` the forwarder dials, i.e. the real
-	// server endpoint behind the stream. Its address family picks the
-	// family of the bypass route; the port is optional (defaults to 443).
-	Upstream string `json:"upstream"`
-	// Config is the forwarder's own configuration document, written to a
-	// root-only file and passed to the binary by path.
-	Config string `json:"config"`
-	// Binary is the forwarder executable name, resolved under the daemon's
-	// fixed tool directories (never PATH).
-	Binary string `json:"binary"`
+	// Deliver is the loopback `host:port` of the tunnel's own WireGuard
+	// listen port, where the node's datagrams are handed back. It is
+	// explicit because it cannot be derived: an interface with
+	// ListenPort=0 takes an ephemeral port nobody can guess, so the client
+	// pins the local port when it selects this transport.
+	Deliver string `json:"deliver"`
+	// Server is the `host[:port]` of the node's TLS endpoint, i.e. the real
+	// server behind the stream. Its address family picks the family of the
+	// bypass route; the port is optional (defaults to 443).
+	Server string `json:"server"`
+	// ServerName is the SNI to present and the name the certificate pin is
+	// checked against.
+	ServerName string `json:"server_name"`
+	// SPKIPins are the SHA-256 digests of the node's leaf public key, base64
+	// encoded. At least one is required: a pinned stream with no pin would be
+	// a stream to whoever answers. Several are allowed so a node can rotate
+	// its key without a client release.
+	SPKIPins []string `json:"spki_sha256"`
+	// PSK is the device's stream credential, base64. It authenticates the
+	// tunnel to the node, so the node's port is not an open relay for anyone
+	// who finds it.
+	PSK string `json:"psk"`
+	// ClientID is the device's stream identity, base64. The node looks the
+	// PSK up by it; it is a random per-device id rather than the device UUID
+	// so the node's table can be keyed without publishing stable identifiers.
+	ClientID string `json:"client_id"`
 }
 
 // Validate checks the spec envelope. Callers have already run request
 // validation, so this only covers the transport's own shape; failures are
-// client programming errors ([CodeBadRequest]).
+// client programming errors ([CodeBadRequest]). No error here includes a
+// credential value, so a rejected spec cannot leak the PSK into a log.
 func (t *TransportSpec) Validate() error {
 	if t.Mode != TransportModeStream {
 		return fmt.Errorf("unsupported transport mode %q", t.Mode)
@@ -90,23 +119,103 @@ func (t *TransportSpec) Validate() error {
 	if err := validateLoopbackEndpoint("listen", t.Listen); err != nil {
 		return err
 	}
-	if err := validateUpstream("upstream", t.Upstream); err != nil {
+	if err := validateLoopbackEndpoint("deliver", t.Deliver); err != nil {
 		return err
 	}
-	if t.Binary == "" {
-		return errors.New("transport requires a binary")
+	if err := validateServer("server", t.Server); err != nil {
+		return err
 	}
-	// A bare name only: the daemon resolves it under its fixed tool
-	// directories, and a path would let the client choose the file the
-	// daemon executes as root.
-	if strings.ContainsAny(t.Binary, `/\`) || t.Binary != filepath.Base(t.Binary) {
-		return errors.New("transport binary must be a bare name")
+	if err := validateServerName(t.ServerName); err != nil {
+		return err
 	}
-	if len(t.Config) == 0 {
-		return errors.New("transport requires a config document")
+	if len(t.SPKIPins) == 0 {
+		return errors.New("transport requires a certificate pin")
 	}
-	if len(t.Config) > MaxForwarderConfigSize {
-		return errors.New("transport config is too large")
+	if len(t.SPKIPins) > MaxTransportSPKIPins {
+		return errors.New("transport has too many certificate pins")
+	}
+	for _, pin := range t.SPKIPins {
+		digest, err := decodeBase64(pin, MaxTransportSecretSize)
+		if err != nil || len(digest) != sha256.Size {
+			return errors.New("transport certificate pin is not a sha-256 digest")
+		}
+	}
+	if err := validateCredential("psk", t.PSK); err != nil {
+		return err
+	}
+	if _, err := t.StreamPSK(); err != nil {
+		return err
+	}
+	if _, err := t.StreamClientID(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StreamPSK decodes the device's pre-shared key. Sizes are checked here
+// because the key derivation is the one thing that must not be attempted
+// with the wrong amount of entropy.
+func (t *TransportSpec) StreamPSK() ([]byte, error) {
+	return decodeCredential("psk", t.PSK, 32)
+}
+
+// StreamClientID decodes the device's stream identity.
+func (t *TransportSpec) StreamClientID() ([]byte, error) {
+	return decodeCredential("client_id", t.ClientID, 16)
+}
+
+// StreamSPKIPins decodes the node's certificate pins.
+func (t *TransportSpec) StreamSPKIPins() ([][]byte, error) {
+	pins := make([][]byte, 0, len(t.SPKIPins))
+	for i, pin := range t.SPKIPins {
+		digest, err := decodeCredential(fmt.Sprintf("spki_sha256[%d]", i), pin, sha256.Size)
+		if err != nil {
+			return nil, err
+		}
+		pins = append(pins, digest)
+	}
+	return pins, nil
+}
+
+func validateCredential(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("transport requires %s", field)
+	}
+	if len(value) > MaxTransportSecretSize {
+		return fmt.Errorf("transport %s is too long", field)
+	}
+	return nil
+}
+
+// decodeCredential decodes a base64 credential of an exact size. The field
+// name appears in errors; the value never does.
+func decodeCredential(field, value string, size int) ([]byte, error) {
+	decoded, err := decodeBase64(value, MaxTransportSecretSize)
+	if err != nil {
+		return nil, fmt.Errorf("transport %s is not base64", field)
+	}
+	if len(decoded) != size {
+		return nil, fmt.Errorf("transport %s must decode to %d bytes, got %d", field, size, len(decoded))
+	}
+	return decoded, nil
+}
+
+func decodeBase64(value string, max int) ([]byte, error) {
+	if len(value) > max {
+		return nil, errors.New("base64 value is too long")
+	}
+	return base64.StdEncoding.DecodeString(value)
+}
+
+func validateServerName(name string) error {
+	if name == "" {
+		return errors.New("transport requires a server name")
+	}
+	if len(name) > MaxTransportServerName {
+		return errors.New("transport server name is too long")
+	}
+	if strings.ContainsAny(name, " \t\r\n/\\") {
+		return errors.New("transport server name is malformed")
 	}
 	return nil
 }
@@ -130,11 +239,11 @@ func validateLoopbackEndpoint(field, value string) error {
 	return nil
 }
 
-func validateUpstream(field, value string) error {
+func validateServer(field, value string) error {
 	host, port, err := net.SplitHostPort(value)
 	if err != nil {
-		// A bare host is allowed: the port defaults to 443 for stream
-		// transports, which all dial TLS.
+		// A bare host is allowed: the port defaults to 443, which is the
+		// only port a stream transport dials.
 		host, port = value, "443"
 	}
 	if strings.TrimSpace(host) == "" {
@@ -148,7 +257,7 @@ func validateUpstream(field, value string) error {
 
 func validatePort(field, port string) error {
 	n, err := strconv.Atoi(port)
-	if err != nil || n <= 0 || n > MaxTransportListenPort {
+	if err != nil || n <= 0 || n > MaxTransportPort {
 		return fmt.Errorf("transport %s has an invalid port", field)
 	}
 	return nil
@@ -164,9 +273,9 @@ const (
 	// CapCapabilities marks that the daemon advertises its capabilities.
 	CapCapabilities = "caps"
 	// CapStreamTransport marks that the daemon runs a stream transport's
-	// local forwarder for `up` and pins its upstream route. A client must
+	// stream transport for `up` and pins its server route. A client must
 	// see this token before selecting the stream rung: without it the
-	// forwarder would never start and the tunnel would sit on a dead
+	// transport would never start and the tunnel would sit on a dead
 	// loopback endpoint.
 	CapStreamTransport = "stream-transport"
 )
@@ -215,7 +324,7 @@ type Request struct {
 	Caps   []string `json:"caps,omitempty"`
 	// Transport is nil when the field is omitted: the tunnel runs on the
 	// WireGuard data plane alone. A non-nil spec (stream mode) additionally
-	// requires a local forwarder, which the daemon runs for the tunnel's
+	// requires a local transport, which the daemon runs for the tunnel's
 	// lifetime.
 	Transport *TransportSpec `json:"transport,omitempty"`
 }
@@ -241,7 +350,7 @@ func (r *Request) Validate() error {
 		return fmt.Errorf("unsupported op %q", r.Op)
 	}
 	// The transport rides the tunnel, so only `up` may carry one: a spec on a
-	// status or down request would describe a forwarder the daemon is not
+	// status or down request would describe a transport the daemon is not
 	// running.
 	if r.Transport != nil {
 		if r.Op != OpUp {

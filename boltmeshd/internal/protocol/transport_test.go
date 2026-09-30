@@ -1,17 +1,23 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
 
+// A valid spec is the node credential set the control plane hands the client:
+// a pinned certificate, a device PSK, and a device id.
 func validTransport() *TransportSpec {
 	return &TransportSpec{
-		Mode:     TransportModeStream,
-		Listen:   "127.0.0.1:51821",
-		Upstream: "vpn.example.net:443",
-		Config:   `{"inbounds":[]}`,
-		Binary:   "boltmesh-forwarder",
+		Mode:       TransportModeStream,
+		Listen:     "127.0.0.1:51821",
+		Deliver:    "127.0.0.1:51820",
+		Server:     "vpn.example.net:443",
+		ServerName: "vpn.example.net",
+		SPKIPins:   []string{base64.StdEncoding.EncodeToString(make([]byte, 32))},
+		PSK:        base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		ClientID:   base64.StdEncoding.EncodeToString(make([]byte, 16)),
 	}
 }
 
@@ -22,6 +28,10 @@ func TestTransportSpecValidateAcceptsStream(t *testing.T) {
 }
 
 func TestTransportSpecRejectsMalformed(t *testing.T) {
+	shortPSK := base64.StdEncoding.EncodeToString(make([]byte, 16))
+	longPSK := base64.StdEncoding.EncodeToString(make([]byte, 64))
+	shortPin := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	notBase64 := "not base64 at all!!"
 	cases := []struct {
 		name string
 		mut  func(*TransportSpec)
@@ -35,14 +45,32 @@ func TestTransportSpecRejectsMalformed(t *testing.T) {
 		// a peer it should be routing around.
 		{"listen not loopback", func(s *TransportSpec) { s.Listen = "10.0.0.1:51821" }},
 		{"listen is a hostname", func(s *TransportSpec) { s.Listen = "localhost:51821" }},
-		{"upstream empty", func(s *TransportSpec) { s.Upstream = "" }},
-		{"upstream with a control character", func(s *TransportSpec) { s.Upstream = "a\nb:443" }},
-		{"empty binary", func(s *TransportSpec) { s.Binary = "" }},
-		// A path would let the client choose the file the daemon runs as root.
-		{"binary with a path", func(s *TransportSpec) { s.Binary = "../../usr/bin/evil" }},
-		{"binary absolute", func(s *TransportSpec) { s.Binary = "/usr/bin/evil" }},
-		{"empty config", func(s *TransportSpec) { s.Config = "" }},
-		{"oversize config", func(s *TransportSpec) { s.Config = strings.Repeat("x", MaxForwarderConfigSize+1) }},
+		{"deliver without port", func(s *TransportSpec) { s.Deliver = "127.0.0.1" }},
+		{"deliver port zero", func(s *TransportSpec) { s.Deliver = "127.0.0.1:0" }},
+		// The reverse path must land on a local interface too, or the daemon
+		// would inject the node's datagrams into the network.
+		{"deliver not loopback", func(s *TransportSpec) { s.Deliver = "0.0.0.0:51820" }},
+		{"deliver is a hostname", func(s *TransportSpec) { s.Deliver = "localhost:51820" }},
+		{"server empty", func(s *TransportSpec) { s.Server = "" }},
+		{"server with a control character", func(s *TransportSpec) { s.Server = "a\nb:443" }},
+		{"server port zero", func(s *TransportSpec) { s.Server = "vpn.example.net:0" }},
+		{"server name empty", func(s *TransportSpec) { s.ServerName = "" }},
+		{"server name with a slash", func(s *TransportSpec) { s.ServerName = "a/b" }},
+		{"server name too long", func(s *TransportSpec) { s.ServerName = strings.Repeat("a", MaxTransportServerName+1) }},
+		// No pin would be a stream to whoever answers the port.
+		{"no pins", func(s *TransportSpec) { s.SPKIPins = nil }},
+		{"pin is not base64", func(s *TransportSpec) { s.SPKIPins = []string{notBase64} }},
+		{"pin is not a sha-256 digest", func(s *TransportSpec) { s.SPKIPins = []string{shortPin} }},
+		// Several pins are how a node rotates its key, but the list is not
+		// an open one.
+		{"too many pins", func(s *TransportSpec) { s.SPKIPins = make([]string, MaxTransportSPKIPins+1) }},
+		{"psk empty", func(s *TransportSpec) { s.PSK = "" }},
+		{"psk too short", func(s *TransportSpec) { s.PSK = shortPSK }},
+		{"psk too long", func(s *TransportSpec) { s.PSK = longPSK }},
+		{"psk not base64", func(s *TransportSpec) { s.PSK = notBase64 }},
+		{"client id empty", func(s *TransportSpec) { s.ClientID = "" }},
+		{"client id wrong size", func(s *TransportSpec) { s.ClientID = longPSK }},
+		{"client id not base64", func(s *TransportSpec) { s.ClientID = notBase64 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,13 +83,75 @@ func TestTransportSpecRejectsMalformed(t *testing.T) {
 	}
 }
 
-func TestTransportSpecAcceptsBareUpstreamHost(t *testing.T) {
+func TestTransportSpecErrorsNeverEchoThePSK(t *testing.T) {
+	// The PSK is a secret, and a rejected spec must not put it in an error
+	// message that a caller might log.
+	psk := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	for _, tc := range []struct {
+		name string
+		mut  func(*TransportSpec)
+	}{
+		{"wrong psk size", func(s *TransportSpec) { s.PSK = base64.StdEncoding.EncodeToString([]byte("short")) }},
+		{"not base64", func(s *TransportSpec) { s.PSK = "not base64 at all!!" }},
+		{"truncated", func(s *TransportSpec) { s.PSK = psk[:10] }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := validTransport()
+			spec.PSK = psk
+			tc.mut(spec)
+			err := spec.Validate()
+			if err == nil {
+				t.Fatal("Validate = nil, want error")
+			}
+			if strings.Contains(err.Error(), psk) || strings.Contains(err.Error(), "0123456789abcdef") {
+				t.Fatalf("error leaked the PSK: %v", err)
+			}
+		})
+	}
+}
+
+func TestTransportSpecDecodersReturnTheEncodedBytes(t *testing.T) {
+	spec := validTransport()
+	wantPSK := make([]byte, 32)
+	wantPSK[0] = 0xaa
+	wantID := make([]byte, 16)
+	wantID[15] = 0xbb
+	wantPin := make([]byte, 32)
+	wantPin[31] = 0xcc
+	spec.PSK = base64.StdEncoding.EncodeToString(wantPSK)
+	spec.ClientID = base64.StdEncoding.EncodeToString(wantID)
+	spec.SPKIPins = []string{base64.StdEncoding.EncodeToString(wantPin)}
+
+	psk, err := spec.StreamPSK()
+	if err != nil {
+		t.Fatalf("StreamPSK: %v", err)
+	}
+	if string(psk) != string(wantPSK) {
+		t.Errorf("StreamPSK = %x, want %x", psk, wantPSK)
+	}
+	id, err := spec.StreamClientID()
+	if err != nil {
+		t.Fatalf("StreamClientID: %v", err)
+	}
+	if string(id) != string(wantID) {
+		t.Errorf("StreamClientID = %x, want %x", id, wantID)
+	}
+	pins, err := spec.StreamSPKIPins()
+	if err != nil {
+		t.Fatalf("StreamSPKIPins: %v", err)
+	}
+	if len(pins) != 1 || string(pins[0]) != string(wantPin) {
+		t.Errorf("StreamSPKIPins = %x, want [%x]", pins, wantPin)
+	}
+}
+
+func TestTransportSpecAcceptsBareServerHost(t *testing.T) {
 	// A bare host is legal: stream transports all dial TLS, so 443 is the
 	// implied port.
 	spec := validTransport()
-	spec.Upstream = "vpn.example.net"
+	spec.Server = "vpn.example.net"
 	if err := spec.Validate(); err != nil {
-		t.Fatalf("Validate(bare upstream) = %v, want nil", err)
+		t.Fatalf("Validate(bare server) = %v, want nil", err)
 	}
 }
 
@@ -111,7 +201,7 @@ func TestRequestTransportInheritsEnvelopeValidation(t *testing.T) {
 
 func TestSupportedCapabilitiesAdvertisesStreamTransport(t *testing.T) {
 	// The client only selects the stream rung when it sees this token;
-	// without it the forwarder would never start and the tunnel would sit on
+	// without it the transport would never start and the tunnel would sit on
 	// a dead loopback endpoint.
 	for _, cap := range SupportedCapabilities() {
 		if cap == CapStreamTransport {

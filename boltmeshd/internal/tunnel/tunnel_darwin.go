@@ -142,7 +142,7 @@ func (m *Manager) clearDevice() {
 // applied (never two live devices).
 func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
 	if transport != nil {
-		// Stream transport is Linux-only for now: the forwarder lifecycle
+		// Stream transport is Linux-only for now: the transport lifecycle
 		// and its bypass route live in the Linux data plane, and silently
 		// ignoring the spec would leave the tunnel on a dead loopback
 		// endpoint.
