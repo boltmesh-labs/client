@@ -12,6 +12,7 @@ import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
 import 'package:boltmesh/features/vpn/state/connection_tuning.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
@@ -378,6 +379,132 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.autoHealAttempts, 1);
     expect(state.message, 'Connected');
+  });
+
+  // The obfuscated rung is a *response* to a confirmed local stall, so these
+  // pin the platform to the one data plane that can run it: flutter test
+  // defaults to Android, where the descriptor is (correctly) ignored.
+  group('obfuscation ladder', () {
+    void useLinuxDataPlane() {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    }
+
+    Map<String, dynamic> obfDial() =>
+        dialJson(obfuscation: awgObfuscationJson());
+
+    Future<(ProviderContainer, FakeTunnel)> seedObfuscated() {
+      final events = <String>[];
+      return seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return obfDial();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      });
+    }
+
+    test(
+      'native-first: the conf withholds obfuscation before any stall',
+      () async {
+        useLinuxDataPlane();
+        final (container, tunnel) = await seedObfuscated();
+
+        expect(tunnel.configs.first, isNot(contains('Jc =')));
+        expect(tunnel.configs.first, isNot(contains('H1 =')));
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      },
+    );
+
+    test(
+      'a confirmed local stall demotes the heal to the obfuscated rung',
+      () async {
+        useLinuxDataPlane();
+        final (container, tunnel) = await seedObfuscated();
+        final ctl = container.read(connectionProvider.notifier);
+
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        // The heal's rebuild carries the full parameter set, verbatim, between
+        // DNS and [Peer] (see buildWgQuickConfig).
+        expect(
+          tunnel.lastConfig,
+          contains(
+            'Jc = 3\n'
+            'Jmin = 40\n'
+            'Jmax = 70\n'
+            'S1 = 15\n'
+            'S2 = 17\n'
+            'S3 = 10\n'
+            'S4 = 5\n'
+            'H1 = 115-120\n'
+            'H2 = 130-130\n'
+            'H3 = 150-160\n'
+            'H4 = 171-171',
+          ),
+        );
+        final state = container.read(connectionProvider);
+        expect(state.autoHealAttempts, 1);
+        expect(state.phase, ConnPhase.connected);
+      },
+    );
+
+    test('a region without a descriptor never obfuscates', () async {
+      useLinuxDataPlane();
+      final events = <String>[];
+      final (container, tunnel) = await seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      });
+      final ctl = container.read(connectionProvider.notifier);
+
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
+
+      // The heal still happened — the ladder adds a rung, it does not
+      // replace the existing one.
+      expect(container.read(connectionProvider).autoHealAttempts, 1);
+      expect(tunnel.lastConfig, isNot(contains('Jc =')));
+    });
+
+    test('a platform without the data plane ignores the descriptor', () async {
+      // No platform override: the test runs as Android, whose plugin data
+      // plane has no obfuscated path.
+      final (container, tunnel) = await seedObfuscated();
+      final ctl = container.read(connectionProvider.notifier);
+
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
+
+      expect(container.read(connectionProvider).autoHealAttempts, 1);
+      expect(tunnel.lastConfig, isNot(contains('Jc =')));
+    });
+
+    test(
+      'demotion is sticky: a later manual connect stays obfuscated',
+      () async {
+        useLinuxDataPlane();
+        final (container, tunnel) = await seedObfuscated();
+        final ctl = container.read(connectionProvider.notifier);
+
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+        expect(tunnel.lastConfig, contains('Jc = 3'));
+
+        // Arm a fresh handshake for the reconnected session so the test
+        // observes the conf the connect builds, not a follow-on recovery
+        // cycle racing the assertion.
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.disconnect();
+        await ctl.connect();
+
+        // One proven-blocked network re-pays the failed-probe cycle on every
+        // connect; the process stays on the rung it demoted to.
+        expect(tunnel.lastConfig, contains('Jc = 3'));
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        expect(container.read(connectionProvider).autoHealAttempts, 0);
+      },
+    );
   });
 
   test(

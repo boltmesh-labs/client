@@ -22,6 +22,7 @@ Map<String, dynamic> dialJson({
   String wgDns = '10.8.0.1',
   String wgPublicKey = 'SRV',
   String? clientPublicKey,
+  Object? obfuscation,
 }) => {
   'id': deviceId,
   'assigned_ip': assignedIp,
@@ -34,6 +35,29 @@ Map<String, dynamic> dialJson({
   // Omitted when null: existing suites assert the pre-field behavior. A suite
   // exercising key reconciliation supplies the server-side peer key.
   'client_public_key': ?clientPublicKey,
+  // Same: omitted by default so existing suites exercise the native
+  // data plane. Obfuscation suites pass [awgObfuscationJson].
+  'obfuscation': ?obfuscation,
+};
+
+/// Canonical complete AmneziaWG obfuscation descriptor (backend
+/// `obfuscation` object): counts/sizes as numbers, magic-header ranges as
+/// `[lo, hi]` pairs. Both tunnel ends must run identical values.
+Map<String, dynamic> awgObfuscationJson() => {
+  'mode': 'awg',
+  'params': {
+    'jc': 3,
+    'jmin': 40,
+    'jmax': 70,
+    's1': 15,
+    's2': 17,
+    's3': 10,
+    's4': 5,
+    'h1': [115, 120],
+    'h2': [130, 130],
+    'h3': [150, 160],
+    'h4': [171, 171],
+  },
 };
 
 /// [dialJson] for the same server after a reboot rotated its WireGuard key.

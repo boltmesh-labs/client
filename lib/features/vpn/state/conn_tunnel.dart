@@ -145,12 +145,10 @@ extension ConnectionTunnel on ConnectionController {
     }
     final allowLocal = await _device.allowLocal();
     if (!sessionCurrent()) return;
-    // The obfuscation parameters ride the conf only where a data plane can
-    // actually run them (the Linux helper); elsewhere the region's
-    // descriptor is ignored and the native config is built.
-    final obfuscation = awgDataPlaneSupported() && dial.obfuscation != null
-        ? (dial.obfuscation!.isAwg ? dial.obfuscation!.params : null)
-        : null;
+    // The obfuscation parameters ride the conf only after the ladder demoted
+    // this process (a confirmed local stall) *and* this platform has a data
+    // plane that runs them; the native-first default costs an unobstructed
+    // network nothing. See `conn_obfuscation.dart`.
     final conf = buildWgQuickConfig(
       privateKey: priv,
       assignedIp: dial.assignedIp,
@@ -159,7 +157,7 @@ extension ConnectionTunnel on ConnectionController {
       endpointPort: dial.wgPort,
       dns: dial.wgDns,
       allowLocal: allowLocal,
-      obfuscation: obfuscation,
+      obfuscation: _obfuscationParamsFor(dial),
     );
     // Android needs the OS VPN consent before the plugin will bring the TUN
     // up, and the user answers a system dialog: an unbounded wait that must

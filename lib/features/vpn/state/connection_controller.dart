@@ -42,6 +42,7 @@ part 'conn_coldstart.dart';
 part 'conn_connect.dart';
 part 'conn_health.dart';
 part 'conn_lifecycle.dart';
+part 'conn_obfuscation.dart';
 part 'conn_poll.dart';
 part 'conn_provision.dart';
 part 'conn_recovery.dart';
@@ -145,6 +146,22 @@ class ConnectionController extends Notifier<ConnState> {
   /// that is just unknown (slow handshake, wedged IPC, missing native
   /// reader — which never counts at all, see the readerSupport gate).
   DateTime? _connectedAt;
+
+  /// True once a confirmed-local stall demoted this app process onto the
+  /// obfuscated (AmneziaWG) data plane, where the serving region offers one
+  /// (see `conn_obfuscation.dart`).
+  ///
+  /// The ladder is native-first: an unobstructed network pays nothing for the
+  /// obfuscation parameters, and only a stall the health policy confirmed
+  /// *locally* (a dead in-tunnel echo, a hard-stale handshake) escalates to
+  /// the obfuscated rung. Never a bare null read — a missing handshake from a
+  /// wedged reader is absence of evidence, not a blocked protocol.
+  ///
+  /// Demotion is sticky for the process: once a network has proven it
+  /// fingerprints WireGuard, every later connect stays obfuscated rather than
+  /// re-paying the failed-probe cycle, and an unblocked network pays only the
+  /// padding the parameters add. A restart re-probes native once.
+  bool _obfuscationDemoted = false;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was
   /// *performed-dead* (`false`, never null). Reaching

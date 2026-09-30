@@ -59,6 +59,13 @@ extension ConnectionRecovery on ConnectionController {
       // every heal before the stall can escalate.
       final prevFailovers = snap.autoFailoverAttempts;
       final prevPollFailures = snap.pollFailures;
+      // The heal restart is the ladder's obfuscation rung: a path the health
+      // policy confirmed dead locally and that survives a plain restart is
+      // what a fingerprinting middlebox looks like, so the rebuild below
+      // carries the region's obfuscation parameters when it has them. Demoting
+      // only on the local-confirmed/heal-decided path is what keeps a bare
+      // unknown read from ever reaching this.
+      _demoteToObfuscation(dial, why);
       AppLog.info('auto-heal start ($why) attempt=$attempt ${_healBudgets()}');
       snap = snap.copyWith(
         phase: ConnPhase.working,
