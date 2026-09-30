@@ -9,6 +9,10 @@ package protocol
 import (
 	"errors"
 	"fmt"
+	"net"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // Version is the wire-protocol version. Both sides reject mismatches so an
@@ -19,12 +23,136 @@ const Version = 1
 // Request-envelope limits. The ID is opaque correlation data, not free text:
 // bounding its length and charset keeps it cheap to echo and impossible to
 // smuggle control bytes or unbounded data through. Capabilities are short
-// lowercase tokens, so they get the same treatment.
+// lowercase tokens, so they get the same treatment. The transport spec is
+// the client's authored forwarder document plus the two addresses the
+// daemon acts on, so it gets the same bounding.
 const (
 	MaxIDLength  = 64
 	MaxCaps      = 16
 	MaxCapLength = 32
+	// MaxForwarderConfigSize bounds the opaque forwarder configuration
+	// document. Real ones are a few KiB of JSON; 256 KiB is generous while
+	// still refusing memory-exhaustion payloads (and it lands in a root-only
+	// file).
+	MaxForwarderConfigSize = 256 * 1024
+	// MaxTransportListenPort / MaxTransportUpstreamPort bound the two
+	// addresses. Ports are uint16 by construction; the upper bounds only
+	// reject the zero port, which is never dialable.
+	MaxTransportListenPort   = 65535
+	MaxTransportUpstreamPort = 65535
 )
+
+// Transport modes. `stream` carries the tunnel's UDP datagrams inside a
+// locally-run forwarder's stream transport (for networks that block
+// non-TLS WireGuard UDP, or fingerprint it). The WireGuard endpoint in the
+// config is then a loopback address and `upstream` names the real server the
+// forwarder dials.
+const TransportModeStream = "stream"
+
+// TransportSpec is the optional `up` transport the daemon must run for the
+// tunnel. The client authors both halves: `config` is the complete document
+// handed to the forwarder binary verbatim (the client tracks that tool's
+// schema, the daemon does not), while `listen` and `upstream` are the two
+// addresses the daemon acts on itself — `listen` is what it waits for before
+// reporting the tunnel up, and `upstream` is what it pins through the
+// physical path so the forwarder's own egress can never loop into the tunnel
+// it carries.
+//
+// The forwarder is not a privilege boundary (it binds a loopback port and
+// dials out), but its lifecycle is owned by the daemon because the tunnel's
+// is: an app-restarted client would otherwise orphan it, and only the daemon
+// can install the bypass route.
+type TransportSpec struct {
+	// Mode is [TransportModeStream].
+	Mode string `json:"mode"`
+	// Listen is the loopback `host:port` the tunnel's peer Endpoint points
+	// at (the forwarder's local inbound).
+	Listen string `json:"listen"`
+	// Upstream is the `host[:port]` the forwarder dials, i.e. the real
+	// server endpoint behind the stream. Its address family picks the
+	// family of the bypass route; the port is optional (defaults to 443).
+	Upstream string `json:"upstream"`
+	// Config is the forwarder's own configuration document, written to a
+	// root-only file and passed to the binary by path.
+	Config string `json:"config"`
+	// Binary is the forwarder executable name, resolved under the daemon's
+	// fixed tool directories (never PATH).
+	Binary string `json:"binary"`
+}
+
+// Validate checks the spec envelope. Callers have already run request
+// validation, so this only covers the transport's own shape; failures are
+// client programming errors ([CodeBadRequest]).
+func (t *TransportSpec) Validate() error {
+	if t.Mode != TransportModeStream {
+		return fmt.Errorf("unsupported transport mode %q", t.Mode)
+	}
+	if err := validateLoopbackEndpoint("listen", t.Listen); err != nil {
+		return err
+	}
+	if err := validateUpstream("upstream", t.Upstream); err != nil {
+		return err
+	}
+	if t.Binary == "" {
+		return errors.New("transport requires a binary")
+	}
+	// A bare name only: the daemon resolves it under its fixed tool
+	// directories, and a path would let the client choose the file the
+	// daemon executes as root.
+	if strings.ContainsAny(t.Binary, `/\`) || t.Binary != filepath.Base(t.Binary) {
+		return errors.New("transport binary must be a bare name")
+	}
+	if len(t.Config) == 0 {
+		return errors.New("transport requires a config document")
+	}
+	if len(t.Config) > MaxForwarderConfigSize {
+		return errors.New("transport config is too large")
+	}
+	return nil
+}
+
+// validateLoopbackEndpoint requires a loopback `host:port`, the only address
+// the tunnel may be pointed at in stream mode: a non-loopback listen address
+// would make the daemon (running as root) hand the tunnel a peer it should be
+// routing around.
+func validateLoopbackEndpoint(field, value string) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("transport %s must be host:port", field)
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("transport %s must be a loopback address", field)
+	}
+	if err := validatePort(field, port); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateUpstream(field, value string) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		// A bare host is allowed: the port defaults to 443 for stream
+		// transports, which all dial TLS.
+		host, port = value, "443"
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("transport %s has no host", field)
+	}
+	if strings.ContainsAny(host, " \t\r\n") {
+		return fmt.Errorf("transport %s has a malformed host", field)
+	}
+	return validatePort(field, port)
+}
+
+func validatePort(field, port string) error {
+	n, err := strconv.Atoi(port)
+	if err != nil || n <= 0 || n > MaxTransportListenPort {
+		return fmt.Errorf("transport %s has an invalid port", field)
+	}
+	return nil
+}
 
 // Capability tokens the daemon advertises. Negotiation is informational and
 // optional: the daemon always enforces request validation, and a client that
@@ -35,13 +163,19 @@ const (
 	CapStrictValidation = "strict-validation"
 	// CapCapabilities marks that the daemon advertises its capabilities.
 	CapCapabilities = "caps"
+	// CapStreamTransport marks that the daemon runs a stream transport's
+	// local forwarder for `up` and pins its upstream route. A client must
+	// see this token before selecting the stream rung: without it the
+	// forwarder would never start and the tunnel would sit on a dead
+	// loopback endpoint.
+	CapStreamTransport = "stream-transport"
 )
 
 // SupportedCapabilities lists the capability tokens this daemon understands.
 // It is returned on `ping` so the client can advertise and inspect the
 // intersection; the list is advisory, never a substitute for Version.
 func SupportedCapabilities() []string {
-	return []string{CapStrictValidation, CapCapabilities}
+	return []string{CapStrictValidation, CapCapabilities, CapStreamTransport}
 }
 
 // Operations.
@@ -79,6 +213,11 @@ type Request struct {
 	// explicitly empty value, which remains distinct for envelope validation.
 	Config *string  `json:"config,omitempty"`
 	Caps   []string `json:"caps,omitempty"`
+	// Transport is nil when the field is omitted: the tunnel runs on the
+	// WireGuard data plane alone. A non-nil spec (stream mode) additionally
+	// requires a local forwarder, which the daemon runs for the tunnel's
+	// lifetime.
+	Transport *TransportSpec `json:"transport,omitempty"`
 }
 
 // Validate checks the request envelope and rejects malformed field
@@ -100,6 +239,17 @@ func (r *Request) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported op %q", r.Op)
+	}
+	// The transport rides the tunnel, so only `up` may carry one: a spec on a
+	// status or down request would describe a forwarder the daemon is not
+	// running.
+	if r.Transport != nil {
+		if r.Op != OpUp {
+			return fmt.Errorf("transport is not allowed for op %q", r.Op)
+		}
+		if err := r.Transport.Validate(); err != nil {
+			return err
+		}
 	}
 	return validateCaps(r.Caps)
 }
