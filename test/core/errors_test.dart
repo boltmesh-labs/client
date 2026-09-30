@@ -15,6 +15,12 @@ void main() {
   });
 
   test('404 peerless distinguished from missing device', () {
+    expect(kindFor(404, 'Device has no peer.'), ApiErrorKind.noActivePeer);
+    expect(
+      kindFor(404, 'Device has no peer.', 'DEVICE_NO_PEER'),
+      ApiErrorKind.noActivePeer,
+    );
+    // Legacy code/detail for the same condition.
     expect(
       kindFor(404, 'Device has no active peer.'),
       ApiErrorKind.noActivePeer,
@@ -23,12 +29,26 @@ void main() {
       kindFor(404, 'Device not found.', 'DEVICE_NO_ACTIVE_PEER'),
       ApiErrorKind.noActivePeer,
     );
+    // Switch/rotate peerless variants share the same kind so they rebind
+    // instead of surfacing "reprovision".
+    expect(
+      kindFor(404, 'Device has no peer to switch.', 'PEER_NOT_FOUND'),
+      ApiErrorKind.noActivePeer,
+    );
+    expect(
+      kindFor(404, 'Device has no peer to rotate.', 'PEER_NOT_FOUND'),
+      ApiErrorKind.noActivePeer,
+    );
     expect(
       kindFor(404, 'Device not found.', 'DEVICE_NOT_FOUND'),
       ApiErrorKind.notFound,
     );
     expect(
-      friendlyMessage(404, 'Device has no active peer.'),
+      kindFor(404, 'VPN server not found.', 'SERVER_NOT_FOUND'),
+      ApiErrorKind.notFound,
+    );
+    expect(
+      friendlyMessage(404, 'Device has no peer.', 'DEVICE_NO_PEER'),
       contains('fresh peer'),
     );
   });

@@ -44,10 +44,16 @@ class ApiException implements Exception {
 
 /// True when a 404 means "device exists but has no bound peer" (expected
 /// after `disconnect`), not "device missing". Prefers the machine-readable
-/// backend `code` (`DEVICE_NO_ACTIVE_PEER`); falls back to the detail text
-/// for older backends that only send `DEVICE_NOT_FOUND`.
+/// backend `code` (`DEVICE_NO_PEER`; `PEER_NOT_FOUND` for the switch/rotate
+/// peerless variants); falls back to the detail text for older backends that
+/// only send `DEVICE_NOT_FOUND`. `DEVICE_NO_ACTIVE_PEER` is the legacy code
+/// for the same condition.
 bool isPeerless404(String? code, String lowerDetail) =>
-    code == 'DEVICE_NO_ACTIVE_PEER' || lowerDetail.contains('no active peer');
+    code == 'DEVICE_NO_PEER' ||
+    code == 'PEER_NOT_FOUND' ||
+    code == 'DEVICE_NO_ACTIVE_PEER' ||
+    lowerDetail.contains('has no peer') ||
+    lowerDetail.contains('no active peer');
 
 /// Generic copy for gateway/proxy outages. Reverse proxies in front of the
 /// backend answer 502/504 (and sometimes 500) with an HTML error page, which

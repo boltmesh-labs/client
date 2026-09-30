@@ -1516,7 +1516,7 @@ void main() {
           if (o.path.endsWith('/vpn-regions')) {
             return [regionJson('r-best', 'srv-b', 1)];
           }
-          // Disconnected/GC'd device: server truth is "no active peer", so
+          // Disconnected/GC'd device: server truth is "no peer", so
           // the Auto path falls back to a one-shot bind on the best region.
           if (o.path.endsWith('/config')) throw peerless(o);
           if (o.path.endsWith('/connect')) {

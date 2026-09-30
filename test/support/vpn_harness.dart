@@ -97,23 +97,20 @@ DioException networkTimeout(RequestOptions o) => DioException(
   ),
 );
 
-/// 404 with `DEVICE_NO_ACTIVE_PEER` (device exists, no bound peer).
+/// 404 with `DEVICE_NO_PEER` (device exists, no bound peer).
 DioException peerless(RequestOptions o) => DioException(
   requestOptions: o,
   type: DioExceptionType.badResponse,
   response: Response(
     requestOptions: o,
     statusCode: 404,
-    data: const {
-      'detail': 'Device has no active peer.',
-      'code': 'DEVICE_NO_ACTIVE_PEER',
-    },
+    data: const {'detail': 'Device has no peer.', 'code': 'DEVICE_NO_PEER'},
   ),
   error: const ApiException(
     ApiErrorKind.noActivePeer,
     'No active connection. Binding a fresh peer…',
     404,
-    'DEVICE_NO_ACTIVE_PEER',
+    'DEVICE_NO_PEER',
   ),
 );
 

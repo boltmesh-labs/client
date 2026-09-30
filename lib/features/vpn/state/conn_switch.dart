@@ -83,7 +83,7 @@ extension ConnectionSwitch on ConnectionController {
     // claim to still be connected on the old server when no tunnel runs.
     var tunnelDown = false;
     // Device identity for the peerless-switch recovery in `catch` (a peer
-    // GC'd after disconnect leaves a device with no active peer, which the
+    // GC'd after disconnect leaves a device with no peer, which the
     // backend's /switch POST rejects with 404).
     String? id;
     try {

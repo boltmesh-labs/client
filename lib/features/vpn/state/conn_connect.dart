@@ -295,7 +295,7 @@ extension ConnectionConnect on ConnectionController {
   }
 
   /// Server truth for the Auto path: the device's live dial, or null when
-  /// it holds no active peer (`DEVICE_NO_ACTIVE_PEER`). The dial is
+  /// it holds no active peer (`DEVICE_NO_PEER`). The dial is
   /// reconciled with the local keypair first (see [_configReconciled]), so a
   /// divergent identity is repaired before the peer is reused. Every other
   /// failure propagates to the caller.
