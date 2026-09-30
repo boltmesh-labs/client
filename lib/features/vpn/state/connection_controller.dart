@@ -150,12 +150,14 @@ class ConnectionController extends Notifier<ConnState> {
   /// *performed-dead* (`false`, never null). Reaching
   /// [ConnectionTuning.echoStallStrikes] shortens the dead-peer handshake
   /// window to [ConnectionTuning.echoStallHandshakeAge], so a data-path
-  /// death is caught sooner than the full rekey cycle. The echo is only
+  /// death is caught sooner than the full rekey cycle, and makes the run
+  /// positive path-death evidence for a direct failover. The echo is only
   /// read once the handshake is old enough to matter (see
   /// [ConnectionTuning.echoProbeAfter]); a skipped probe clears the run,
-  /// as does any alive/unknown echo, a successful status poll (backend
-  /// proven reachable through the tunnel), and a tunnel restart
-  /// ([_resetLocalHealth]).
+  /// as does any alive/unknown echo, a tunnel restart
+  /// ([_resetLocalHealth]), and a successful status poll only while the
+  /// handshake is still fresh — a poll may answer over a route outside the
+  /// dead tunnel, so it cannot erase a stale-handshake strike run.
   int _deadEchoStrikes = 0;
 
   /// Test seam: inspect/prime the dead-echo strike counter.

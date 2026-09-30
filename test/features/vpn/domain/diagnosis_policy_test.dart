@@ -126,8 +126,9 @@ void main() {
       );
     });
 
-    test('hard-stale handshake without the api stays a local heal', () {
-      // Control plane silent/unknown: the conservative same-server ladder.
+    test('hard-stale handshake fast-tracks without the api', () {
+      // The handshake itself is strong local path-death evidence; failover
+      // must stop the tunnel before testing direct control-plane reachability.
       for (final api in <bool?>[false, null]) {
         expect(
           classifyFailure(
@@ -136,7 +137,7 @@ void main() {
             apiReachable: api,
             hardStalled: true,
           ),
-          ConnectionFailureCause.totalBlackout,
+          ConnectionFailureCause.tunnelPathDead,
         );
       }
     });
@@ -169,9 +170,9 @@ void main() {
         );
       });
 
-      test('never moves servers without a reachable control plane', () {
-        // Same gate as every other fast-track rung: during a total outage
-        // this flag must not be able to trigger a move on its own.
+      test('backend node-down verdict fast-tracks without the api probe', () {
+        // Discovery after stopping the tunnel decides whether a move can
+        // actually complete; the pre-stop probe may be routed through it.
         for (final api in <bool?>[false, null]) {
           expect(
             classifyFailure(
@@ -180,7 +181,7 @@ void main() {
               apiReachable: api,
               serverConfirmedDown: true,
             ),
-            ConnectionFailureCause.totalBlackout,
+            ConnectionFailureCause.tunnelPathDead,
           );
         }
       });

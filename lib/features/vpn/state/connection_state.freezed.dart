@@ -35,16 +35,16 @@ mixin _$ConnState {
 /// operation starts, so the UI can decide whether [message] warrants a
 /// snack without parsing its (localizable, controller-owned) wording.
  bool get opFailed;/// Auto-heal restarts for the current failure incident. At most one
-/// cached-tunnel restart is attempted before recovery waits for the
-/// control plane or escalates to failover. The counter is cleared by a
-/// healthy status poll or a fresh session.
+/// cached-tunnel restart is attempted for ambiguous stalls; positive
+/// dead-path evidence can skip it and go straight to failover. The counter
+/// is cleared by a healthy status poll or a fresh session.
  int get autoHealAttempts;/// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the
 /// controller's max so two dead servers can't ping-pong forever.
 /// Reset on manual connect/switch, disconnect, and a successful status
 /// poll that lands on a *healthy* tunnel path (an observed, fresh
-/// handshake): an out-of-band poll success while the WireGuard path stays
-/// dead is not the outage ending, so it must not restore the ladder.
+/// handshake): a status response while the WireGuard path stays dead is
+/// not the outage ending, so it must not restore the ladder.
  int get autoFailoverAttempts;/// The backend reported the serving node as not `online` on the last
 /// `GET …/server-status` poll (see [ServerStatus.isUnhealthy]).
 ///
@@ -333,17 +333,17 @@ class _ConnState implements ConnState {
 /// snack without parsing its (localizable, controller-owned) wording.
 @override@JsonKey() final  bool opFailed;
 /// Auto-heal restarts for the current failure incident. At most one
-/// cached-tunnel restart is attempted before recovery waits for the
-/// control plane or escalates to failover. The counter is cleared by a
-/// healthy status poll or a fresh session.
+/// cached-tunnel restart is attempted for ambiguous stalls; positive
+/// dead-path evidence can skip it and go straight to failover. The counter
+/// is cleared by a healthy status poll or a fresh session.
 @override@JsonKey() final  int autoHealAttempts;
 /// Automatic dead-server moves for this connected session. Incremented
 /// on failover once the same-server heal is spent; capped by the
 /// controller's max so two dead servers can't ping-pong forever.
 /// Reset on manual connect/switch, disconnect, and a successful status
 /// poll that lands on a *healthy* tunnel path (an observed, fresh
-/// handshake): an out-of-band poll success while the WireGuard path stays
-/// dead is not the outage ending, so it must not restore the ladder.
+/// handshake): a status response while the WireGuard path stays dead is
+/// not the outage ending, so it must not restore the ladder.
 @override@JsonKey() final  int autoFailoverAttempts;
 /// The backend reported the serving node as not `online` on the last
 /// `GET …/server-status` poll (see [ServerStatus.isUnhealthy]).

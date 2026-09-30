@@ -573,7 +573,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   supported reader reports no handshake for 60s after a (re)start, the
   handshake drives recovery *without* corroboration. That keeps a filtered
   network (WireGuard UDP blocked/zero-rated while the HTTPS API stays
-  reachable out-of-band) from suppressing the ladder forever; a merely-late
+  reachable by another route) from suppressing the ladder forever; a merely-late
   rekey is well inside the ceiling, and a live echo still wins. On platforms
   with no handshake reader (Apple) detection stays degraded-stage dependent:
   a null read is absence of evidence and never heals on its own.
@@ -586,22 +586,27 @@ rest of the pipeline (which files, when, verify) is unchanged.
   handshake foreground (~45s hidden) instead of waiting out the full 150s;
   deaths after the gate are unaffected. A handshake inside the 25s keepalive
   still wins, and the run resets on any skipped/alive/unknown echo, a
-  successful status poll, or a tunnel restart. A *transition* into a degraded
+  successful status poll while the handshake is fresh (or on a platform with
+  no reader), or a tunnel restart. A *transition* into a degraded
   OS stage also kicks an immediate health tick (coalesced through the tick's
   single-flight guard) instead of waiting out the cadence, so a stall the OS
   already reported is corroborated on the first tick.
 - Diagnostic probes run only once a stall is suspected and are read-only —
   they never consume heal/move budgets: physical link → in-tunnel echo →
-  control-plane probe. A *performed* dead echo, or a hard-stale handshake,
-  with a reachable control plane fast-tracks straight to a server move,
-  stopping the proven-dead tunnel before discovery. Every post-heal
-  escalation is likewise path-dead: a stall that survived a same-server
-  restart stops the tunnel before discovery (the region fetch and switch
-  POST travel direct) instead of probing a path already known bad. Otherwise
-  the ladder is cheap-restart-first (a null echo with only a reachable
-  control plane stays on the local ladder — absence of evidence is not
-  death); the in-tunnel probes that remain on the recovery path use a short
-  3s budget, while manual switch/rotate keep the 10s one.
+  control-plane probe. The control-plane probe uses its own client but still
+  follows OS routing, so while a tunnel is up it may travel through the very
+  path that is dead; it is therefore only consulted for *ambiguous* evidence.
+  Positive local path-death evidence — two *performed-dead* echoes, a
+  hard-stale handshake, or a backend `server-status` "node not online"
+  verdict — fast-tracks straight to a server move, stopping the proven-dead
+  tunnel first so region discovery and the switch POST travel direct. Every
+  post-heal escalation is likewise path-dead: a stall that survived a
+  same-server restart stops the tunnel before discovery instead of probing a
+  path already known bad. Otherwise the ladder is cheap-restart-first (a
+  single dead echo, or a null echo with only a reachable control plane,
+  stays on the local ladder — absence of evidence is not death); the
+  in-tunnel probes that remain on the recovery path use a short 3s budget,
+  while manual switch/rotate keep the 10s one.
 - Ladder & budgets: offline restart on the cached config (zero API calls) →
   after one same-server restart, the next corroborated stall moves servers
   (same region first, then global lowest-load; an explicit pin errors out
@@ -609,8 +614,8 @@ rest of the pipeline (which files, when, verify) is unchanged.
   same-server restarts, after which recovery is surfaced as an actionable
   error instead of restarting a proven-dead config forever. A successful
   status poll ends the outage and restores the budget only when the handshake
-  is fresh: an out-of-band poll success while the WireGuard path stays dead
-  (WG UDP blocked) does not reset the ladder, so it still escalates. A 429
+  is fresh: a poll that answers over another route while the WireGuard path
+  stays dead does not reset the ladder, so it still escalates. A 429
   holds the ladder until its window reopens. A 5s post-(re)connect status
   check (re-armed after every restart) arms corroboration early, so a hard
   kill escalates in ~15s rather than a full poll interval. There is no

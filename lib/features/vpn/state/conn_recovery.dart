@@ -18,8 +18,8 @@ extension ConnectionRecovery on ConnectionController {
   ///
   /// [hardStalled] (the handshake stayed dead past
   /// [ConnectionTuning.hardHandshakeStaleAfter]) bypasses the
-  /// "backend reachable" suppression below: a reachable out-of-band control
-  /// plane no longer proves the data path when the handshake is hard-dead.
+  /// "backend reachable" suppression below: a status response does not prove
+  /// the data path healthy when the handshake is hard-dead.
   Future<void> _autoHeal(
     String why, {
     bool hardStalled = false,
@@ -164,7 +164,8 @@ extension ConnectionRecovery on ConnectionController {
   }
 
   /// Automatic move to a different server when the current one stays dead
-  /// through [ConnectionTuning.failoverHealThreshold] same-server heal.
+  /// through [ConnectionTuning.failoverHealThreshold] same-server heal, or
+  /// immediately when local evidence positively identifies a dead tunnel path.
   /// Stops the tunnel first so region discovery and the switch POST travel
   /// over the direct network (the live tunnel points at the dead server,
   /// and status polls through it are what timed out in the first place).
@@ -179,12 +180,11 @@ extension ConnectionRecovery on ConnectionController {
   /// backend *answers* while the tunnel stays up changed nothing, so it
   /// costs nothing and the tick cadence is the backoff.
   ///
-  /// [tunnelPathDead] is the path-already-suspect fast-track: a
-  /// performed-dead in-tunnel gateway echo, a hard-stale handshake, an
-  /// unreachable control probe, or simply a stall that survived a
-  /// same-server restart. The tunnel is stopped before discovery so the
-  /// region fetch and the switch POST travel direct instead of probing a
-  /// path already known bad.
+  /// [tunnelPathDead] is the path-already-suspect fast-track: confirmed dead
+  /// gateway echoes, a hard-stale handshake, a backend-confirmed-dead node,
+  /// or a stall that survived a same-server restart. The tunnel is stopped
+  /// before discovery so the region fetch and switch POST travel direct
+  /// instead of probing a path already known bad.
   Future<void> _autoFailover(
     String why, {
     bool tunnelPathDead = false,
@@ -204,8 +204,8 @@ extension ConnectionRecovery on ConnectionController {
         return;
       }
       // Positive local path-dead evidence is stronger than an older status
-      // response: that response may have travelled out-of-band while the
-      // WireGuard path was already dead.
+      // response: that request may have used a route independent of the
+      // WireGuard path that is already dead.
       if (!hardStalled && !tunnelPathDead && _lastStatusAnswered) return;
       await _autoFailoverBody(
         why,

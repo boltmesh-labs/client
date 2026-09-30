@@ -5,11 +5,15 @@ import '../../../core/dio_client.dart';
 import '../../../core/env.dart';
 import '../../../core/log.dart';
 
-/// Layer 3: cheap out-of-band control-plane probe.
+/// Layer 3: cheap control-plane health probe.
 ///
 /// A bare unauthenticated `GET <apiBaseUrl>/health` on its own short-
 /// timeout Dio — never the session client, so it can't burn the
 /// session-budgeted `status_limiter` or trigger the 401 refresh hook.
+/// A separate Dio does not bypass OS routing: the request may still travel
+/// through the active WireGuard tunnel. Confirmed local path-death therefore
+/// triggers failover before this probe can gate recovery; discovery then runs
+/// after the tunnel is stopped.
 /// Any HTTP response (even 5xx) proves the control plane is reachable;
 /// only transport failures mean unreachable. Null means unknown — the
 /// probe errored, or the API is on loopback and the probe is skipped: a

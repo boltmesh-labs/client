@@ -210,13 +210,12 @@ extension ConnectionHealth on ConnectionController {
     // Hard ceiling: past [ConnectionTuning.hardHandshakeStaleAfter]
     // (observed) or [ConnectionTuning.hardFirstHandshakeCeiling] after a
     // restart (never handshook), the handshake acts *without* backend
-    // corroboration. A reachable out-of-band control plane (WG UDP blocked,
+    // corroboration. A reachable control plane (WG UDP blocked,
     // API up) keeps polls succeeding, so corroboration never arrives and the
     // ladder would otherwise sit in the stall state forever; the ceiling
     // makes recovery deterministic. It only enters the stall — the
-    // fast-track rung still needs a reachable control plane (see
-    // [classifyFailure]). An unsupported reader's null stays absence of
-    // evidence.
+    // fast-track rung still requires positive local path-death evidence. An
+    // unsupported reader's null stays absence of evidence.
     final hardStalled = isHandshakeStale(
       lastHandshakeAt: handshake,
       now: now,
@@ -290,7 +289,9 @@ extension ConnectionHealth on ConnectionController {
     }
     // 4-layer diagnostic pipeline (see `domain/diagnosis_policy.dart`):
     // Layer 2 (physical link) → Layer 1 (in-tunnel gateway echo) →
-    // Layer 3 (control-plane probe) → Layer 4 (classified escalation).
+    // Layer 3 (control-plane probe) → Layer 4 (escalation). Confirmed local
+    // path death skips Layer 3 and moves directly; the probe shares OS routes
+    // with normal API traffic and can fail through the dead tunnel.
     // Probes are read-only: none of them consumes heal/refresh/failover
     // budgets or touches `pollFailures` — only the terminal action below
     // does, under the existing caps.
@@ -303,11 +304,9 @@ extension ConnectionHealth on ConnectionController {
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     // Reuse this tick's echo read (already computed above); a live echo
     // proves the data path, so the stall is a transient flap. The
-    // backend-confirmed-dead node is the exception, and the ordering lives
-    // in [classifyFailure] so the two call sites cannot disagree: that report
-    // could not have travelled over a dead tunnel, so a live echo is a second
-    // opinion about a node already known gone rather than proof the path
-    // recovered.
+    // backend-confirmed-dead node is the exception: that report could not
+    // have travelled over a dead tunnel, so a live echo is a second opinion
+    // about a node already known gone rather than proof the path recovered.
     if (gateway == true && !serverDown) {
       AppLog.info('health suppressed ($why) gateway echo alive');
       // Nothing will run, so the recovery banner would outlive the tick on a
@@ -319,17 +318,65 @@ extension ConnectionHealth on ConnectionController {
       }
       return;
     }
+    // Positive evidence that the current tunnel path is dead must not be
+    // gated on an API probe made while that tunnel is still routing traffic.
+    // The probe can fail precisely because this path is broken. Stop the
+    // tunnel first, then let failover discovery/switch use the direct network.
+    // `_autoFailover` is bounded and restarts the old dial if direct discovery
+    // also fails. Unknown echo evidence still follows the probe/heal ladder.
+    final localCause = classifyFailure(
+      hasNetwork: true,
+      gatewayAlive: gateway,
+      apiReachable: null,
+      hardStalled: hardStalled,
+      serverConfirmedDown: serverDown,
+      confirmedLocalPathDeath: localEchoStalled,
+    );
+    if (localCause == ConnectionFailureCause.tunnelPathDead &&
+        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
+      AppLog.info('health fast-track ($why) path dead -> direct failover');
+      await _autoFailover(
+        why,
+        tunnelPathDead: true,
+        hardStalled: hardStalled || serverDown,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
+      return;
+    }
     final apiReachable = await _apiReachable();
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+    final cause = classifyFailure(
+      hasNetwork: true,
+      gatewayAlive: gateway,
+      apiReachable: apiReachable,
+      hardStalled: hardStalled,
+      serverConfirmedDown: serverDown,
+      confirmedLocalPathDeath: localEchoStalled,
+    );
+    if (cause == ConnectionFailureCause.tunnelPathDead &&
+        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
+      AppLog.info('health fast-track ($why) path dead, api up -> failover');
+      await _autoFailover(
+        why,
+        tunnelPathDead: true,
+        hardStalled: hardStalled || serverDown,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
+      return;
+    }
     final canHeal = canAttemptAutoHeal(
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
       maxFailovers: ConnectionTuning.maxAutoFailovers,
       maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
     );
-    // A move requires a positive control-plane result. A failed/unknown probe
-    // is not a reason to stop a tunnel or consume a move budget; after the one
-    // local restart, leave the tunnel alone until the control plane returns.
+    // Without positive local path-dead evidence, a move still requires a
+    // positive control-plane result. A failed/unknown probe alone is not a
+    // reason to stop a tunnel or consume a move budget.
     if (apiReachable != true && !canHeal) {
       snap = snap.copyWith(healthNote: _recoveryWaitingNote);
       return;
@@ -350,41 +397,6 @@ extension ConnectionHealth on ConnectionController {
       );
       return;
     }
-    // A fresh application response is not enough to suppress local evidence:
-    // the response may have arrived out-of-band while the tunnel is dead.
-    // The API probe below is the current reachability decision.
-    final cause = classifyFailure(
-      hasNetwork: true,
-      gatewayAlive: gateway,
-      apiReachable: apiReachable,
-      hardStalled: hardStalled,
-      serverConfirmedDown: serverDown,
-    );
-    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-    if (cause == ConnectionFailureCause.tunnelPathDead) {
-      // The control plane answers directly but the tunnel path is dead —
-      // a performed dead echo, a handshake that stayed dead past the hard
-      // ceiling (the echo may be unprobeable), or the backend reporting the
-      // serving node not-online. The cached config can't recover on its own,
-      // so go straight to a server move instead of burning a heal cycle. The
-      // tunnel is stopped before discovery (see [_autoFailover]) since the
-      // path is already proven dead, so no probe is wasted on it.
-      if (snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
-        AppLog.info('health fast-track ($why) path dead, api up -> failover');
-        await _autoFailover(
-          why,
-          tunnelPathDead: true,
-          // The server verdict is attributed, so it also outranks a status
-          // poll that answered out-of-band while this tunnel's path was
-          // already dead — same reason `hardStalled` is passed through.
-          hardStalled: hardStalled || serverDown,
-          expectedSession: sessionEpoch,
-          expectedEpoch: epoch,
-          expectedDial: dial,
-        );
-        return;
-      }
-    }
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (shouldEscalateToFailover(
       autoHealAttempts: snap.autoHealAttempts,
@@ -397,32 +409,16 @@ extension ConnectionHealth on ConnectionController {
       now: now,
       quietFor: ConnectionTuning.backendQuietFor,
     )) {
-      // A corroborated stall that already survived a same-server restart has
-      // proven the cached path dead: stop before discovery so the region
-      // fetch and the switch POST travel over the direct network instead of
-      // waiting out a probe on a path known bad. `null` probe evidence
-      // (unknown) keeps the probe-first behavior — absence of evidence must
-      // never flap a path that may still be alive. A backend-confirmed-dead
-      // node is never "unknown": the server said so outright, so there is no
-      // path worth probing.
-      final pathDead =
-          hardStalled ||
-          serverDown ||
-          gateway == false ||
-          apiReachable == false;
       await _autoFailover(
         why,
-        tunnelPathDead: pathDead,
-        hardStalled: hardStalled || serverDown,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,
       );
     } else if (canHeal) {
-      // `localConfirmed` is what lets a heal run while a status poll claims
-      // the backend is reachable; `serverDown` satisfies it for the same
-      // reason `hardStalled` does — the reachable answer travelled
-      // out-of-band and says nothing about a node the backend called dead.
+      // `localConfirmed` lets the remaining same-server heal run on local
+      // evidence; this branch is only reachable when there is not yet enough
+      // evidence for direct failover.
       await _autoHeal(
         why,
         hardStalled: hardStalled,
@@ -498,10 +494,10 @@ extension ConnectionHealth on ConnectionController {
     }
   }
 
-  /// Layer 3 read: out-of-band control-plane reachability. Null means
-  /// unknown (errored probe, or a loopback API the probe skips — see
-  /// [ControlPlaneProbe.check]) — the classifier falls back to the legacy
-  /// ladder instead of fast-tracking on absence of evidence.
+  /// Layer 3 read: control-plane reachability over the OS-selected route.
+  /// Null means unknown (errored probe, or a loopback API the probe skips —
+  /// see [ControlPlaneProbe.check]); without prior positive local path-death
+  /// evidence, the classifier falls back to the conservative recovery ladder.
   Future<bool?> _apiReachable() async {
     try {
       return await _controlPlaneProbe.check();

@@ -283,11 +283,15 @@ extension ConnectionPoll on ConnectionController {
         !_readerSupported ||
         (hs != null &&
             now.difference(hs) < ConnectionTuning.handshakeStaleAfter);
+    final handshakeFresh =
+        !_readerSupported ||
+        (hs != null && now.difference(hs) < ConnectionTuning.echoProbeAfter);
     final healthyStage =
         snap.lastStage == null || snap.lastStage == VpnStage.connected;
-    // A status poll that succeeded through the live tunnel proves the data
-    // path reachable, so any dead-echo run is stale evidence: clear it.
-    _deadEchoStrikes = 0;
+    // A status poll proves the API is reachable, but may use a route outside
+    // the tunnel. Only a fresh handshake (or an unsupported reader, where
+    // echo strikes cannot fast-track) clears the dead-echo run.
+    if (handshakeFresh) _deadEchoStrikes = 0;
     _lastStatusAnswered = false;
     snap = snap.copyWith(
       deviceStatus: st,

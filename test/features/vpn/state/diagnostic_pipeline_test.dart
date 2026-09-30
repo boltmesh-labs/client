@@ -183,23 +183,28 @@ void main() {
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     });
 
-    test('gateway and api dead keeps the legacy offline heal', () async {
-      final events = <String>[];
-      final (container, _, ctl) = await seedPipeline(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        throw StateError('unexpected ${o.path}');
-      });
-      staleHandshake(ctl);
-      await ctl.checkHealthOnce();
+    test(
+      'hard-stale path attempts direct failover even when the probe is down',
+      () async {
+        final events = <String>[];
+        final (container, _, ctl) = await seedPipeline(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          throw StateError('unexpected ${o.path}');
+        });
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
 
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.autoHealAttempts, 1);
-      expect(events.where((e) => e.startsWith('tunnel:')), [
-        'tunnel:stop',
-        'tunnel:start',
-      ]);
-      expect(events.where((e) => e.startsWith('GET:')), isEmpty);
-    });
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.autoHealAttempts, 0);
+        expect(state.autoFailoverAttempts, 1);
+        expect(events.where((e) => e.startsWith('tunnel:')), [
+          'tunnel:stop',
+          'tunnel:start',
+        ]);
+        expect(events, contains('GET:/vpn-regions'));
+        expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      },
+    );
   });
 }

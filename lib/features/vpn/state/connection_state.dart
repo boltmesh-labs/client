@@ -57,9 +57,9 @@ abstract class ConnState with _$ConnState {
     @Default(false) bool opFailed,
 
     /// Auto-heal restarts for the current failure incident. At most one
-    /// cached-tunnel restart is attempted before recovery waits for the
-    /// control plane or escalates to failover. The counter is cleared by a
-    /// healthy status poll or a fresh session.
+    /// cached-tunnel restart is attempted for ambiguous stalls; positive
+    /// dead-path evidence can skip it and go straight to failover. The counter
+    /// is cleared by a healthy status poll or a fresh session.
     @Default(0) int autoHealAttempts,
 
     /// Automatic dead-server moves for this connected session. Incremented
@@ -67,8 +67,8 @@ abstract class ConnState with _$ConnState {
     /// controller's max so two dead servers can't ping-pong forever.
     /// Reset on manual connect/switch, disconnect, and a successful status
     /// poll that lands on a *healthy* tunnel path (an observed, fresh
-    /// handshake): an out-of-band poll success while the WireGuard path stays
-    /// dead is not the outage ending, so it must not restore the ladder.
+    /// handshake): a status response while the WireGuard path stays dead is
+    /// not the outage ending, so it must not restore the ladder.
     @Default(0) int autoFailoverAttempts,
 
     /// The backend reported the serving node as not `online` on the last

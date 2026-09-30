@@ -380,45 +380,52 @@ void main() {
     expect(state.message, 'Connected');
   });
 
-  test('stale handshake never heals with a healthy backend', () async {
-    final events = <String>[];
-    var fail = false;
-    final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) {
-        if (fail) throw networkTimeout(o);
-        return activeStatusJson();
-      }
-      throw StateError('unexpected ${o.path}');
-    });
-    final ctl = container.read(connectionProvider.notifier);
+  test(
+    'confirmed dead echo goes straight to failover after poll failure',
+    () async {
+      final events = <String>[];
+      var fail = false;
+      final (container, _) = await seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) {
+          if (fail) throw networkTimeout(o);
+          return activeStatusJson();
+        }
+        if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+      final ctl = container.read(connectionProvider.notifier);
 
-    await ctl.pollStatusOnce();
-    expect(container.read(connectionProvider).pollFailures, 0);
+      await ctl.pollStatusOnce();
+      expect(container.read(connectionProvider).pollFailures, 0);
 
-    // Same dead peer, but the backend just answered: suppressed entirely.
-    staleHandshake(ctl);
-    await ctl.checkHealthOnce();
+      // Same dead peer, but the backend just answered: suppressed entirely.
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
 
-    var state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 0);
-    expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
+      var state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.autoHealAttempts, 0);
+      expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
 
-    // Same signature after a poll failure is corroborated: heals offline.
-    fail = true;
-    await ctl.pollStatusOnce();
-    expect(container.read(connectionProvider).pollFailures, 1);
-    await ctl.checkHealthOnce();
+      // A poll failure plus the confirming dead echo is positive path-dead
+      // evidence. The failed control probe must not force a same-server heal.
+      fail = true;
+      await ctl.pollStatusOnce();
+      expect(container.read(connectionProvider).pollFailures, 1);
+      await ctl.checkHealthOnce();
+      await ctl.checkHealthOnce();
 
-    state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 1);
-    expect(events.where((e) => e.startsWith('tunnel:')), [
-      'tunnel:stop',
-      'tunnel:start',
-    ]);
-  });
+      state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    },
+  );
 
   test('fresh handshake never heals an idle tunnel', () async {
     final events = <String>[];
@@ -629,11 +636,11 @@ void main() {
   });
 
   test(
-    'a node-down verdict never moves servers while the control plane is down',
+    'a node-down verdict failovers directly even if the pre-stop probe fails',
     () async {
-      // A total outage must not turn a stale node verdict into a server move:
-      // the move itself needs the control plane, and burning the budget on an
-      // unreachable one just strands the session.
+      // The pre-stop probe can be unreachable through the dead tunnel. The
+      // server-down verdict is positive evidence, so discovery must run after
+      // teardown and use the direct network.
       final events = <String>[];
       final (container, _) = await seedConnected(
         events,
@@ -649,6 +656,7 @@ void main() {
         },
         gatewayProbe: support.FakeGatewayProbe(false),
         controlProbe: support.FakeControlProbe(false),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
       );
       final ctl = container.read(connectionProvider.notifier);
       await ctl.pollStatusOnce();
@@ -657,42 +665,53 @@ void main() {
       await ctl.checkHealthOnce();
 
       final state = container.read(connectionProvider);
-      expect(state.autoFailoverAttempts, 0);
-      expect(state.dial?.serverId, 'srv-1');
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(
+        events.indexOf('tunnel:stop'),
+        lessThan(events.indexOf('GET:/vpn-regions')),
+      );
     },
   );
 
-  test('hard-stale handshake heals despite a poll that proved the backend reachable', () async {
-    // The same out-of-band suppression, but the control-plane probe is also
-    // unreachable: totalBlackout would normally keep the tunnel up (the
-    // "backend reachable" guard). The hard stall must bypass that guard and
-    // take the cheap same-server restart.
-    final events = <String>[];
-    final (container, _) = await seedConnected(
-      events,
-      (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/status')) return activeStatusJson();
-        throw StateError('unexpected ${o.path}');
-      },
-      gatewayProbe: support.FakeGatewayProbe(null),
-      controlProbe: support.FakeControlProbe(false),
-    );
-    final ctl = container.read(connectionProvider.notifier);
-    await ctl.pollStatusOnce();
-    hardStaleHandshake(ctl);
-    events.clear();
+  test(
+    'hard-stale handshake failovers directly when the probe is unreachable',
+    () async {
+      final events = <String>[];
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        gatewayProbe: support.FakeGatewayProbe(null),
+        controlProbe: support.FakeControlProbe(false),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      await ctl.pollStatusOnce();
+      hardStaleHandshake(ctl);
+      events.clear();
 
-    await ctl.checkHealthOnce();
+      await ctl.checkHealthOnce();
 
-    final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 1);
-    expect(events.where((e) => e.startsWith('tunnel:')), [
-      'tunnel:stop',
-      'tunnel:start',
-    ]);
-  });
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events.where((e) => e.startsWith('tunnel:')), [
+        'tunnel:stop',
+        'tunnel:start',
+      ]);
+    },
+  );
 
   test(
     'an out-of-band poll does not reset the budget while the handshake is dead',
@@ -802,44 +821,59 @@ void main() {
     },
   );
 
-  test(
-    'a corroborated dead echo shortens the stale window to a few ticks',
-    () async {
-      final events = <String>[];
-      final (container, _) = await seedConnected(events, (o) {
+  test('a corroborated dead echo goes straight to direct failover', () async {
+    final events = <String>[];
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
         if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        if (o.path.endsWith('/server-status')) return onlineServerStatusJson();
+        if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
-      });
-      final ctl = container.read(connectionProvider.notifier);
-      // Older than the short echo window but far inside the 150s rekey one:
-      // the handshake stopwatch alone must not heal yet. Past the probe
-      // gate so the echo is actually read.
-      ctl.debugHandshakeReader = () async => DateTime.now().subtract(
-        ConnectionTuning.echoProbeAfter + const Duration(seconds: 1),
-      );
-      events.clear();
+      },
+      gatewayProbe: support.FakeGatewayProbe(false),
+      controlProbe: support.FakeControlProbe(false),
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    // Older than the short echo window but far inside the 150s rekey one:
+    // the handshake stopwatch alone must not heal yet. Past the probe gate
+    // so the echo is actually read. A successful API poll between echoes
+    // must not erase the local dead-path evidence.
+    ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+      ConnectionTuning.echoProbeAfter + const Duration(seconds: 10),
+    );
+    events.clear();
 
-      // The default harness echo is performed-dead: the early strikes
-      // accumulate without shortening anything.
-      for (var i = 0; i < ConnectionTuning.echoStallStrikes - 1; i++) {
-        await ctl.checkHealthOnce();
-      }
-      expect(container.read(connectionProvider).autoHealAttempts, 0);
-      expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
-
-      // The confirming strike collapses the window and heals the dead peer.
+    // The default harness echo is performed-dead: the early strikes
+    // accumulate without shortening anything.
+    for (var i = 0; i < ConnectionTuning.echoStallStrikes - 1; i++) {
       await ctl.checkHealthOnce();
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.autoHealAttempts, 1);
-      expect(events.where((e) => e.startsWith('tunnel:')), [
-        'tunnel:stop',
-        'tunnel:start',
-      ]);
-      // The restart re-earns its strikes for the new tunnel generation.
-      expect(ctl.debugDeadEchoStrikes, 0);
-    },
-  );
+    }
+    expect(container.read(connectionProvider).autoHealAttempts, 0);
+    expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
+    await ctl.pollStatusOnce();
+    expect(ctl.debugDeadEchoStrikes, 1);
+
+    // The confirming strike proves the local path dead. The API probe is
+    // down through the old tunnel, so stop first and use direct discovery.
+    await ctl.checkHealthOnce();
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.autoHealAttempts, 0);
+    expect(state.autoFailoverAttempts, 1);
+    expect(state.dial?.serverId, 'srv-2');
+    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    expect(
+      events.indexOf('tunnel:stop'),
+      lessThan(events.indexOf('GET:/vpn-regions')),
+    );
+    // The replacement tunnel starts with a fresh echo-strike run.
+    expect(ctl.debugDeadEchoStrikes, 0);
+  });
 
   test('a fresh handshake skips the echo probe entirely', () async {
     final events = <String>[];
@@ -870,8 +904,10 @@ void main() {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
       if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+      if (o.path.endsWith('/switch')) return dialJsonSrv2();
       throw StateError('unexpected ${o.path}');
-    });
+    }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
     final ctl = container.read(connectionProvider.notifier);
     final probe =
         container.read(gatewayProbeProvider) as support.FakeGatewayProbe;
@@ -894,13 +930,15 @@ void main() {
     // One dead echo is not enough: the full stale window still holds.
     expect(container.read(connectionProvider).autoHealAttempts, 0);
 
-    // The confirming strike run collapses the window and heals the dead peer.
+    // The confirming dead strike takes the direct failover path.
     await ctl.checkHealthOnce();
     await ctl.checkHealthOnce();
     expect(probe.calls, 3);
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, 1);
+    expect(state.autoHealAttempts, 0);
+    expect(state.autoFailoverAttempts, 1);
+    expect(state.dial?.serverId, 'srv-2');
     expect(events.where((e) => e.startsWith('tunnel:')), isNotEmpty);
   });
 
@@ -1763,43 +1801,45 @@ void main() {
     expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
   });
 
-  test('fresh poll successes do not suppress confirmed local path death', () async {
-    // Same dead peer, but the backend keeps answering out-of-band. Two
-    // performed-dead gateway echoes are now sufficient local evidence for an
-    // offline restart; backend corroboration is no longer required to begin
-    // recovery.
-    final events = <String>[];
-    final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
-      if (o.path.endsWith('/status')) return activeStatusJson();
-      throw StateError('unexpected ${o.path}');
-    });
-    final ctl = container.read(connectionProvider.notifier);
-    events.clear();
+  test(
+    'fresh poll successes do not suppress confirmed local path failover',
+    () async {
+      // A successful status poll cannot overrule two performed-dead gateway
+      // echoes. The failed pre-stop probe must not block direct failover.
+      final events = <String>[];
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        controlProbe: support.FakeControlProbe(false),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      events.clear();
 
-    staleHandshake(ctl);
+      staleHandshake(ctl);
 
-    // Every poll proves the backend reachable, but it cannot vouch for the
-    // WireGuard path when the gateway echo is dead.
-    await ctl.pollStatusOnce(); // backend proven reachable
-    await ctl.checkHealthOnce();
-    await ctl.checkHealthOnce();
-    await ctl.pollStatusOnce();
-    await ctl.checkHealthOnce();
-    await ctl.checkHealthOnce();
-    await ctl.pollStatusOnce();
-    await ctl.checkHealthOnce();
-    await ctl.checkHealthOnce();
+      // Every poll proves the backend reachable, but it cannot vouch for the
+      // WireGuard path when the gateway echo is dead.
+      await ctl.pollStatusOnce(); // backend proven reachable
+      await ctl.checkHealthOnce();
+      await ctl.checkHealthOnce();
 
-    final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.autoHealAttempts, greaterThan(0));
-    expect(state.autoFailoverAttempts, 0);
-    // The redesign restarts the cached config, so no config refresh is needed.
-    expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
-    expect(events, isNot(contains('GET:/vpn-regions')));
-    expect(events.where((e) => e.startsWith('tunnel:')), isNotEmpty);
-  });
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events, contains('GET:/vpn-regions'));
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    },
+  );
 
   test('status poll racing a heal stop is skipped, not counted', () async {
     final events = <String>[];
@@ -2260,10 +2300,10 @@ void main() {
     },
   );
 
-  test('a same-server restart keeps the dead-node verdict', () async {
-    // The counterpart: a heal restarts the *same* node, so the backend's
-    // verdict about it still applies and must survive (it is what escalates
-    // the next tick to a move).
+  test('a failed direct failover fallback keeps the dead-node verdict', () async {
+    // If direct discovery itself fails, the old tunnel is restarted, but the
+    // backend's node-down verdict must survive so the next health tick retries
+    // failover rather than treating the server as healthy.
     final events = <String>[];
     final (container, _) = await seedConnected(
       events,
@@ -2282,13 +2322,17 @@ void main() {
     await ctl.pollStatusOnce();
     expect(container.read(connectionProvider).serverConfirmedDown, isTrue);
 
-    // Control plane down, so this is a local heal, not a move.
+    // The hard-stale path skips the failed in-tunnel probe and attempts direct
+    // discovery. This fake has no regions response, so it falls back to the
+    // old dial while retaining the down verdict and charging the move attempt.
     hardStaleHandshake(ctl);
     await ctl.checkHealthOnce();
     final state = container.read(connectionProvider);
-    expect(state.autoHealAttempts, 1);
+    expect(state.autoHealAttempts, 0);
+    expect(state.autoFailoverAttempts, 1);
     expect(state.dial?.serverId, 'srv-1');
     expect(state.serverConfirmedDown, isTrue);
+    expect(events, contains('GET:/vpn-regions'));
   });
 
   test('a failing regions discovery does not spend the move budget', () async {

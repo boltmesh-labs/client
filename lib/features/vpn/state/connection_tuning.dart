@@ -38,14 +38,15 @@ abstract final class ConnectionTuning {
   /// plane never provides (WG UDP blocked while the API stays up). Local echo
   /// confirmation now handles the earlier restart path; this ceiling remains
   /// the deterministic fallback when the echo cannot be performed.
-  /// The bypass only *enters* the stall; the fast-track rung still requires a
-  /// reachable control plane (see [classifyFailure]).
+  /// The bypass only *enters* the stall; hard-stale is itself positive local
+  /// path-death evidence, so failover can stop the tunnel before testing the
+  /// control plane.
   static const hardHandshakeStaleAfter = Duration(seconds: 180);
 
   /// Never-handshook ceiling for a *supported* reader once a recovery restart
   /// has happened: the fresh tunnel has no handshake, so the standard
   /// [firstHandshakeGrace] stays corroboration-gated and the ladder could
-  /// never progress past the first restart while out-of-band polls succeed.
+  /// never progress past the first restart while status polls keep succeeding.
   /// 45s (~9 WG retries) is ample even on slow links, and
   /// unsupported readers never enter this branch at all.
   static const hardFirstHandshakeCeiling = Duration(seconds: 45);
