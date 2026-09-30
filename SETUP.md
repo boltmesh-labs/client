@@ -29,6 +29,39 @@ secrets and the test suite, see [README.md](README.md).
     flutter run -d windows
     ```
 
+3. Install the `boltmeshd` helper (dev loop):
+
+    Release installs get the helper from the Inno Setup `.exe`
+    (`windows/packaging/stage_boltmeshd.ps1` stages it into the bundle and
+    `boltmesh.iss` runs `boltmeshd.exe -install` elevated). From source,
+    install it by hand — once per helper change, not per `flutter run`:
+
+    ```powershell
+    # Build the Flutter bundle first so the plugin-bundled
+    # wireguard_svc.exe / wireguard.dll are on disk:
+    flutter build windows --debug
+
+    $bundle = 'build/windows/x64/runner/Debug'
+    go build -trimpath -o "$bundle/boltmeshd.exe" ./boltmeshd/cmd/boltmeshd
+
+    # Elevated prompt, from the bundle directory: the helper locates
+    # wireguard_svc.exe and wireguard.dll beside its own image, so it must
+    # be installed from alongside them.
+    cd $bundle
+    .\boltmeshd.exe -install
+    Get-Service boltmeshd
+    ```
+
+    `-install` registers and starts the `boltmeshd` LocalSystem service on
+    the named pipe `\\.\pipe\boltmesh\boltmeshd`. Alternatives: run it in
+    the foreground with `.\boltmeshd.exe -console` (elevated, from the same
+    directory), or remove it with `.\boltmeshd.exe -uninstall`.
+    If `go build` refuses to overwrite `boltmeshd.exe`, the service is
+    running from that bundle — `sc.exe stop boltmeshd` first, then rebuild.
+    Helper failures persist as JSON lines at
+    `%ProgramData%\BoltMesh\logs\boltmeshd.log`; see
+    [boltmeshd/README.md](boltmeshd/README.md).
+
 ## Android
 
 ### 1. Install the SDK
@@ -250,7 +283,9 @@ flutter run -d linux
 
 Tunnel actions go through the privileged `boltmeshd` helper; without it the
 GUI launches but VPN operations fail with "helper socket unavailable".
-[boltmeshd/README.md](boltmeshd/README.md).
+Install it once per helper change with step 4 below.
+[boltmeshd/README.md](boltmeshd/README.md) covers the socket protocol and
+security model.
 
 On a host with no hardware 3D acceleration — a VM, a remote desktop, or a bare
 Raspberry Pi — the window renders, but moving the mouse over it makes the whole
@@ -269,6 +304,58 @@ This is a host property, so the flag stays on the command line rather than in th
 tree. The real fix is 3D acceleration on the host: enable the hypervisor's 3D
 adapter, or attach the VM's display to a `virtio-gpu` device, where Mesa's virtio
 driver provides a genuine Vulkan/GL stack and Impeller can stay on.
+
+### 4. Install `boltmeshd` (dev loop)
+
+Release installs get the helper from the deb/rpm
+(`boltmeshd/packaging/stage.sh` stages it into the bundle and the package
+postinstall moves it into place). From source, install it by hand — once per
+helper change, not per `flutter run`:
+
+```bash
+cd boltmeshd
+CGO_ENABLED=0 go build -trimpath -o /tmp/opencode/boltmeshd ./cmd/boltmeshd
+
+sudo install -Dm755 /tmp/opencode/boltmeshd /usr/libexec/boltmesh/boltmeshd
+sudo install -Dm644 deploy/boltmeshd.service /usr/lib/systemd/system/boltmeshd.service
+sudo install -Dm644 deploy/boltmeshd.socket /usr/lib/systemd/system/boltmeshd.socket
+sudo install -Dm755 packaging/enroll-user.sh /usr/libexec/boltmesh/boltmesh-enroll-user
+sudo install -Dm644 deploy/99-boltmesh-unmanaged.conf /etc/NetworkManager/conf.d/99-boltmesh-unmanaged.conf
+sudo install -Dm644 deploy/80-boltmesh-src-valid-mark.conf /usr/lib/sysctl.d/80-boltmesh-src-valid-mark.conf
+
+# Apply the full-tunnel sysctl the helper itself cannot write
+# (its unit keeps ProtectKernelTunables), then enable the socket:
+if command -v systemd-sysctl >/dev/null 2>&1; then
+  sudo systemd-sysctl
+else
+  sudo sysctl -w net.ipv4.conf.all.src_valid_mark=1
+fi
+sudo systemctl daemon-reload
+sudo systemctl enable --now boltmeshd.socket
+sudo nmcli general reload conf >/dev/null 2>&1 || true
+
+# Enroll your desktop user in the boltmesh group (re-log to pick it up).
+# --auto enrolls the unique active graphical user; if it reports no (or
+# multiple) users, enroll yourself explicitly — already a member is a
+# harmless no-op if --auto succeeded ($(...) expands before sudo, so this
+# is your UID, not root's):
+sudo /usr/libexec/boltmesh/boltmesh-enroll-user --auto
+sudo /usr/libexec/boltmesh/boltmesh-enroll-user --uid "$(id -u)"
+```
+
+Verify before running the app:
+
+```bash
+id -nG                          # must list boltmesh (re-log if not)
+systemctl status boltmeshd.socket
+ls -l /run/boltmesh/boltmeshd.sock
+```
+
+Helper failures persist as JSON lines at `/var/log/boltmesh/boltmeshd.log`.
+To remove the manual install: `sudo systemctl disable --now
+boltmeshd.service boltmeshd.socket`, `sudo /usr/libexec/boltmesh/boltmeshd
+--cleanup --config-dir=/run/boltmesh --interface=boltmesh0`, then delete the
+files installed above and `sudo systemctl daemon-reload`.
 
 ## Next
 
