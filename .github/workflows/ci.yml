@@ -444,12 +444,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The OSS container, not `gitleaks/gitleaks-action`: v3 requires a paid
+      # GITLEAKS_LICENSE for organisation-owned repos, and v2 runs on Node 20,
+      # which GitHub removed from hosted runners on 2026-09-16. The container is
+      # the same v8.30.1 binary the local hook pins, so the two agree.
+      #
+      # `git` scans commit history, which is the point -- a secret committed and
+      # later deleted is still caught, and the local hook cannot see that case
+      # because it runs `--staged`. This repo's history is already clean, so it
+      # needs no `.gitleaksignore`.
       - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v3
+        uses: docker://zricethezav/gitleaks:v8.30.1
         with:
-          version: v8.30.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          args: git --redact --no-banner --verbose --exit-code 1 .
 
       - name: Run Trivy Filesystem Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
