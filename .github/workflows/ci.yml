@@ -61,6 +61,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # The container, not the `actionlint` pre-commit hook: the hook is
+      # `language: golang`, so running it needs a Go toolchain. Pinned to the same
+      # v1.7.12 as the hook rev. `GIT_CONFIG_COUNT` marks the workspace safe
+      # because the container runs as root while the workspace belongs to the
+      # runner user; actionlint walks up looking for the git root and without
+      # this it reports "no project was found" and checks nothing.
+      - name: Lint GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: "*"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -85,6 +98,17 @@ jobs:
 
       - name: Format Check
         run: dart format --set-exit-if-changed lib test
+
+      # Same scope as the `shellcheck` pre-commit hook: every shell script, with
+      # `-x` so it follows `source`d files. `android/gradlew` is vendored
+      # verbatim from the Flutter SDK and its warnings are upstream, so it is
+      # skipped; it carries no `.sh` extension, so the glob already leaves it
+      # out. `-z`/`-0` keeps a path containing spaces intact, and
+      # `--no-run-if-empty` stops xargs invoking shellcheck with no arguments at
+      # all, which would read stdin and hang. shellcheck comes from the
+      # ubuntu-latest image, so this and the local hook are the same version.
+      - name: Shellcheck scripts
+        run: git ls-files -z '*.sh' | xargs -0 --no-run-if-empty shellcheck -x
 
       - name: Run Tests
         run: flutter test --coverage
