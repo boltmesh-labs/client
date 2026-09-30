@@ -407,6 +407,39 @@ void main() {
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
   });
 
+  test('same-server skip from Auto pins the explicit server', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys(const []);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await seedConnected(container, store, tunnel);
+    // seedConnected leaves Auto unpinned while the dial names srv-1.
+    expect(container.read(connectionProvider).serverId, isNull);
+    events.clear();
+
+    await container
+        .read(connectionProvider.notifier)
+        .switchServer(regionId: null, serverId: 'srv-1');
+
+    expect(events, isEmpty);
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.serverId, 'srv-1');
+    expect(state.regionId, isNull);
+    expect(state.explicitTarget, isTrue);
+    expect(state.opFailed, isFalse);
+    final saved = await store.lastTarget();
+    expect(saved.serverId, 'srv-1');
+    expect(saved.explicitTarget, isTrue);
+  });
+
   test(
     'a pinned target with no tunnel is switched, not called connected',
     () async {

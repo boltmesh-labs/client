@@ -41,6 +41,17 @@ extension ConnectionSwitch on ConnectionController {
       AppLog.info(
         'switch skipped: already on ${serverId ?? 'region=$regionId'}',
       );
+      // No tunnel work needed, but an explicit tap still carries pin intent:
+      // Auto (unpinned) tapping the live server must land pinned so the
+      // Regions tab highlights it. One-shot Auto moves (pinTarget false)
+      // stay unpinned.
+      if (pinTarget) {
+        selectTarget(
+          regionId: regionId,
+          serverId: serverId,
+          explicitTarget: explicitTarget,
+        );
+      }
       snap = snap.copyWith(
         message:
             'Already connected to ${snap.dial?.serverName ?? 'this server'}.',
