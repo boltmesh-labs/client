@@ -133,6 +133,13 @@ class State:
                 # authenticated response. Do not copy this shape.
                 "psk": self.psk,
                 "node_public_key": self.node_public_key,
+                # The host address of the node's tunnel subnet, which the client
+                # half pings across the finished tunnel. The real control plane
+                # carries this as `wg_dns` in the dial payload (always the tunnel
+                # host address); here the stub is the dial payload, so it serves
+                # the same value the same way. Derived from the same tunnel_ip the
+                # node is registered with, so the two cannot disagree.
+                "node_tunnel_ip": self.tunnel_ip.split("/")[0],
                 "heartbeat_count": self.heartbeat_count,
                 "peers_sync_count": self.peers_sync_count,
             }
@@ -208,10 +215,15 @@ class Handler(BaseHTTPRequestHandler):
             self._on_heartbeat(body)
             return
         if path.endswith("/auth/token") or path.endswith("/auth/refresh-token"):
+            # `expires_at` is a string, not a number: the agent decodes it into a
+            # Go `string` and a bare 0 fails the whole refresh, which is how this
+            # surfaced as "node has not reported a pin yet" — the startup task
+            # chain aborts before the first heartbeat. The agent treats empty as
+            # "no absolute expiry", so an empty string is both valid and honest.
             self._send(200, {
                 "node_token": self.state.node_token,
                 "token_expires_in": 900,
-                "expires_at": 0,
+                "expires_at": "",
             })
             return
         self._send(404, {"detail": f"no stub route for POST {path}"})

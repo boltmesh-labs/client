@@ -163,11 +163,20 @@ def build_wg_quick_config(
     )
 
 
-def wait_for_pin(control_plane: str, timeout: float = 30.0) -> str:
+def wait_for_pin(control_plane: str, timeout: float = 90.0) -> str:
     """Blocks until the node has reported an SPKI pin on its heartbeat.
 
     The pin is the proof the ingress came up, so there is nothing to assert
     against until it exists.
+
+    The window must exceed one heartbeat interval (30s), because the node's
+    *first* pulse cannot carry the pin: the supervisor publishes it from
+    ``OnServing``, which runs only after the ingress binds and its firewall
+    port opens, and the daemon sends that first pulse before either happens.
+    The pin therefore first appears on the second heartbeat, ~30s in. A 30s
+    deadline lost that race by a few hundred milliseconds on a loaded box,
+    which surfaced as "the node has not reported a pin yet" against a node
+    whose ingress was demonstrably listening.
     """
     import time
     import urllib.error
@@ -448,7 +457,11 @@ def main() -> int:
         client_private = None
         stream = None
         obfuscation = None
-        node_tunnel_ip = args.node_tunnel_ip
+        # The stub is the dial payload here, so it serves the node's tunnel host
+        # the way the real control plane serves it as `wg_dns`.
+        node_tunnel_ip = state.get("node_tunnel_ip") or ""
+        if not node_tunnel_ip:
+            raise SystemExit("the stub control plane served no node_tunnel_ip")
 
     # The negative check for the ladder's floor: an obfuscated region's node runs
     # the AmneziaWG device, so a stock inner config has to be illegible to it.

@@ -488,6 +488,15 @@ else
   client_priv="$(wg genkey)"
   client_pub="$(printf '%s' "$client_priv" | wg pubkey)"
 
+  # A synthetic secret, because the seed file must carry one. The agent decides
+  # how to bootstrap by whether it has a credential at all: with
+  # NODE_BOOTSTRAP_SECRET empty it takes the "no credentials" branch and validates
+  # itself as an already-registered node, failing with a runtime-mode error about
+  # missing node_token/private_key/tunnel_ip — which reads like a stub answering
+  # the wrong shape, and is nothing of the kind. The stub ignores Authorization
+  # entirely, so the value is never checked.
+  bootstrap_secret="vpn_node_harness_secret"
+
   log "starting the stub control plane on $host_ip:$cp_port"
   python3 "$here/controlplane.py" \
     --host "$host_ip" \
@@ -678,6 +687,31 @@ else
   note_failure "the in-tunnel ping failed"
 fi
 grep -q "0% packet loss" <<<"$ping_log" || note_failure "the in-tunnel ping lost packets"
+
+# The handshake must look like a browser's, not merely succeed. A ClientHello
+# with no ALPN extension is a passively observable tell — every browser offers
+# ALPN, and the ingress answers none without being told to — so this asserts the
+# camouflage rather than the tunnel.
+#
+# Dialed from the host, not the client namespace: a probe from inside the lab
+# would already trust the box, whereas an off-box dial is what an uninterested
+# observer on the path would see. The address is the node's lab leg and the
+# servername is the SNI the node certified for; a name mismatch is reported
+# separately below because it fails differently.
+log "probing the ingress's handshake from off-box"
+probe_log="$(echo | timeout 15 openssl s_client -connect "$node_ip:$stream_port" \
+  -servername "$server_name" -alpn h2,http/1.1 2>&1)" || true
+printf '%s\n' "$probe_log" | grep -iE "ALPN protocol|Protocol *:|No ALPN" | head -4
+if grep -q "ALPN protocol: h2" <<<"$probe_log"; then
+  echo "the ingress negotiated ALPN h2, as a browser's would"
+else
+  printf '%s\n' "$probe_log" | grep -iE "alpn|verify|error|CONNECTED" | head -5
+  note_failure "the ingress did not negotiate ALPN, so its ClientHello differs from a browser's"
+fi
+# The same dial must report a protocol version, which proves a TLS handshake
+# actually completed rather than the probe hanging on a dead listener.
+grep -qE "Protocol *: *TLSv1\.[23]" <<<"$probe_log" \
+  || note_failure "the off-box probe never completed a TLS handshake"
 
 log "negative check: a wrong PSK must not authenticate"
 # A device presenting the wrong credential must not be able to move a single

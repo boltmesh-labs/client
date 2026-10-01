@@ -668,6 +668,18 @@ rest of the pipeline (which files, when, verify) is unchanged.
     }
     ```
 
+    `server` (where to dial) and `server_name` (what the handshake claims) are
+    separate on purpose and are routinely different values: the dial host is the
+    node's `endpoint` or its public IP, while `server_name` is the operator's
+    chosen SNI, which for camouflage should name a site the local network
+    permits rather than a hostname pointing back at the box. The SNI is only
+    ever sent, never resolved by the node, so it needs no DNS of its own — but
+    it must be a hostname, because RFC 6066's extension carries a hostname and
+    a real TLS stack sends no SNI at all for an IP literal, which is a
+    passively observable tell no browser produces. The control plane withholds
+    the rung entirely (no `stream` object) rather than serve one whose SNI
+    cannot be sent.
+
     Every field is size-validated client-side against the same values the
     daemon enforces, so a malformed credential is never turned into a
     transport — `isUsable` is the only gate. On this rung the client allocates
