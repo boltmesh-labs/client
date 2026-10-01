@@ -197,12 +197,22 @@ def ensure_server(api: Api, args: argparse.Namespace, state: dict) -> tuple[dict
             print(f"server {args.node_name!r}: reusing existing (id={existing['id']})")
             return existing, state["bootstrap_secret"]
 
+        if args.reuse_server:
+            # The secret only exists to *provision* a node, and this one is already
+            # provisioned and (presumably) running. Client-only runs never start a
+            # node at all, so they cannot need it — and a long-lived node will not
+            # hand the secret over again, so requiring it made every repeat run
+            # against a real node impossible.
+            print(f"server {args.node_name!r}: reusing existing (id={existing['id']}), "
+                  "no bootstrap secret (not needed: this run starts no node)")
+            return existing, ""
+
         raise SystemExit(
             f"server {args.node_name!r} already exists, and its bootstrap secret is only "
             f"returned once at creation.\n"
-            f"Re-run with --recreate-server to delete and recreate it (this also deletes "
-            f"the device bound to it), or pass a different --node-name, or point "
-            f"--state-out at the file written when it was created."
+            f"Pass --reuse-server to use it as-is (a client-only run needs no secret), "
+            f"or re-run with --recreate-server to delete and recreate it (this also "
+            f"deletes the device bound to it), or pass a different --node-name."
         )
     if existing is not None:
         # Delete the bound device first: the peer row holds a RESTRICT foreign key
@@ -241,9 +251,26 @@ def list_devices(api: Api) -> list[dict]:
 
 def ensure_device(api: Api, args: argparse.Namespace) -> dict:
     for device in list_devices(api):
-        if device.get("name") == args.device_name:
-            print(f"device {args.device_name!r}: reusing {device['id']}")
-            return device
+        if device.get("name") != args.device_name:
+            continue
+        # Reusing a device by name is only safe when the control plane already
+        # knows *this* public key. A state file that was lost or belongs to a
+        # different run regenerates the keypair, and the backend keeps the old
+        # public half — so the client would hold a private key the node has no
+        # matching public key for, and the tunnel would never handshake. That
+        # failure looks like a network problem, not a fixture mismatch.
+        if device.get("public_key") != args.client_public_key:
+            raise SystemExit(
+                f"device {args.device_name!r} already exists with a different WireGuard "
+                f"public key than the one in {args.state_out}.\n"
+                f"  registered: {device.get('public_key')}\n"
+                f"  this run:   {args.client_public_key}\n"
+                f"Point --state-out at the file written when the device was created, or "
+                f"pass a fresh --device-name (the backend never stores the private half, "
+                f"so a lost state file cannot be recovered)."
+            )
+        print(f"device {args.device_name!r}: reusing {device['id']}")
+        return device
     created = api.post("/vpn-devices", {
         "name": args.device_name,
         "platform": "linux",
@@ -295,6 +322,10 @@ def main() -> int:
     ap.add_argument("--state-out", required=True)
     ap.add_argument("--recreate-server", action="store_true",
                     help="delete and recreate the node, to get a fresh bootstrap secret")
+    ap.add_argument("--reuse-server", action="store_true",
+                    help="use an existing node as-is, without its bootstrap secret. "
+                         "Correct for a client-only run, which starts no node; a run "
+                         "that needs to boot a node will fail without the secret.")
     args = ap.parse_args()
 
     api = Api(args.api_base)

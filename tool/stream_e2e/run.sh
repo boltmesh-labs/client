@@ -476,7 +476,15 @@ print("\t".join([d["api_base"], d["server_name"], str(d["stream_port"]),
 ' "$staging_state")" || die "could not parse $staging_state"
   IFS=$'\t' read -r api_base server_name stream_port bootstrap_secret client_priv client_pub \
     <<<"$state_line"
-  [[ -n $api_base && -n $bootstrap_secret ]] || die "$staging_state is missing required fields"
+  [[ -n $api_base && -n $server_name && -n $client_priv ]] \
+    || die "$staging_state is missing required fields"
+  # The bootstrap secret is only ever consumed by the node's seed file below, and
+  # client-only mode starts no node. A long-lived node provisioned once cannot
+  # hand its secret over again (it is returned once at creation), so requiring it
+  # here made every repeat run against an existing node impossible.
+  if [[ $client_only -eq 0 && -z $bootstrap_secret ]]; then
+    die "$staging_state carries no bootstrap_secret, and this mode starts a node that needs one"
+  fi
   # The real API base already carries /v1, and the agent appends nothing of its
   # own when the base already has it.
   api_seed="$api_base"
