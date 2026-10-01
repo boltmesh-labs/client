@@ -599,13 +599,14 @@ void main() {
         staleHandshake(ctl);
         await ctl.checkHealthOnce();
 
-        // The peer endpoint now points at the bridge's loopback address, the
-        // local listen port is pinned so the bridge knows where to deliver,
-        // and the obfuscation directives are gone: one rung at a time, and the
-        // helper rejects the combination anyway.
+        // The peer endpoint now points at the bridge's loopback address and the
+        // local listen port is pinned so the bridge knows where to deliver. The
+        // obfuscation directives stay: the region's node runs the AmneziaWG
+        // device, so the datagrams inside the stream must carry them too — the
+        // inner format follows the region, not the rung.
         expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
         expect(socket.lastConfig, contains('ListenPort = '));
-        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, contains('Jc = 3'));
         expect(ctl.obfuscationRung, ObfuscationRung.stream);
       });
 
@@ -642,6 +643,9 @@ void main() {
           final deliverPort = (spec['deliver'] as String).split(':').last;
           expect(socket.lastConfig, contains('Endpoint = $listen'));
           expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
+          // And the tunnel the bridge carries is the region's obfuscated one:
+          // the node's AmneziaWG device would drop stock datagrams.
+          expect(socket.lastConfig, contains('Jc = 3'));
         },
       );
 
@@ -656,6 +660,9 @@ void main() {
           await healOnce(container);
 
           expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          // A stock region's node runs stock WireGuard, so the stream carries
+          // stock datagrams: no obfuscation directives.
+          expect(socket.lastConfig, isNot(contains('Jc =')));
           expect(socket.lastTransport, isNotNull);
           expect(
             container.read(connectionProvider.notifier).obfuscationRung,

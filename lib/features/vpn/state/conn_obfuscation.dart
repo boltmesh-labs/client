@@ -8,10 +8,13 @@ part of 'connection_controller.dart';
 /// a network that blocks or fingerprints WireGuard's own UDP, and costs the
 /// most when it fails.
 ///
-/// The order is also the order [_demoteRung] walks. One rung at a time — a
-/// stream transport already carries the tunnel inside a camouflaged session, so
-/// the obfuscation parameters on top of it would be redundant, and the helper
-/// rejects the combination.
+/// The order is also the order [_demoteRung] walks. The rungs are alternatives
+/// — one at a time, never stacked — but the *inner* WireGuard format follows
+/// the region, not the rung: an obfuscated region's node runs the AmneziaWG
+/// device, so the datagrams it receives must carry the obfuscation directives
+/// whether they arrive directly (AWG) or inside a stream transport. The
+/// stream's TLS session is the outer camouflage; the inner format still has to
+/// match the node's device.
 enum ObfuscationRung {
   /// The kernel WireGuard data plane, pointed straight at the node.
   native,
@@ -40,15 +43,19 @@ extension ConnectionObfuscation on ConnectionController {
   /// once will do it again on the next connect.
   ObfuscationRung get obfuscationRung => _obfuscationRung;
 
-  /// The obfuscation parameters to build a conf for [dial] with, or null unless
-  /// this process is on the AWG rung.
+  /// The obfuscation parameters to build a conf for [dial] with, or null when
+  /// this start's tunnel is stock WireGuard.
   ///
-  /// The rung itself already encodes every gate — [_demoteRung] only promotes
-  /// onto it when the region offers AWG parameters and this platform has a data
-  /// plane that runs them — so this only reads the state back.
+  /// The native rung is stock by definition — it is the probe that discovers
+  /// whether a plain WireGuard path exists. Every rung below it follows the
+  /// region: an obfuscated region's node runs the AmneziaWG device, so both the
+  /// AWG rung and the stream rung build an obfuscated conf, and the stream's
+  /// bridge then carries those obfuscated datagrams inside its TLS session. The
+  /// format is the region's, not the rung's.
   ObfuscationParams? _obfuscationParamsFor(DialParams dial) {
-    if (_obfuscationRung != ObfuscationRung.awg) return null;
-    return dial.obfuscation?.params;
+    if (_obfuscationRung == ObfuscationRung.native) return null;
+    final obf = dial.obfuscation;
+    return obf != null && obf.isAwg ? obf.params : null;
   }
 
   /// The stream transport for this start, or null unless this process is on the
@@ -126,11 +133,21 @@ extension ConnectionObfuscation on ConnectionController {
   /// usable credential, this platform must have a data plane for it, and the
   /// installed daemon must advertise the capability. All three, because
   /// selecting the rung without any of them can only fail.
+  ///
+  /// An obfuscated region adds a fourth: the stream's inner datagrams carry the
+  /// region's obfuscation directives, so this platform must also be able to run
+  /// the obfuscated data plane that produces them. On a stock region there is
+  /// no such requirement.
   bool _streamRungAvailable(DialParams dial) {
     final credential = dial.stream;
-    return credential != null &&
-        credential.isUsable &&
-        streamTransportSupported() &&
-        _daemonCapabilities.contains(capStreamTransport);
+    if (credential == null ||
+        !credential.isUsable ||
+        !streamTransportSupported() ||
+        !_daemonCapabilities.contains(capStreamTransport)) {
+      return false;
+    }
+    final obf = dial.obfuscation;
+    if (obf != null && obf.isAwg && !awgDataPlaneSupported()) return false;
+    return true;
   }
 }
