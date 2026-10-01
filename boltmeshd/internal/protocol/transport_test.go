@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/base64"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -199,16 +201,34 @@ func TestRequestTransportInheritsEnvelopeValidation(t *testing.T) {
 	}
 }
 
-func TestSupportedCapabilitiesAdvertisesStreamTransport(t *testing.T) {
-	// The client only selects the stream rung when it sees this token;
-	// without it the transport would never start and the tunnel would sit on
-	// a dead loopback endpoint.
-	for _, cap := range SupportedCapabilities() {
-		if cap == CapStreamTransport {
-			return
+func TestSupportedCapabilitiesMatchThePlatformsTransport(t *testing.T) {
+	// The client selects the stream rung only when it sees this token. So the
+	// token must be present exactly where `up` can honour the spec, and absent
+	// everywhere else: advertising it on Windows or macOS would let the client
+	// pick a rung whose only possible outcome is a rejected spec.
+	caps := SupportedCapabilities()
+	advertised := slices.Contains(caps, CapStreamTransport)
+	want := runtime.GOOS == "linux"
+	if advertised != want {
+		t.Fatalf("SupportedCapabilities() = %v, stream-transport advertised = %v, want %v (GOOS %s)",
+			caps, advertised, want, runtime.GOOS)
+	}
+	// The always-on tokens are unconditional: a client relies on them to decide
+	// whether it can talk to this daemon at all.
+	for _, always := range []string{CapStrictValidation, CapCapabilities} {
+		if !slices.Contains(caps, always) {
+			t.Errorf("SupportedCapabilities() = %v, missing %q", caps, always)
 		}
 	}
-	t.Fatalf("SupportedCapabilities() = %v, missing %q", SupportedCapabilities(), CapStreamTransport)
+	// And no duplicate tokens: a client intersects two lists, and a repeat
+	// would make the intersection look larger than it is.
+	seen := map[string]bool{}
+	for _, c := range caps {
+		if seen[c] {
+			t.Errorf("SupportedCapabilities() = %v, duplicate token %q", caps, c)
+		}
+		seen[c] = true
+	}
 }
 
 func strPtr(s string) *string { return &s }

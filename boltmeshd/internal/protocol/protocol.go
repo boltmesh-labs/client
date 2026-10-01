@@ -280,11 +280,22 @@ const (
 	CapStreamTransport = "stream-transport"
 )
 
-// SupportedCapabilities lists the capability tokens this daemon understands.
-// It is returned on `ping` so the client can advertise and inspect the
-// intersection; the list is advisory, never a substitute for Version.
+// SupportedCapabilities lists the capability tokens this daemon understands
+// *and can honour on this build*. It is returned on `ping` so the client can
+// advertise and inspect the intersection; the list is advisory, never a
+// substitute for Version.
+//
+// The stream transport's token is contributed per-platform (see
+// stream_capability_linux.go and stream_capability_other.go). The transport
+// lifecycle and its bypass route live in the Linux data plane, so advertising
+// the token unconditionally would let a client select the stream rung on
+// Windows or macOS, where `up` rejects the spec and the rung could only fail.
 func SupportedCapabilities() []string {
-	return []string{CapStrictValidation, CapCapabilities, CapStreamTransport}
+	caps := []string{CapStrictValidation, CapCapabilities}
+	if streamTransportCap != "" {
+		caps = append(caps, streamTransportCap)
+	}
+	return caps
 }
 
 // Operations.
