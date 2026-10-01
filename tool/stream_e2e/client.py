@@ -95,6 +95,7 @@ def build_wg_quick_config(
     server_public_key: str,
     endpoint: str,
     listen_port: int,
+    allowed_ips: str,
 ) -> str:
     """The client's wg-quick config for the stream rung.
 
@@ -126,7 +127,7 @@ def build_wg_quick_config(
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
         f"Endpoint = {endpoint}\n"
-        "AllowedIPs = 10.254.0.0/16\n"
+        f"AllowedIPs = {allowed_ips}\n"
         "PersistentKeepalive = 25\n"
     )
 
@@ -157,6 +158,131 @@ def wait_for_pin(control_plane: str, timeout: float = 30.0) -> str:
     raise SystemExit(f"timed out waiting for the node's SPKI pin: {last}")
 
 
+class StagingError(RuntimeError):
+    """The real control plane would not give us a usable transport."""
+
+
+def _api_call(base: str, path: str, *, token: str | None = None, method: str = "GET",
+              body: dict | None = None, form: dict | None = None) -> object:
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    headers = {"Accept": "application/json"}
+    data = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    # 429 is retried here rather than at each call site: the real API rate-limits
+    # even `/auth/login`, so a harness that cannot back off cannot run at all
+    # against it. Everything else is a real answer and propagates.
+    import time
+
+    for attempt in range(6):
+        req = urllib.request.Request(f"{base.rstrip('/')}{path}", data=data,
+                                     headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")
+            if exc.code == 429 and attempt < 5:
+                delay = 5 * (attempt + 1)
+                print(f"  rate limited on {path}; retrying in {delay}s", flush=True)
+                time.sleep(delay)
+                continue
+            raise StagingError(f"HTTP {exc.code} on {path}: {body[:300]}") from None
+        except urllib.error.URLError as exc:
+            raise StagingError(f"{path}: {exc.reason}") from None
+    raise AssertionError("unreachable")
+
+
+def transport_from_staging(state: dict, user: str, password: str,
+                           timeout: float = 90.0) -> dict:
+    """Creates (or reuses) the device and waits for the backend to hand back a transport.
+
+    Against the stub this is unnecessary, because the fixture builds the descriptor
+    by hand. Here the real schemas do, which is the whole point: a `stream` object
+    that the backend produced is one the helpers must accept.
+
+    Two ordering facts drive the shape of this function:
+
+    * The device cannot be bound until the node has registered. A server has no
+      WireGuard public key until a node registers it, and binding refuses a
+      server that is not dialable — so this runs *after* the node is up.
+    * The backend only emits `stream` once the node has reported a TLS pin, which
+      it does after its ingress binds. So the config is polled rather than read
+      once: before the pin exists there is simply no transport to return.
+    """
+    import time
+
+    base = state["api_base"]
+    login = _api_call(base, "/auth/login", method="POST", form={
+        "grant_type": "password", "username": user, "password": password,
+        "remember_me": "true",
+    })
+    token = login.get("access_token") if isinstance(login, dict) else None
+    if not token:
+        raise StagingError("login returned no access_token")
+
+    # Defaulted, not required from the state file: a run that resumes from a state
+    # written before the device step would otherwise look for a device named
+    # `None`, find none, and create a duplicate — which is both wrong and, on the
+    # strict rate limiter, slow to discover.
+    device_name = state.get("device_name") or "harness-device"
+    devices = _api_call(base, "/vpn-devices", token=token) or []
+    device = next((d for d in devices if d.get("name") == device_name), None)
+    if device is None:
+        # A server is only selectable once a node has registered it *and* it has
+        # heartbeated: registration fills its WireGuard key, the heartbeat clears
+        # the staleness sweep. Both happen moments after the agent starts, so a
+        # 503 here is "not yet", not "no" — retrying is what keeps the harness
+        # from racing its own node.
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                device = _api_call(base, "/vpn-devices", token=token, method="POST", body={
+                    "name": device_name,
+                    "platform": "linux",
+                    "public_key": state["client_public_key"],
+                    "region_id": state["region_id"],
+                })
+                break
+            except StagingError as exc:
+                retryable = "NO_SERVERS_AVAILABLE" in str(exc) or "RATE_LIMIT" in str(exc)
+                if not retryable or time.monotonic() >= deadline:
+                    raise
+                print(f"device not creatable yet ({'rate limited' if 'RATE_LIMIT' in str(exc) else 'no dialable server'}); retrying",
+                      flush=True)
+                time.sleep(10)
+        print(f"created device {device['id']}", flush=True)
+    else:
+        print(f"reusing device {device['id']}", flush=True)
+
+    device_id = device["id"]
+    deadline = time.monotonic() + timeout
+    last = "the backend has not offered a stream transport yet"
+    while time.monotonic() < deadline:
+        try:
+            payload = _api_call(base, f"/vpn-devices/{device_id}/config", token=token)
+        except StagingError as exc:
+            last = str(exc)
+            time.sleep(2)
+            continue
+        if isinstance(payload, dict) and payload.get("stream"):
+            print(f"the backend offered a stream transport for device {device_id}", flush=True)
+            return payload
+        last = "config carries no `stream` object (node has not reported a pin yet)"
+        time.sleep(2)
+    raise StagingError(f"no stream transport after {timeout:.0f}s: {last}")
+
+
 def free_udp_port() -> int:
     """Asks the kernel for a free loopback UDP port.
 
@@ -182,7 +308,10 @@ def main() -> int:
                          "teardown cannot fail merely because the stub has already gone away")
     ap.add_argument("--server", help="host:port the bridge dials, i.e. the node's ingress")
     ap.add_argument("--server-name", help="SNI, and the name the node issued for")
-    ap.add_argument("--client-ip", default="10.254.0.2/32")
+    ap.add_argument("--client-ip", default="10.254.0.2/32",
+                    help="the device's assigned overlay address. In staging mode the "
+                         "backend is authoritative, so this is overridden from the "
+                         "dial payload")
     ap.add_argument("--state-out",
                     help="where to write the chosen keys, for the assertions")
     ap.add_argument("--inline-client-private",
@@ -193,6 +322,17 @@ def main() -> int:
     ap.add_argument("--force-psk",
                     help="override the PSK, for the negative check. The daemon must "
                          "refuse a session presenting a credential it was never told")
+    ap.add_argument("--tunnel-cidr",
+                    help="the node's tunnel subnet, for the conf's AllowedIPs. The dial "
+                         "payload carries only the node's tunnel address, not the prefix "
+                         "length it sits in, and a /32 there would leave the tunnel "
+                         "unroutable")
+    ap.add_argument("--staging-state",
+                    help="state file from staging_setup.py. Selects the real backend: the "
+                         "device is created and its transport read from the live API "
+                         "instead of from the stub fixture")
+    ap.add_argument("--api-user", help="API user, for --staging-state")
+    ap.add_argument("--api-password", help="API password, for --staging-state")
     ap.add_argument("--down", action="store_true", help="tear the tunnel down and exit")
     args = ap.parse_args()
 
@@ -200,12 +340,17 @@ def main() -> int:
     # empty: a missing --server would otherwise produce a conf pointing at
     # "None:0", and the run would fail somewhere much less legible.
     if not args.down:
-        missing = [flag for flag, value in (
-            ("--control-plane", args.control_plane),
-            ("--server", args.server),
-            ("--server-name", args.server_name),
-            ("--state-out", args.state_out),
-        ) if not value]
+        # In staging mode the backend supplies the server, its name and the
+        # device's address, so only the socket and the output path are the
+        # caller's to provide.
+        required_args = [("--state-out", args.state_out)]
+        if not args.staging_state:
+            required_args += [
+                ("--control-plane", args.control_plane),
+                ("--server", args.server),
+                ("--server-name", args.server_name),
+            ]
+        missing = [flag for flag, value in required_args if not value]
         if missing:
             ap.error("the following arguments are required without --down: "
                      + ", ".join(missing))
@@ -223,12 +368,36 @@ def main() -> int:
 
     # The node's WireGuard public half, which it reported at registration. The
     # client needs it as the peer key; there is no other channel carrying it.
-    state = fetch_state(args.control_plane)
-    node_public_key = state.get("node_public_key")
-    if not node_public_key:
-        raise SystemExit("the node has not registered yet (no wg_public_key)")
-
-    pin = wait_for_pin(args.control_plane)
+    if args.staging_state:
+        if not (args.api_user and args.api_password):
+            raise SystemExit("--staging-state also needs --api-user and --api-password")
+        state = json.load(open(args.staging_state))
+        payload = transport_from_staging(state, args.api_user, args.api_password)
+        stream = payload["stream"]
+        node_public_key = payload.get("wg_public_key")
+        if not node_public_key:
+            raise SystemExit("the dial payload carries no wg_public_key")
+        pin = stream["spki_sha256"][0]
+        client_private = state["client_private_key"]
+        node_tunnel_ip = payload.get("wg_dns") or ""
+        # The backend is authoritative about where its node is and what it is
+        # called; the harness's own flags would be a second source of truth.
+        args.server = stream["server"]
+        args.server_name = stream["server_name"]
+        if payload.get("assigned_ip"):
+            args.client_ip = payload["assigned_ip"]
+        if not args.tunnel_cidr:
+            raise SystemExit("--staging-state also needs --tunnel-cidr "
+                             "(the node's tunnel subnet, for AllowedIPs)")
+    else:
+        state = fetch_state(args.control_plane)
+        node_public_key = state.get("node_public_key")
+        if not node_public_key:
+            raise SystemExit("the node has not registered yet (no wg_public_key)")
+        pin = wait_for_pin(args.control_plane)
+        client_private = None
+        stream = None
+        node_tunnel_ip = args.node_tunnel_ip
 
     listen_port = free_udp_port()
     deliver_port = free_udp_port()
@@ -240,9 +409,8 @@ def main() -> int:
     # real failure. When it did supply one, that is the private half of the public
     # key it already registered with the control plane, and the node's peer row is
     # built from that public key — so the two must be used together.
-    client_private = args.inline_client_private or base64.b64encode(
-        secrets.token_bytes(32)
-    ).decode("ascii")
+    client_private = (client_private or args.inline_client_private
+                      or base64.b64encode(secrets.token_bytes(32)).decode("ascii"))
 
     with Helper(args.socket) as helper:
         caps = helper.capabilities()
@@ -260,8 +428,8 @@ def main() -> int:
             # The device credential, from the same control plane the node reads
             # it from, so the two ends cannot disagree about the PSK. Overridable
             # only so the negative check can present one the node never saw.
-            "psk": args.force_psk or state["psk"],
-            "client_id": state["client_id"],
+            "psk": args.force_psk or (stream["psk"] if stream else state["psk"]),
+            "client_id": stream["client_id"] if stream else state["client_id"],
         }
         conf = build_wg_quick_config(
             private_key=client_private,
@@ -272,6 +440,7 @@ def main() -> int:
             # a correct transport look broken, so they are separate arguments.
             endpoint=transport["listen"],
             listen_port=deliver_port,
+            allowed_ips=args.tunnel_cidr or "10.254.0.0/16",
         )
 
         print(f"pin from the node's heartbeat: {pin}", flush=True)
@@ -283,7 +452,10 @@ def main() -> int:
 
     with open(args.state_out, "w", encoding="utf-8") as handle:
         json.dump({"client_private": client_private, "listen_port": listen_port,
-                   "deliver_port": deliver_port, "pin": pin}, handle)
+                   "deliver_port": deliver_port, "pin": pin,
+                   "node_tunnel_ip": node_tunnel_ip,
+                   "assigned_ip": args.client_ip, "server": args.server,
+                   "server_name": args.server_name}, handle)
     print(f"wrote {args.state_out}", flush=True)
     return 0
 

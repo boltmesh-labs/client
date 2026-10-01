@@ -32,12 +32,21 @@ bin_dir=""
 # preserve only the logs, since a leftover bridge and namespaces are easy to
 # forget about.
 debug_keep="${BOLTMESH_E2E_DEBUG:-0}"
+# Run only the client half, against a node this harness does not own.
+client_only=0
+# A staging_setup.py state file selects the real control plane over the stub.
+staging_state=""
+# The node's tunnel subnet, for the conf's AllowedIPs.
+tunnel_cidr=10.254.0.0/16
 for arg in "$@"; do
   case "$arg" in
     --keep) keep=1 ;;
     --skip-build) skip_build=1 ;;
     --bin-dir=*) bin_dir="${arg#*=}" ;;
     --agent-repo=*) agent_repo="${arg#*=}" ;;
+    --staging-state=*) staging_state="${arg#*=}" ;;
+    --client-only) client_only=1 ;;
+    --tunnel-cidr=*) tunnel_cidr="${arg#*=}" ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
@@ -180,6 +189,124 @@ else
   (cd "$agent_repo" && go build -o "$workdir/agentd" ./cmd/agentd)
 fi
 
+# --- client-only mode ------------------------------------------------------
+
+# Runs just the client half against a node this harness does not own — a real,
+# already-registered node on a real host. The full both-ends mode above is the
+# better test of the transport itself; this one exists because the node end of a
+# production deployment is a machine with a baked firewalld zone and a read-only
+# rootfs, and the only way to exercise that end is to point at one that is
+# already running.
+if [[ $client_only -eq 1 ]]; then
+  [[ -n $staging_state ]] || die "--client-only needs --staging-state (there is no stub node to talk to)"
+  client_iface=boltmesh0
+
+  log "starting boltmeshd on this host"
+  BOLTMESHD_SOCKET="$workdir/boltmeshd.sock" \
+  BOLTMESHD_SOCKET_GROUP="" \
+  BOLTMESHD_CONFIG_DIR="$workdir/wgconf" \
+  BOLTMESHD_LOG_FILE="" \
+    "$workdir/boltmeshd" >"$workdir/client.log" 2>&1 &
+  echo $! >"$workdir/client.pid"
+  for _ in $(seq 1 40); do
+    [[ -S "$workdir/boltmeshd.sock" ]] && break
+    sleep 0.25
+  done
+  [[ -S "$workdir/boltmeshd.sock" ]] || die "boltmeshd did not create its socket (see $workdir/client.log)"
+
+  # Idempotent pre-clean: a previous run's interface would make this one's
+  # wg-quick fail on the address, which reads as a configuration bug.
+  python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --down >/dev/null 2>&1 || true
+
+  log "bringing the tunnel up through the bridge, against the real node"
+  python3 "$here/client.py" \
+    --socket "$workdir/boltmeshd.sock" \
+    --staging-state "$staging_state" \
+    --api-user "$BOLTMESH_E2E_API_USER" \
+    --api-password "$BOLTMESH_E2E_API_PASSWORD" \
+    --tunnel-cidr "$tunnel_cidr" \
+    --state-out "$workdir/client-state.json" \
+    || die "the client could not bring the tunnel up (see $workdir/client.log)"
+
+  fail=0
+  note_failure() { printf 'FAIL: %s\n' "$*" >&2; fail=1; }
+  # No netns argument here: this mode runs in the host namespace, because the
+  # node it dials is on the LAN and a bare namespace cannot reach it.
+  wg_field() {
+    # shellcheck disable=SC2016  # awk program, not shell
+    wg show "$1" "$2" 2>/dev/null | awk -v col="$3" '{print $col}' || true
+  }
+
+  node_tunnel_ip="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_tunnel_ip"])' \
+    "$workdir/client-state.json")"
+
+  log "asserting on the kernel's view"
+  handshakes_ok=0
+  for _ in $(seq 1 30); do
+    c_hs="$(wg_field "$client_iface" latest-handshakes 2 | head -1)"
+    if [[ -n "$c_hs" && "$c_hs" != "0" ]]; then
+      handshakes_ok=1
+      break
+    fi
+    ping -c1 -W1 "$node_tunnel_ip" >/dev/null 2>&1 || true
+    sleep 0.5
+  done
+  [[ $handshakes_ok -eq 1 ]] || note_failure "no completed handshake on $client_iface"
+  c_rx="$(wg_field "$client_iface" transfer 2 | head -1)"
+  echo "client received: ${c_rx:-0} bytes over WireGuard"
+  [[ -n "${c_rx:-}" && "$c_rx" != "0" ]] || note_failure "the client received nothing over WireGuard"
+
+  log "pinging across the tunnel to the node ($node_tunnel_ip)"
+  if ping_log="$(ping -c3 -W2 "$node_tunnel_ip" 2>&1)"; then
+    echo "$ping_log" | tail -3
+  else
+    echo "$ping_log"
+    note_failure "the in-tunnel ping failed"
+  fi
+  grep -q "0% packet loss" <<<"$ping_log" || note_failure "the in-tunnel ping lost packets"
+
+  log "negative check: a wrong PSK must not authenticate"
+  python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --down \
+    >"$workdir/down.log" 2>&1 || true
+  sleep 1
+  bad_psk="$(printf 'A%.0s' $(seq 1 43))="
+  if python3 "$here/client.py" \
+      --socket "$workdir/boltmeshd.sock" \
+      --staging-state "$staging_state" \
+      --api-user "$BOLTMESH_E2E_API_USER" \
+      --api-password "$BOLTMESH_E2E_API_PASSWORD" \
+      --tunnel-cidr "$tunnel_cidr" \
+      --force-psk "$bad_psk" \
+      --state-out "$workdir/badpsk-state.json" >"$workdir/badpsk.log" 2>&1; then
+    bad_hs=0
+    for _ in $(seq 1 8); do
+      ping -c1 -W1 "$node_tunnel_ip" >/dev/null 2>&1 || true
+      sleep 1
+    done
+    bad_hs="$(wg_field "$client_iface" latest-handshakes 2 | head -1)"
+    bad_rx="$(wg_field "$client_iface" transfer 2 | head -1)"
+    if [[ -n "$bad_hs" && "$bad_hs" != "0" ]] || [[ -n "$bad_rx" && "$bad_rx" != "0" ]]; then
+      note_failure "a mutated PSK completed a handshake (hs=${bad_hs:-none} rx=${bad_rx:-0})"
+    else
+      echo "a mutated PSK produced no handshake and moved no bytes, as it must"
+    fi
+  else
+    echo "a mutated PSK was refused before the tunnel came up, as it must:"
+    tail -3 "$workdir/badpsk.log" | sed 's/^/    /'
+  fi
+
+  # Leave the host as we found it: this mode runs in the host namespace, so a
+  # leftover interface and its routes would follow the box, not the harness.
+  python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --down >/dev/null 2>&1 || true
+
+  if [[ $fail -ne 0 ]]; then
+    log "harness FAILED — logs in $workdir"
+    exit 1
+  fi
+  log "harness PASSED — logs in $workdir"
+  exit 0
+fi
+
 # --- network -------------------------------------------------------------
 
 log "creating the bridge, namespaces, and veths"
@@ -252,44 +379,81 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
   firewalld_trusted_bridge=1
 fi
 
-# --- stub control plane --------------------------------------------------
+# --- control plane source -------------------------------------------------
 
-# The client device's WireGuard keypair. Generated up front so the stub can serve
-# the public half in peers-sync from the node's very first fetch, and so the
-# client's conf and the node's peer agree without a mid-run race.
-client_priv="$(wg genkey)"
-client_pub="$(printf '%s' "$client_priv" | wg pubkey)"
+# Two sources, and they prove different things. The stub fixture builds the
+# descriptors by hand, so it proves the transport but says nothing about the
+# contract. The real control plane proves the schemas actually produce something
+# the helpers accept — which is the only way to catch a field name drifting
+# between three repos in three languages.
+api_base=""
+bootstrap_secret=""
+client_priv=""
+client_pub=""
 
-log "starting the stub control plane on $host_ip:$cp_port"
-python3 "$here/controlplane.py" \
-  --host "$host_ip" \
-  --port "$cp_port" \
-  --server-name "$server_name" \
-  --stream-port "$stream_port" \
-  --wg-port "$wg_port" \
-  --client-public-key "$client_pub" \
-  >"$workdir/controlplane.log" 2>&1 &
-echo $! >"$workdir/controlplane.pid"
+if [[ -n $staging_state ]]; then
+  [[ -r $staging_state ]] || die "--staging-state $staging_state is not readable"
+  [[ -n ${BOLTMESH_E2E_API_USER:-} && -n ${BOLTMESH_E2E_API_PASSWORD:-} ]] || die \
+    "--staging-state also needs BOLTMESH_E2E_API_USER and BOLTMESH_E2E_API_PASSWORD in the environment"
 
-cp_url="http://$host_ip:$cp_port"
-reachable=0
-for _ in $(seq 1 40); do
-  if ip netns exec "$ns_node" python3 -c \
-      "import socket;s=socket.create_connection(('$host_ip',$cp_port),0.5);s.close()" 2>/dev/null; then
-    reachable=1
-    break
-  fi
-  sleep 0.25
-done
-[[ $reachable -eq 1 ]] || {
-  printf '\n--- stub control plane log ---\n' >&2
-  cat "$workdir/controlplane.log" >&2 || true
-  printf '\n--- host address on %s ---\n' "$bridge" >&2
-  ip -o addr show dev "$bridge" >&2 || true
-  printf '--- node leg ---\n' >&2
-  ip netns exec "$ns_node" ip -o addr show >&2 || true
-  die "the stub control plane is unreachable from the node (log above)"
-}
+  # Read the state file with python and emit one TAB-separated line. `read` with
+  # the default IFS would split the private key on any space, and jq is not
+  # necessarily installed.
+  state_line="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("\t".join([d["api_base"], d["server_name"], str(d["stream_port"]),
+                 d["bootstrap_secret"], d["client_private_key"], d["client_public_key"]]))
+' "$staging_state")" || die "could not parse $staging_state"
+  IFS=$'\t' read -r api_base server_name stream_port bootstrap_secret client_priv client_pub \
+    <<<"$state_line"
+  [[ -n $api_base && -n $bootstrap_secret ]] || die "$staging_state is missing required fields"
+  # The real API base already carries /v1, and the agent appends nothing of its
+  # own when the base already has it.
+  api_seed="$api_base"
+  log "real control plane: $api_base (node endpoint $server_name:$stream_port)"
+else
+  # The client device's WireGuard keypair. Generated up front so the stub can
+  # serve the public half in peers-sync from the node's very first fetch, and so
+  # the client's conf and the node's peer agree without a mid-run race.
+  client_priv="$(wg genkey)"
+  client_pub="$(printf '%s' "$client_priv" | wg pubkey)"
+
+  log "starting the stub control plane on $host_ip:$cp_port"
+  python3 "$here/controlplane.py" \
+    --host "$host_ip" \
+    --port "$cp_port" \
+    --server-name "$server_name" \
+    --stream-port "$stream_port" \
+    --wg-port "$wg_port" \
+    --client-public-key "$client_pub" \
+    >"$workdir/controlplane.log" 2>&1 &
+  echo $! >"$workdir/controlplane.pid"
+
+  api_base="http://$host_ip:$cp_port"
+  # The agent appends the version prefix itself, and the stub routes are under
+  # /v1, so the seed carries it while the client half (which builds absolute
+  # paths like /harness/state) gets the bare origin.
+  api_seed="$api_base/v1"
+  reachable=0
+  for _ in $(seq 1 40); do
+    if ip netns exec "$ns_node" python3 -c \
+        "import socket;s=socket.create_connection(('$host_ip',$cp_port),0.5);s.close()" 2>/dev/null; then
+      reachable=1
+      break
+    fi
+    sleep 0.25
+  done
+  [[ $reachable -eq 1 ]] || {
+    printf '\n--- stub control plane log ---\n' >&2
+    cat "$workdir/controlplane.log" >&2 || true
+    printf '\n--- host address on %s ---\n' "$bridge" >&2
+    ip -o addr show dev "$bridge" >&2 || true
+    printf '--- node leg ---\n' >&2
+    ip netns exec "$ns_node" ip -o addr show >&2 || true
+    die "the stub control plane is unreachable from the node (log above)"
+  }
+fi
 
 # --- node ----------------------------------------------------------------
 
@@ -306,8 +470,8 @@ if [[ ! -e "$seed_dir/bootstrap.env" ]]; then
   seed_created_file=1
 fi
 cat > "$workdir/bootstrap.env" <<EOF
-API_BASE_URL=$cp_url/v1
-NODE_BOOTSTRAP_SECRET=harness-bootstrap-secret
+API_BASE_URL=$api_seed
+NODE_BOOTSTRAP_SECRET=$bootstrap_secret
 EOF
 chmod 600 "$workdir/bootstrap.env"
 # The bind and the exec must happen inside ONE `ip netns exec`: each invocation
@@ -351,7 +515,7 @@ done
 log "bringing the tunnel up through the bridge"
 ip netns exec "$ns_client" python3 "$here/client.py" \
   --socket "$client_socket" \
-  --control-plane "$cp_url" \
+  --control-plane "$api_base" \
   --server "$server_name:$stream_port" \
   --server-name "$server_name" \
   --inline-client-private "$client_priv" \
@@ -466,7 +630,7 @@ sleep 1
 bad_psk="$(printf 'A%.0s' $(seq 1 43))="
 if ip netns exec "$ns_client" python3 "$here/client.py" \
     --socket "$client_socket" \
-    --control-plane "$cp_url" \
+    --control-plane "$api_base" \
     --server "$server_name:$stream_port" \
     --server-name "$server_name" \
     --inline-client-private "$client_priv" \

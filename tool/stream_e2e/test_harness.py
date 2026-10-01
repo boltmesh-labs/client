@@ -208,6 +208,7 @@ class WgQuickConfigTest(unittest.TestCase):
             endpoint="127.0.0.1:51821",
             # ...and a DIFFERENT port is the interface's own.
             listen_port=51820,
+            allowed_ips="10.254.0.0/16",
         )
 
     def test_peer_endpoint_is_the_bridge_not_the_node(self) -> None:
@@ -245,6 +246,18 @@ class WgQuickConfigTest(unittest.TestCase):
         conf = self.build()
         self.assertIn("AllowedIPs = 10.254.0.0/16", conf)
         self.assertNotIn("0.0.0.0/0", conf)
+
+    def test_allowed_ips_is_not_hardcoded(self) -> None:
+        # A real node lives on whatever tunnel subnet its region was provisioned
+        # with, so a hardcoded /16 would make the tunnel unroutable there — and
+        # the failure looks like "the node is down", not "the conf is wrong".
+        conf = client.build_wg_quick_config(
+            private_key="PRIV", assigned_ip="10.1.90.193/32", server_public_key="SRV",
+            endpoint="192.168.1.115:443", listen_port=51820,
+            allowed_ips="10.1.0.0/16",
+        )
+        self.assertIn("AllowedIPs = 10.1.0.0/16", conf)
+        self.assertNotIn("10.254.0.0/16", conf)
 
 
 class FreePortTest(unittest.TestCase):

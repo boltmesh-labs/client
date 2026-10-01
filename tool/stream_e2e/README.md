@@ -54,6 +54,55 @@ either namespace — without the bridge leg the agent could never register.
    ping, and that the client interface actually received WireGuard bytes. A
    wrong-PSK session is then driven and must be refused.
 
+## Running it against a real control plane
+
+The stub builds its descriptors by hand, so it proves the transport but says
+nothing about the contract. To check that the real schemas produce something the
+helpers accept — the only way to catch a field name drifting between three repos
+in three languages — point the harness at a deployed backend.
+
+Provision first. This is idempotent and resumable, and it writes the device's
+keypair, the node's bootstrap secret and the ids to one 0600 state file:
+
+```sh
+./staging_setup.py --api-base https://api.example.com/v1 \
+  --user <user> --password <password> \
+  --server-name node.example.test \
+  --state-out /tmp/staging-state.json
+```
+
+Two things it cannot do, both by design:
+
+- A region's stream policy (`stream_enabled`, `stream_listen_port`) has no admin
+  write surface yet, so it is set directly in the database. The script prints the
+  statement rather than leaving a region that silently serves nothing.
+- The device cannot be created until the node has registered: a server has no
+  WireGuard public key until a node claims it, and binding refuses a server that
+  is not dialable. That is why the device step also happens inside the run.
+
+Then either run both ends, or just the client against a node you already have:
+
+```sh
+# Both ends, with the harness's own node, against the real API.
+sudo BOLTMESH_E2E_API_USER=... BOLTMESH_E2E_API_PASSWORD=... \
+  tool/stream_e2e/run.sh --staging-state=/tmp/staging-state.json
+
+# Client half only, against a node this harness does not own — a real host with
+# a baked firewalld zone and a read-only rootfs. Runs in the host namespace,
+# because a bare namespace cannot reach a node on the LAN.
+sudo BOLTMESH_E2E_API_USER=... BOLTMESH_E2E_API_PASSWORD=... \
+  tool/stream_e2e/run.sh --client-only --staging-state=/tmp/staging-state.json \
+  --tunnel-cidr=10.1.0.0/16
+```
+
+`--tunnel-cidr` is the node's tunnel subnet, for the conf's `AllowedIPs`. The
+dial payload carries the node's tunnel *address* but not the prefix length it
+sits in, and a `/32` there would leave the tunnel unroutable.
+
+Credentials go through the environment, never the state file: the file already
+holds a bootstrap secret and a private key, and adding an account password to a
+file that gets copied between hosts is not worth the convenience.
+
 ## Requirements
 
 Root (namespaces, veth, and `wg` are all privileged), plus `iproute2`,
