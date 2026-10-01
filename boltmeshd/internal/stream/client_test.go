@@ -64,6 +64,10 @@ func newStubNode(t *testing.T, psk, clientID []byte, refuse bool) *stubNode {
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
+		// The list the real node advertises (the agent's stream.ALPNProtocols).
+		// The stub answers it so a client that offers ALPN negotiates one, which
+		// is what makes the offer observable from here.
+		NextProtos: []string{"h2", "http/1.1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +382,39 @@ func TestClientRecoversAfterTheNodeDropsTheSession(t *testing.T) {
 		case <-deadline:
 			t.Fatal("the client never re-established a session")
 		}
+	}
+}
+
+func TestClientOffersALPNLikeABrowser(t *testing.T) {
+	psk, cid := testKeyPair(t, 1)
+	node := newStubNode(t, psk, cid, false)
+	client, _, reports := newTestClient(t, node, psk, cid, nil)
+	client.Start()
+
+	select {
+	case up := <-reports:
+		if !up {
+			t.Fatal("the session did not come up")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no session")
+	}
+
+	// The stub advertises what the node advertises, so a negotiated protocol
+	// here proves the client offered ALPN. A ClientHello with no ALPN extension
+	// is a passive tell — every browser offers one — so the bridge must offer it
+	// even though the session carries WireGuard datagrams either way.
+	select {
+	case conn := <-node.sessions:
+		tlsConn, ok := conn.(*tls.Conn)
+		if !ok {
+			t.Fatalf("session conn is %T, want *tls.Conn", conn)
+		}
+		if got := tlsConn.ConnectionState().NegotiatedProtocol; got != "h2" {
+			t.Errorf("negotiated ALPN = %q, want %q", got, "h2")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the session was never handed to the test")
 	}
 }
 

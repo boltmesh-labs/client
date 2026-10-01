@@ -443,9 +443,20 @@ func readOneFrame(conn net.Conn) (uint16, []byte, error) {
 // a leaf-SPKI pin enforced in the verifier. Pinning lives there because a
 // node's certificate is issued for a name we control and rotates
 // independently of any CA chain.
+// alpnProtocols is the ALPN list the bridge offers.
+//
+// Camouflage, not negotiation: the session carries WireGuard datagrams either
+// way, but a ClientHello with no ALPN extension is one of the few things a
+// passive observer can use to tell this session from an ordinary HTTPS one —
+// every browser offers ALPN. The list is what the node advertises (the agent's
+// `stream.ALPNProtocols`), so the ServerHello answers it and both directions of
+// the handshake look ordinary.
+var alpnProtocols = []string{"h2", "http/1.1"}
+
 func (c *Client) tlsConfig() *tls.Config {
 	cfg := &tls.Config{
 		ServerName: c.cfg.ServerName,
+		NextProtos: alpnProtocols,
 		// The chain check is replaced by the SPKI pin below, which is
 		// strictly narrower than a public-CA validation for a single known
 		// peer. RootCAs, when set, adds the normal verification on top.
