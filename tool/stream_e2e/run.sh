@@ -505,20 +505,25 @@ else
   # paths like /harness/state) gets the bare origin.
   api_seed="$api_base/v1"
   reachable=0
+  # The bridge needs a moment before it passes traffic, and the *first* packet
+  # pays for ARP resolution — which can outlast a short connect timeout and make
+  # every retry look like a dead stub. Warm the path with a ping that tolerates
+  # the wait, then probe with a timeout an unpopulated cache can still meet.
   for _ in $(seq 1 40); do
+    ip netns exec "$ns_node" ping -c1 -W1 "$host_ip" >/dev/null 2>&1 || true
     if ip netns exec "$ns_node" python3 -c \
-        "import socket;s=socket.create_connection(('$host_ip',$cp_port),0.5);s.close()" 2>/dev/null; then
+        "import socket;s=socket.create_connection(('$host_ip',$cp_port),1);s.close()" 2>/dev/null; then
       reachable=1
       break
     fi
-    sleep 0.25
+    sleep 0.5
   done
   [[ $reachable -eq 1 ]] || {
     printf '\n--- stub control plane log ---\n' >&2
     cat "$workdir/controlplane.log" >&2 || true
     printf '\n--- host address on %s ---\n' "$bridge" >&2
     ip -o addr show dev "$bridge" >&2 || true
-    printf '--- node leg ---\n' >&2
+    printf '\n--- node leg ---\n' >&2
     ip netns exec "$ns_node" ip -o addr show >&2 || true
     die "the stub control plane is unreachable from the node (log above)"
   }
