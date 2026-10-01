@@ -149,20 +149,24 @@ class ConnectionController extends Notifier<ConnState> {
   /// reader — which never counts at all, see the readerSupport gate).
   DateTime? _connectedAt;
 
-  /// True once a confirmed-local stall demoted this app process onto the
-  /// obfuscated (AmneziaWG) data plane, where the serving region offers one
-  /// (see `conn_obfuscation.dart`).
+  /// The transport rung this app process is on (see `conn_obfuscation.dart`).
   ///
-  /// The ladder is native-first: an unobstructed network pays nothing for the
-  /// obfuscation parameters, and only a stall the health policy confirmed
-  /// *locally* (a dead in-tunnel echo, a hard-stale handshake) escalates to
-  /// the obfuscated rung. Never a bare null read — a missing handshake from a
-  /// wedged reader is absence of evidence, not a blocked protocol.
+  /// It starts where the *region* does: native for a region whose node runs
+  /// stock WireGuard, AmneziaWG for one whose node runs the obfuscated device —
+  /// a stock handshake is illegible to that node, so a native start there is a
+  /// guaranteed-failed attempt that leaks the plaintext fingerprint first.
+  /// [_applyRung] re-derives it on every start, so a server move follows the
+  /// new region's floor and never keeps a rung the new region cannot serve.
   ///
-  /// Demotion is sticky for the process: once a network has proven it
-  /// fingerprints WireGuard, every later connect stays on the lower rung rather
-  /// than re-paying the failed-probe cycle, and an unblocked network pays only
-  /// what the rung costs. A restart re-probes native once.
+  /// Below the floor, a stall the health policy confirmed *locally* (a dead
+  /// in-tunnel echo, a hard-stale handshake) escalates one rung at a time.
+  /// Never a bare null read — a missing handshake from a wedged reader is
+  /// absence of evidence, not a blocked protocol.
+  ///
+  /// Demotion is sticky: once a network has proven it fingerprints WireGuard,
+  /// every later connect stays on the lower rung rather than re-paying the
+  /// failed-probe cycle, and an unblocked network pays only what the rung costs.
+  /// A restart re-probes the region's floor.
   ///
   /// Walked one rung per heal by [_demoteRung]; see [ObfuscationRung] for the
   /// order and why the stream rung is last.

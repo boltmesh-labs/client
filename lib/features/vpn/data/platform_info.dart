@@ -32,9 +32,13 @@ String currentPlatformLabel() {
 /// True where the obfuscated (AmneziaWG) data plane is available: the Linux
 /// `boltmeshd` helper runs the device in-process. The Windows helper's
 /// data plane has no obfuscated path (yet), Android's plugin cannot be
-/// forking (see `tunnel_adapter.dart`), and Apple is the Network Extension —
-/// so everywhere else a region's obfuscation descriptor is ignored and the
-/// native data plane is used. Parameters injectable for tests.
+/// forking (see `tunnel_adapter.dart`), and Apple is the Network Extension.
+///
+/// An obfuscated region's node runs the AmneziaWG device, so a stock datagram
+/// is illegible to it: off Linux the region is unservable, and the ladder has
+/// no floor to raise to (see `conn_obfuscation.dart`). The data-plane work is
+/// what closes that gap; this predicate is the single place it is decided.
+/// Parameters injectable for tests.
 bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;

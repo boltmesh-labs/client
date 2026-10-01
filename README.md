@@ -622,19 +622,29 @@ rest of the pipeline (which files, when, verify) is unchanged.
   kill escalates in ~15s rather than a full poll interval. There is no
   same-server config-refresh rung: a reboot-rotated server key is picked up
   by a server move or a manual reconnect.
-- Transport ladder: a path the health policy confirmed dead *locally* is
-  rebuilt one rung lower per heal, so an unobstructed network pays nothing.
-  `native` (kernel WireGuard) → `awg` (in-process AmneziaWG, Linux) →
-  `stream` (the tunnel's datagrams inside a TLS session to the node, Linux).
-  A rung is only selected when the region can serve it *and* this platform
-  can run it *and* the installed helper advertises `stream-transport` — the
-  daemon advertises that token only on builds whose `up` would honour the
-  spec, so an older helper or a Windows/macOS one keeps the rung off the
-  ladder instead of selecting a rung guaranteed to be refused. Demotion rides
-  the existing heal (no new budget, timer, or state) and is sticky for the
-  process: no automatic promotion, because every promotion re-pays for a probe
-  that already failed. One rung at a time — the helper rejects a stream
-  transport combined with the AmneziaWG directives.
+- Transport ladder: where it *starts* is the region's data plane, and a path
+  the health policy confirmed dead *locally* is rebuilt one rung lower per
+  heal, so an unobstructed network pays nothing. `native` (kernel WireGuard) →
+  `awg` (in-process AmneziaWG, Linux) → `stream` (the tunnel's datagrams
+  inside a TLS session to the node, Linux). A stock region's node runs stock
+  WireGuard, so its floor is `native`; an obfuscated region's node runs the
+  AmneziaWG device, so a stock datagram is illegible to it and its floor is
+  `awg` — starting native there would be a guaranteed-failed attempt that put
+  a plaintext WireGuard handshake on the wire first, which is exactly the
+  fingerprint the rung exists to hide. The floor is re-derived on every start,
+  so a server move follows the new region's format and never keeps a rung the
+  new region cannot serve. A rung is only selected when the region can serve
+  it *and* this platform can run it *and* the installed helper advertises
+  `stream-transport` — the daemon advertises that token only on builds whose
+  `up` would honour the spec, so an older helper or a Windows/macOS one keeps
+  the rung off the ladder instead of selecting a rung guaranteed to be
+  refused. Off Linux an obfuscated region is unservable (there is no floor to
+  raise to) and the native rung stands: closing that gap is the data-plane
+  work, not a client-side refusal. Demotion rides the existing heal (no new
+  budget, timer, or state) and is sticky across connects: no automatic
+  promotion, because every promotion re-pays for a probe that already failed.
+  One rung at a time — the helper rejects a stream transport combined with the
+  AmneziaWG directives.
   The heal budget is one restart per session, so a region offering both AWG
   and stream reaches stream *across* a server move or reconnect rather than
   within one outage: the rung is sticky while the budget resets. A heal that

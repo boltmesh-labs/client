@@ -1,20 +1,25 @@
 part of 'connection_controller.dart';
 
-/// The transport rungs, in the order they are tried.
+/// The transport rungs, in cost order: the order [_demoteRung] walks.
 ///
-/// Native is always first and costs an unobstructed network nothing. AmneziaWG
-/// is the middle rung: obfuscated datagrams, no extra moving parts. Stream is
-/// the last: the tunnel rides a TLS session to the node, which is what defeats
-/// a network that blocks or fingerprints WireGuard's own UDP, and costs the
-/// most when it fails.
+/// Native costs an unobstructed network nothing. AmneziaWG is the middle rung:
+/// obfuscated datagrams, no extra moving parts. Stream is the last: the tunnel
+/// rides a TLS session to the node, which is what defeats a network that blocks
+/// or fingerprints WireGuard's own UDP, and costs the most when it fails.
 ///
-/// The order is also the order [_demoteRung] walks. The rungs are alternatives
-/// — one at a time, never stacked — but the *inner* WireGuard format follows
-/// the region, not the rung: an obfuscated region's node runs the AmneziaWG
-/// device, so the datagrams it receives must carry the obfuscation directives
-/// whether they arrive directly (AWG) or inside a stream transport. The
-/// stream's TLS session is the outer camouflage; the inner format still has to
-/// match the node's device.
+/// The order is the walk order, but where the walk *starts* is the region's,
+/// not the process's: a stock region's node runs stock WireGuard, so native is
+/// its floor, while an obfuscated region's node runs the AmneziaWG device, so a
+/// stock datagram is illegible to it — native is not a cheap probe there but a
+/// guaranteed-failed attempt that would put a plaintext WireGuard handshake on
+/// the wire first. See [_rungFor].
+///
+/// The rungs are alternatives — one at a time, never stacked — but the *inner*
+/// WireGuard format follows the region, not the rung: an obfuscated region's
+/// node runs the AmneziaWG device, so the datagrams it receives must carry the
+/// obfuscation directives whether they arrive directly (AWG) or inside a stream
+/// transport. The stream's TLS session is the outer camouflage; the inner
+/// format still has to match the node's device.
 enum ObfuscationRung {
   /// The kernel WireGuard data plane, pointed straight at the node.
   native,
@@ -26,9 +31,10 @@ enum ObfuscationRung {
   stream,
 }
 
-/// The obfuscation ladder: native WireGuard first, AmneziaWG next, and the
-/// stream transport last, each after a confirmed local stall (see
-/// [_demoteRung]).
+/// The obfuscation ladder. Where it *starts* is the region's data plane — a
+/// stock region starts on native, an obfuscated one on AmneziaWG, because its
+/// node cannot read a stock datagram (see [_rungFor]) — and every rung below
+/// that is reached only after a confirmed local stall (see [_demoteRung]).
 ///
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
@@ -37,17 +43,19 @@ enum ObfuscationRung {
 /// the *existing* escalation (failover, then [_surfaceRecoveryExhausted])
 /// rather than a new failure mode.
 extension ConnectionObfuscation on ConnectionController {
-  /// The rung this process is on. Sticky for the process lifetime: there is no
-  /// automatic promotion back to native, because every promotion would re-pay
-  /// for a probe that already failed, and a network that blocked the fast path
-  /// once will do it again on the next connect.
+  /// The rung this process is on. Sticky across connects: there is no automatic
+  /// promotion back up the ladder, because every promotion would re-pay for a
+  /// probe that already failed, and a network that blocked the fast path once
+  /// will do it again on the next connect. The one thing that moves it is the
+  /// region: [_applyRung] raises it to a new region's floor and drops it to what
+  /// that region can serve.
   ObfuscationRung get obfuscationRung => _obfuscationRung;
 
   /// The obfuscation parameters to build a conf for [dial] with, or null when
   /// this start's tunnel is stock WireGuard.
   ///
-  /// The native rung is stock by definition — it is the probe that discovers
-  /// whether a plain WireGuard path exists. Every rung below it follows the
+  /// The native rung is stock by definition, and it is only ever the floor of a
+  /// region whose node runs stock WireGuard. Every rung above it follows the
   /// region: an obfuscated region's node runs the AmneziaWG device, so both the
   /// AWG rung and the stream rung build an obfuscated conf, and the stream's
   /// bridge then carries those obfuscated datagrams inside its TLS session. The
@@ -149,5 +157,55 @@ extension ConnectionObfuscation on ConnectionController {
     final obf = dial.obfuscation;
     if (obf != null && obf.isAwg && !awgDataPlaneSupported()) return false;
     return true;
+  }
+
+  /// The rung to start [dial] on, given the process's current one.
+  ///
+  /// Two rules, both about the region rather than the network:
+  ///
+  ///  * Never start below the region's floor. A stock region's node runs stock
+  ///    WireGuard, so native is the floor and the cheapest rung. An obfuscated
+  ///    region's node runs the AmneziaWG device, so a stock datagram is
+  ///    illegible to it: a native start there is not a cheap probe but a
+  ///    guaranteed-failed attempt that puts a plaintext WireGuard handshake on
+  ///    the wire first — the exact fingerprint the rung exists to hide. Its
+  ///    floor is AWG.
+  ///  * Never keep a rung the region cannot serve. A server move can land on a
+  ///    region with no stream credential, where a sticky stream rung could only
+  ///    throw (see [_streamTransportFor]).
+  ///
+  /// The health policy's demotion survives both: this only raises to the floor
+  /// and lowers to the ceiling, so a walk down the ladder is never undone.
+  ///
+  /// A region whose format this build has no data plane for — an obfuscated
+  /// region off Linux (see `platform_info.dart`) — has no floor to raise to, so
+  /// the native rung stands. It is unservable either way, and refusing the start
+  /// would turn a failover that can still reach a stock region into a dead end;
+  /// closing that gap is the data-plane work, not a client-side refusal.
+  ObfuscationRung _rungFor(DialParams dial) {
+    final obf = dial.obfuscation;
+    final obfuscated = obf != null && obf.isAwg;
+    if (obfuscated && !awgDataPlaneSupported()) return ObfuscationRung.native;
+    final floor = obfuscated ? ObfuscationRung.awg : ObfuscationRung.native;
+    final ceiling = _streamRungAvailable(dial) ? ObfuscationRung.stream : floor;
+    if (_obfuscationRung.index < floor.index) return floor;
+    if (_obfuscationRung.index > ceiling.index) return ceiling;
+    return _obfuscationRung;
+  }
+
+  /// Applies [_rungFor] before a start, logging the move.
+  ///
+  /// Called at the top of every [_startWith] — the one point a connect, a
+  /// switch, a heal and a cold restore all pass through — so a move onto a
+  /// region with a different format can never start on the previous region's
+  /// rung, and an obfuscated region can never start native.
+  void _applyRung(DialParams dial) {
+    final next = _rungFor(dial);
+    if (next == _obfuscationRung) return;
+    AppLog.info(
+      'transport rung set ${_obfuscationRung.name} -> ${next.name} '
+      'server=${dial.serverName}',
+    );
+    _obfuscationRung = next;
   }
 }

@@ -411,51 +411,56 @@ void main() {
       });
     }
 
-    test(
-      'native-first: the conf withholds obfuscation before any stall',
-      () async {
-        useLinuxDataPlane();
-        final (container, tunnel) = await seedObfuscated();
+    test('an obfuscated region starts on its own format, not native', () async {
+      useLinuxDataPlane();
+      final (container, tunnel) = await seedObfuscated();
 
-        expect(tunnel.configs.first, isNot(contains('Jc =')));
-        expect(tunnel.configs.first, isNot(contains('H1 =')));
-        expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      },
-    );
+      // The region's node runs the AmneziaWG device, so a stock datagram is
+      // illegible to it: native is not a cheap probe here but a guaranteed-
+      // failed attempt that would put a plaintext WireGuard handshake on the
+      // wire first — the fingerprint the rung exists to hide. The region's
+      // format is the floor, so the very first conf carries it.
+      expect(tunnel.configs.first, contains('Jc = 3'));
+      expect(tunnel.configs.first, contains('H1 = 115-120'));
+      expect(
+        container.read(connectionProvider.notifier).obfuscationRung,
+        ObfuscationRung.awg,
+      );
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+    });
 
-    test(
-      'a confirmed local stall demotes the heal to the obfuscated rung',
-      () async {
-        useLinuxDataPlane();
-        final (container, tunnel) = await seedObfuscated();
-        final ctl = container.read(connectionProvider.notifier);
+    test('a confirmed local stall rebuilds the region format when nothing is below', () async {
+      useLinuxDataPlane();
+      final (container, tunnel) = await seedObfuscated();
+      final ctl = container.read(connectionProvider.notifier);
 
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
 
-        // The heal's rebuild carries the full parameter set, verbatim, between
-        // DNS and [Peer] (see buildWgQuickConfig).
-        expect(
-          tunnel.lastConfig,
-          contains(
-            'Jc = 3\n'
-            'Jmin = 40\n'
-            'Jmax = 70\n'
-            'S1 = 15\n'
-            'S2 = 17\n'
-            'S3 = 10\n'
-            'S4 = 5\n'
-            'H1 = 115-120\n'
-            'H2 = 130-130\n'
-            'H3 = 150-160\n'
-            'H4 = 171-171',
-          ),
-        );
-        final state = container.read(connectionProvider);
-        expect(state.autoHealAttempts, 1);
-        expect(state.phase, ConnPhase.connected);
-      },
-    );
+      // The region's floor is already AWG and it offers no stream credential,
+      // so there is no rung left to demote to: the heal still runs, and its
+      // rebuild carries the full parameter set, verbatim, between DNS and
+      // [Peer] (see buildWgQuickConfig).
+      expect(
+        tunnel.lastConfig,
+        contains(
+          'Jc = 3\n'
+          'Jmin = 40\n'
+          'Jmax = 70\n'
+          'S1 = 15\n'
+          'S2 = 17\n'
+          'S3 = 10\n'
+          'S4 = 5\n'
+          'H1 = 115-120\n'
+          'H2 = 130-130\n'
+          'H3 = 150-160\n'
+          'H4 = 171-171',
+        ),
+      );
+      final state = container.read(connectionProvider);
+      expect(state.autoHealAttempts, 1);
+      expect(state.phase, ConnPhase.connected);
+    });
 
     test('a region without a descriptor never obfuscates', () async {
       useLinuxDataPlane();
@@ -488,6 +493,39 @@ void main() {
       expect(container.read(connectionProvider).autoHealAttempts, 1);
       expect(tunnel.lastConfig, isNot(contains('Jc =')));
     });
+
+    test(
+      'a move onto an obfuscated region raises the rung to its format',
+      () async {
+        useLinuxDataPlane();
+        final events = <String>[];
+        final (container, tunnel) = await seedConnected(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/switch')) {
+            return dialJson(
+              serverId: 'srv-2',
+              serverName: 'two',
+              obfuscation: awgObfuscationJson(),
+            );
+          }
+          throw StateError('unexpected ${o.path}');
+        }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
+        final ctl = container.read(connectionProvider.notifier);
+
+        // A stock region's floor is native, so the first conf is stock.
+        expect(tunnel.configs.first, isNot(contains('Jc =')));
+        expect(ctl.obfuscationRung, ObfuscationRung.native);
+
+        await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+        // The new region's node runs the AmneziaWG device, so the start has to
+        // carry the region's format. Inheriting the previous region's native
+        // rung would send a plaintext handshake at a node that cannot read it.
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        expect(tunnel.lastConfig, contains('Jc = 3'));
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+      },
+    );
 
     test(
       'demotion is sticky: a later manual connect stays obfuscated',
@@ -536,6 +574,7 @@ void main() {
       Future<(ProviderContainer, FakeHelperSocket)> seedStream({
         Set<String>? caps,
         Map<String, dynamic> Function()? dial,
+        Map<String, dynamic> Function()? onSwitch,
       }) async {
         final events = <String>[];
         final socket = FakeHelperSocket()..caps = caps ?? {capStreamTransport};
@@ -543,13 +582,16 @@ void main() {
         final api = VpnApi(
           recordingDio(events, (o) {
             if (o.path.endsWith('/config')) return (dial ?? streamDial)();
+            if (o.path.endsWith('/switch')) return (onSwitch ?? streamDial)();
             if (o.path.endsWith('/status')) throw networkTimeout(o);
             throw StateError('unexpected ${o.path}');
           }),
         );
         final container = makeContainer(
           store: store,
-          keys: FakeKeys(const []),
+          // A switch binds a fresh peer, so the key manager has to be able to
+          // generate; the connect path reuses the stored identity.
+          keys: FakeKeys(),
           api: api,
           tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
         );
@@ -570,44 +612,45 @@ void main() {
         await ctl.checkHealthOnce();
       }
 
-      test('native does not take the stream rung on the first stall', () async {
+      test(
+        'an obfuscated region starts on AWG, with stream below it',
+        () async {
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream();
+
+          // The region's floor is AWG, so the first start is already obfuscated
+          // and points straight at the node. The stream rung is below it and is
+          // only reached on evidence, not on the first try.
+          expect(socket.lastConfig, contains('Jc = 3'));
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastTransport, isNull);
+          expect(
+            container.read(connectionProvider.notifier).obfuscationRung,
+            ObfuscationRung.awg,
+          );
+        },
+      );
+
+      test('the first stall walks from AWG onto the stream rung', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream();
 
         await healOnce(container);
 
-        // AWG is the cheaper rung and the region offers it, so the first heal
-        // must land there rather than skipping to the stream transport.
-        expect(socket.lastConfig, contains('Jc = 3'));
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
-      });
-
-      test('a second stall walks from AWG onto the stream rung', () async {
-        useLinuxDataPlane();
-        final (container, socket) = await seedStream();
-        final ctl = container.read(connectionProvider.notifier);
-
-        await healOnce(container);
-        expect(socket.lastConfig, contains('Jc = 3'));
-
-        // The AWG rebuild did not fix it, which is the evidence the next rung
-        // acts on. The budget is spent, so the step happens after a reconnect:
-        // the rung is sticky while the heal budget resets.
-        ctl.debugHandshakeReader = () async => DateTime.now();
-        await ctl.disconnect();
-        await ctl.connect();
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
-
-        // The peer endpoint now points at the bridge's loopback address and the
-        // local listen port is pinned so the bridge knows where to deliver. The
-        // obfuscation directives stay: the region's node runs the AmneziaWG
-        // device, so the datagrams inside the stream must carry them too — the
-        // inner format follows the region, not the rung.
+        // AWG is the region's floor, so the first confirmed stall is what
+        // reaches the stream rung: the peer endpoint now points at the bridge's
+        // loopback address and the local listen port is pinned so the bridge
+        // knows where to deliver. The obfuscation directives stay: the region's
+        // node runs the AmneziaWG device, so the datagrams inside the stream
+        // must carry them too — the inner format follows the region, not the
+        // rung.
         expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
         expect(socket.lastConfig, contains('ListenPort = '));
         expect(socket.lastConfig, contains('Jc = 3'));
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(
+          container.read(connectionProvider.notifier).obfuscationRung,
+          ObfuscationRung.stream,
+        );
       });
 
       test(
@@ -730,6 +773,33 @@ void main() {
         expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
         expect(socket.lastTransport, isNotNull);
       });
+
+      test(
+        'a move to a region with no stream credential drops the rung',
+        () async {
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream(
+            // The move lands on a stock region whose dial carries no stream
+            // credential, so the sticky stream rung has nothing to run there.
+            onSwitch: () => dialJson(serverId: 'srv-2', serverName: 'two'),
+          );
+          final ctl = container.read(connectionProvider.notifier);
+
+          await healOnce(container);
+          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+
+          ctl.debugHandshakeReader = () async => DateTime.now();
+          await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+          // Keeping the stream rung would only throw — there is no credential
+          // to build a bridge from — so the start drops to the new region's
+          // floor: native, the only rung a stock region can serve here.
+          expect(container.read(connectionProvider).phase, ConnPhase.connected);
+          expect(ctl.obfuscationRung, ObfuscationRung.native);
+          expect(socket.lastTransport, isNull);
+          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+        },
+      );
 
       test(
         'a region without a stream credential never demotes to it',
