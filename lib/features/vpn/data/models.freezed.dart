@@ -643,9 +643,297 @@ as List<int>?,
 
 
 /// @nodoc
+mixin _$StreamTransport {
+
+@JsonKey(name: 'server') String get server;@JsonKey(name: 'server_name') String get serverName;@JsonKey(name: 'spki_sha256') List<String> get spkiPins;@JsonKey(name: 'psk') String get psk;@JsonKey(name: 'client_id') String get clientId;
+/// Create a copy of StreamTransport
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$StreamTransportCopyWith<StreamTransport> get copyWith => _$StreamTransportCopyWithImpl<StreamTransport>(this as StreamTransport, _$identity);
+
+  /// Serializes this StreamTransport to a JSON map.
+  Map<String, dynamic> toJson();
+
+
+@override
+bool operator ==(Object other) {
+  final _this = this as StreamTransport;
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is StreamTransport&&(identical(other.server, _this.server) || other.server == _this.server)&&(identical(other.serverName, _this.serverName) || other.serverName == _this.serverName)&&const DeepCollectionEquality().equals(other.spkiPins, _this.spkiPins)&&(identical(other.psk, _this.psk) || other.psk == _this.psk)&&(identical(other.clientId, _this.clientId) || other.clientId == _this.clientId));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+  final _this = this as StreamTransport;
+  return Object.hash(runtimeType,_this.server,_this.serverName,const DeepCollectionEquality().hash(_this.spkiPins),_this.psk,_this.clientId);
+}
+
+@override
+String toString() {
+  final _this = this as StreamTransport;
+  return 'StreamTransport(server: ${_this.server}, serverName: ${_this.serverName}, spkiPins: ${_this.spkiPins}, psk: ${_this.psk}, clientId: ${_this.clientId})';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $StreamTransportCopyWith<$Res>  {
+  factory $StreamTransportCopyWith(StreamTransport value, $Res Function(StreamTransport) _then) = _$StreamTransportCopyWithImpl;
+@useResult
+$Res call({
+@JsonKey(name: 'server') String server,@JsonKey(name: 'server_name') String serverName,@JsonKey(name: 'spki_sha256') List<String> spkiPins,@JsonKey(name: 'psk') String psk,@JsonKey(name: 'client_id') String clientId
+});
+
+
+
+
+}
+/// @nodoc
+class _$StreamTransportCopyWithImpl<$Res>
+    implements $StreamTransportCopyWith<$Res> {
+  _$StreamTransportCopyWithImpl(this._self, this._then);
+
+  final StreamTransport _self;
+  final $Res Function(StreamTransport) _then;
+
+/// Create a copy of StreamTransport
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? server = null,Object? serverName = null,Object? spkiPins = null,Object? psk = null,Object? clientId = null,}) {
+  return _then(StreamTransport(
+server: null == server ? _self.server : server // ignore: cast_nullable_to_non_nullable
+as String,serverName: null == serverName ? _self.serverName : serverName // ignore: cast_nullable_to_non_nullable
+as String,spkiPins: null == spkiPins ? _self.spkiPins : spkiPins // ignore: cast_nullable_to_non_nullable
+as List<String>,psk: null == psk ? _self.psk : psk // ignore: cast_nullable_to_non_nullable
+as String,clientId: null == clientId ? _self.clientId : clientId // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [StreamTransport].
+extension StreamTransportPatterns on StreamTransport {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>(TResult Function( _StreamTransport value)?  $default,{required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case _StreamTransport() when $default != null:
+return $default(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>(TResult Function( _StreamTransport value)  $default,){
+final _that = this;
+switch (_that) {
+case _StreamTransport():
+return $default(_that);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>(TResult? Function( _StreamTransport value)?  $default,){
+final _that = this;
+switch (_that) {
+case _StreamTransport() when $default != null:
+return $default(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'server')  String server, @JsonKey(name: 'server_name')  String serverName, @JsonKey(name: 'spki_sha256')  List<String> spkiPins, @JsonKey(name: 'psk')  String psk, @JsonKey(name: 'client_id')  String clientId)?  $default,{required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case _StreamTransport() when $default != null:
+return $default(_that.server,_that.serverName,_that.spkiPins,_that.psk,_that.clientId);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'server')  String server, @JsonKey(name: 'server_name')  String serverName, @JsonKey(name: 'spki_sha256')  List<String> spkiPins, @JsonKey(name: 'psk')  String psk, @JsonKey(name: 'client_id')  String clientId)  $default,) {final _that = this;
+switch (_that) {
+case _StreamTransport():
+return $default(_that.server,_that.serverName,_that.spkiPins,_that.psk,_that.clientId);case _:
+  throw StateError('Unexpected subclass');
+
+}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'server')  String server, @JsonKey(name: 'server_name')  String serverName, @JsonKey(name: 'spki_sha256')  List<String> spkiPins, @JsonKey(name: 'psk')  String psk, @JsonKey(name: 'client_id')  String clientId)?  $default,) {final _that = this;
+switch (_that) {
+case _StreamTransport() when $default != null:
+return $default(_that.server,_that.serverName,_that.spkiPins,_that.psk,_that.clientId);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+@JsonSerializable()
+
+class _StreamTransport extends StreamTransport {
+  const _StreamTransport({@JsonKey(name: 'server') this.server = '', @JsonKey(name: 'server_name') this.serverName = '', @JsonKey(name: 'spki_sha256')  List<String> spkiPins = const <String>[], @JsonKey(name: 'psk') this.psk = '', @JsonKey(name: 'client_id') this.clientId = ''}): _spkiPins = spkiPins,super._();
+  factory _StreamTransport.fromJson(Map<String, dynamic> json) => _$StreamTransportFromJson(json);
+
+@override@JsonKey(name: 'server') final  String server;
+@override@JsonKey(name: 'server_name') final  String serverName;
+ final  List<String> _spkiPins;
+@override@JsonKey(name: 'spki_sha256') List<String> get spkiPins {
+  if (_spkiPins is EqualUnmodifiableListView) return _spkiPins;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_spkiPins);
+}
+
+@override@JsonKey(name: 'psk') final  String psk;
+@override@JsonKey(name: 'client_id') final  String clientId;
+
+/// Create a copy of StreamTransport
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$StreamTransportCopyWith<_StreamTransport> get copyWith => __$StreamTransportCopyWithImpl<_StreamTransport>(this, _$identity);
+
+@override
+Map<String, dynamic> toJson() {
+  return _$StreamTransportToJson(this, );
+}
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _StreamTransport&&(identical(other.server, server) || other.server == server)&&(identical(other.serverName, serverName) || other.serverName == serverName)&&const DeepCollectionEquality().equals(other.spkiPins, _spkiPins)&&(identical(other.psk, psk) || other.psk == psk)&&(identical(other.clientId, clientId) || other.clientId == clientId));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode {
+    return Object.hash(runtimeType,server,serverName,const DeepCollectionEquality().hash(_spkiPins),psk,clientId);
+}
+
+@override
+String toString() {
+    return 'StreamTransport(server: $server, serverName: $serverName, spkiPins: $spkiPins, psk: $psk, clientId: $clientId)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$StreamTransportCopyWith<$Res> implements $StreamTransportCopyWith<$Res> {
+  factory _$StreamTransportCopyWith(_StreamTransport value, $Res Function(_StreamTransport) _then) = __$StreamTransportCopyWithImpl;
+@override @useResult
+$Res call({
+@JsonKey(name: 'server') String server,@JsonKey(name: 'server_name') String serverName,@JsonKey(name: 'spki_sha256') List<String> spkiPins,@JsonKey(name: 'psk') String psk,@JsonKey(name: 'client_id') String clientId
+});
+
+
+
+
+}
+/// @nodoc
+class __$StreamTransportCopyWithImpl<$Res>
+    implements _$StreamTransportCopyWith<$Res> {
+  __$StreamTransportCopyWithImpl(this._self, this._then);
+
+  final _StreamTransport _self;
+  final $Res Function(_StreamTransport) _then;
+
+/// Create a copy of StreamTransport
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? server = null,Object? serverName = null,Object? spkiPins = null,Object? psk = null,Object? clientId = null,}) {
+  return _then(_StreamTransport(
+server: null == server ? _self.server : server // ignore: cast_nullable_to_non_nullable
+as String,serverName: null == serverName ? _self.serverName : serverName // ignore: cast_nullable_to_non_nullable
+as String,spkiPins: null == spkiPins ? _self._spkiPins : spkiPins // ignore: cast_nullable_to_non_nullable
+as List<String>,psk: null == psk ? _self.psk : psk // ignore: cast_nullable_to_non_nullable
+as String,clientId: null == clientId ? _self.clientId : clientId // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+
+/// @nodoc
 mixin _$DialParams {
 
-@JsonKey(name: 'id') String get deviceId;@JsonKey(name: 'assigned_ip') String get assignedIp;@JsonKey(name: 'server_id') String get serverId;@JsonKey(name: 'server_name') String get serverName; String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String get wgPublicKey;@JsonKey(name: 'client_public_key') String? get clientPublicKey;@JsonKey(name: 'obfuscation') Obfuscation? get obfuscation;
+@JsonKey(name: 'id') String get deviceId;@JsonKey(name: 'assigned_ip') String get assignedIp;@JsonKey(name: 'server_id') String get serverId;@JsonKey(name: 'server_name') String get serverName; String get endpoint;@JsonKey(name: 'wg_port') int get wgPort;@JsonKey(name: 'wg_dns') String get wgDns;@JsonKey(name: 'wg_public_key') String get wgPublicKey;@JsonKey(name: 'client_public_key') String? get clientPublicKey;@JsonKey(name: 'obfuscation') Obfuscation? get obfuscation;@JsonKey(name: 'stream') StreamTransport? get stream;
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -659,20 +947,20 @@ $DialParamsCopyWith<DialParams> get copyWith => _$DialParamsCopyWithImpl<DialPar
 @override
 bool operator ==(Object other) {
   final _this = this as DialParams;
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is DialParams&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.assignedIp, _this.assignedIp) || other.assignedIp == _this.assignedIp)&&(identical(other.serverId, _this.serverId) || other.serverId == _this.serverId)&&(identical(other.serverName, _this.serverName) || other.serverName == _this.serverName)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.clientPublicKey, _this.clientPublicKey) || other.clientPublicKey == _this.clientPublicKey)&&(identical(other.obfuscation, _this.obfuscation) || other.obfuscation == _this.obfuscation));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DialParams&&(identical(other.deviceId, _this.deviceId) || other.deviceId == _this.deviceId)&&(identical(other.assignedIp, _this.assignedIp) || other.assignedIp == _this.assignedIp)&&(identical(other.serverId, _this.serverId) || other.serverId == _this.serverId)&&(identical(other.serverName, _this.serverName) || other.serverName == _this.serverName)&&(identical(other.endpoint, _this.endpoint) || other.endpoint == _this.endpoint)&&(identical(other.wgPort, _this.wgPort) || other.wgPort == _this.wgPort)&&(identical(other.wgDns, _this.wgDns) || other.wgDns == _this.wgDns)&&(identical(other.wgPublicKey, _this.wgPublicKey) || other.wgPublicKey == _this.wgPublicKey)&&(identical(other.clientPublicKey, _this.clientPublicKey) || other.clientPublicKey == _this.clientPublicKey)&&(identical(other.obfuscation, _this.obfuscation) || other.obfuscation == _this.obfuscation)&&(identical(other.stream, _this.stream) || other.stream == _this.stream));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
   final _this = this as DialParams;
-  return Object.hash(runtimeType,_this.deviceId,_this.assignedIp,_this.serverId,_this.serverName,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.clientPublicKey,_this.obfuscation);
+  return Object.hash(runtimeType,_this.deviceId,_this.assignedIp,_this.serverId,_this.serverName,_this.endpoint,_this.wgPort,_this.wgDns,_this.wgPublicKey,_this.clientPublicKey,_this.obfuscation,_this.stream);
 }
 
 @override
 String toString() {
   final _this = this as DialParams;
-  return 'DialParams(deviceId: ${_this.deviceId}, assignedIp: ${_this.assignedIp}, serverId: ${_this.serverId}, serverName: ${_this.serverName}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, clientPublicKey: ${_this.clientPublicKey}, obfuscation: ${_this.obfuscation})';
+  return 'DialParams(deviceId: ${_this.deviceId}, assignedIp: ${_this.assignedIp}, serverId: ${_this.serverId}, serverName: ${_this.serverName}, endpoint: ${_this.endpoint}, wgPort: ${_this.wgPort}, wgDns: ${_this.wgDns}, wgPublicKey: ${_this.wgPublicKey}, clientPublicKey: ${_this.clientPublicKey}, obfuscation: ${_this.obfuscation}, stream: ${_this.stream})';
 }
 
 
@@ -683,11 +971,11 @@ abstract mixin class $DialParamsCopyWith<$Res>  {
   factory $DialParamsCopyWith(DialParams value, $Res Function(DialParams) _then) = _$DialParamsCopyWithImpl;
 @useResult
 $Res call({
-@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
+@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation,@JsonKey(name: 'stream') StreamTransport? stream
 });
 
 
-$ObfuscationCopyWith<$Res>? get obfuscation;
+$ObfuscationCopyWith<$Res>? get obfuscation;$StreamTransportCopyWith<$Res>? get stream;
 
 }
 /// @nodoc
@@ -700,7 +988,7 @@ class _$DialParamsCopyWithImpl<$Res>
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,Object? stream = freezed,}) {
   return _then(DialParams(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,assignedIp: null == assignedIp ? _self.assignedIp : assignedIp // ignore: cast_nullable_to_non_nullable
@@ -712,7 +1000,8 @@ as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_no
 as String,wgPublicKey: null == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String,clientPublicKey: freezed == clientPublicKey ? _self.clientPublicKey : clientPublicKey // ignore: cast_nullable_to_non_nullable
 as String?,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
-as Obfuscation?,
+as Obfuscation?,stream: freezed == stream ? _self.stream : stream // ignore: cast_nullable_to_non_nullable
+as StreamTransport?,
   ));
 }
 /// Create a copy of DialParams
@@ -726,6 +1015,18 @@ $ObfuscationCopyWith<$Res>? get obfuscation {
 
   return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
     return _then(_self.copyWith(obfuscation: value));
+  });
+}/// Create a copy of DialParams
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$StreamTransportCopyWith<$Res>? get stream {
+    if (_self.stream == null) {
+    return null;
+  }
+
+  return $StreamTransportCopyWith<$Res>(_self.stream!, (value) {
+    return _then(_self.copyWith(stream: value));
   });
 }
 }
@@ -809,10 +1110,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation, @JsonKey(name: 'stream')  StreamTransport? stream)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _DialParams() when $default != null:
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation,_that.stream);case _:
   return orElse();
 
 }
@@ -830,10 +1131,10 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation, @JsonKey(name: 'stream')  StreamTransport? stream)  $default,) {final _that = this;
 switch (_that) {
 case _DialParams():
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation,_that.stream);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -850,10 +1151,10 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(name: 'id')  String deviceId, @JsonKey(name: 'assigned_ip')  String assignedIp, @JsonKey(name: 'server_id')  String serverId, @JsonKey(name: 'server_name')  String serverName,  String endpoint, @JsonKey(name: 'wg_port')  int wgPort, @JsonKey(name: 'wg_dns')  String wgDns, @JsonKey(name: 'wg_public_key')  String wgPublicKey, @JsonKey(name: 'client_public_key')  String? clientPublicKey, @JsonKey(name: 'obfuscation')  Obfuscation? obfuscation, @JsonKey(name: 'stream')  StreamTransport? stream)?  $default,) {final _that = this;
 switch (_that) {
 case _DialParams() when $default != null:
-return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation);case _:
+return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,_that.endpoint,_that.wgPort,_that.wgDns,_that.wgPublicKey,_that.clientPublicKey,_that.obfuscation,_that.stream);case _:
   return null;
 
 }
@@ -865,7 +1166,7 @@ return $default(_that.deviceId,_that.assignedIp,_that.serverId,_that.serverName,
 @JsonSerializable()
 
 class _DialParams implements DialParams {
-  const _DialParams({@JsonKey(name: 'id') required this.deviceId, @JsonKey(name: 'assigned_ip') required this.assignedIp, @JsonKey(name: 'server_id') required this.serverId, @JsonKey(name: 'server_name') this.serverName = '', required this.endpoint, @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') required this.wgDns, @JsonKey(name: 'wg_public_key') required this.wgPublicKey, @JsonKey(name: 'client_public_key') this.clientPublicKey, @JsonKey(name: 'obfuscation') this.obfuscation});
+  const _DialParams({@JsonKey(name: 'id') required this.deviceId, @JsonKey(name: 'assigned_ip') required this.assignedIp, @JsonKey(name: 'server_id') required this.serverId, @JsonKey(name: 'server_name') this.serverName = '', required this.endpoint, @JsonKey(name: 'wg_port') required this.wgPort, @JsonKey(name: 'wg_dns') required this.wgDns, @JsonKey(name: 'wg_public_key') required this.wgPublicKey, @JsonKey(name: 'client_public_key') this.clientPublicKey, @JsonKey(name: 'obfuscation') this.obfuscation, @JsonKey(name: 'stream') this.stream});
   factory _DialParams.fromJson(Map<String, dynamic> json) => _$DialParamsFromJson(json);
 
 @override@JsonKey(name: 'id') final  String deviceId;
@@ -878,6 +1179,7 @@ class _DialParams implements DialParams {
 @override@JsonKey(name: 'wg_public_key') final  String wgPublicKey;
 @override@JsonKey(name: 'client_public_key') final  String? clientPublicKey;
 @override@JsonKey(name: 'obfuscation') final  Obfuscation? obfuscation;
+@override@JsonKey(name: 'stream') final  StreamTransport? stream;
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
@@ -892,18 +1194,18 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DialParams&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.assignedIp, assignedIp) || other.assignedIp == assignedIp)&&(identical(other.serverId, serverId) || other.serverId == serverId)&&(identical(other.serverName, serverName) || other.serverName == serverName)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.clientPublicKey, clientPublicKey) || other.clientPublicKey == clientPublicKey)&&(identical(other.obfuscation, obfuscation) || other.obfuscation == obfuscation));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is _DialParams&&(identical(other.deviceId, deviceId) || other.deviceId == deviceId)&&(identical(other.assignedIp, assignedIp) || other.assignedIp == assignedIp)&&(identical(other.serverId, serverId) || other.serverId == serverId)&&(identical(other.serverName, serverName) || other.serverName == serverName)&&(identical(other.endpoint, endpoint) || other.endpoint == endpoint)&&(identical(other.wgPort, wgPort) || other.wgPort == wgPort)&&(identical(other.wgDns, wgDns) || other.wgDns == wgDns)&&(identical(other.wgPublicKey, wgPublicKey) || other.wgPublicKey == wgPublicKey)&&(identical(other.clientPublicKey, clientPublicKey) || other.clientPublicKey == clientPublicKey)&&(identical(other.obfuscation, obfuscation) || other.obfuscation == obfuscation)&&(identical(other.stream, stream) || other.stream == stream));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
 int get hashCode {
-    return Object.hash(runtimeType,deviceId,assignedIp,serverId,serverName,endpoint,wgPort,wgDns,wgPublicKey,clientPublicKey,obfuscation);
+    return Object.hash(runtimeType,deviceId,assignedIp,serverId,serverName,endpoint,wgPort,wgDns,wgPublicKey,clientPublicKey,obfuscation,stream);
 }
 
 @override
 String toString() {
-    return 'DialParams(deviceId: $deviceId, assignedIp: $assignedIp, serverId: $serverId, serverName: $serverName, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, clientPublicKey: $clientPublicKey, obfuscation: $obfuscation)';
+    return 'DialParams(deviceId: $deviceId, assignedIp: $assignedIp, serverId: $serverId, serverName: $serverName, endpoint: $endpoint, wgPort: $wgPort, wgDns: $wgDns, wgPublicKey: $wgPublicKey, clientPublicKey: $clientPublicKey, obfuscation: $obfuscation, stream: $stream)';
 }
 
 
@@ -914,11 +1216,11 @@ abstract mixin class _$DialParamsCopyWith<$Res> implements $DialParamsCopyWith<$
   factory _$DialParamsCopyWith(_DialParams value, $Res Function(_DialParams) _then) = __$DialParamsCopyWithImpl;
 @override @useResult
 $Res call({
-@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation
+@JsonKey(name: 'id') String deviceId,@JsonKey(name: 'assigned_ip') String assignedIp,@JsonKey(name: 'server_id') String serverId,@JsonKey(name: 'server_name') String serverName, String endpoint,@JsonKey(name: 'wg_port') int wgPort,@JsonKey(name: 'wg_dns') String wgDns,@JsonKey(name: 'wg_public_key') String wgPublicKey,@JsonKey(name: 'client_public_key') String? clientPublicKey,@JsonKey(name: 'obfuscation') Obfuscation? obfuscation,@JsonKey(name: 'stream') StreamTransport? stream
 });
 
 
-@override $ObfuscationCopyWith<$Res>? get obfuscation;
+@override $ObfuscationCopyWith<$Res>? get obfuscation;@override $StreamTransportCopyWith<$Res>? get stream;
 
 }
 /// @nodoc
@@ -931,7 +1233,7 @@ class __$DialParamsCopyWithImpl<$Res>
 
 /// Create a copy of DialParams
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? deviceId = null,Object? assignedIp = null,Object? serverId = null,Object? serverName = null,Object? endpoint = null,Object? wgPort = null,Object? wgDns = null,Object? wgPublicKey = null,Object? clientPublicKey = freezed,Object? obfuscation = freezed,Object? stream = freezed,}) {
   return _then(_DialParams(
 deviceId: null == deviceId ? _self.deviceId : deviceId // ignore: cast_nullable_to_non_nullable
 as String,assignedIp: null == assignedIp ? _self.assignedIp : assignedIp // ignore: cast_nullable_to_non_nullable
@@ -943,7 +1245,8 @@ as int,wgDns: null == wgDns ? _self.wgDns : wgDns // ignore: cast_nullable_to_no
 as String,wgPublicKey: null == wgPublicKey ? _self.wgPublicKey : wgPublicKey // ignore: cast_nullable_to_non_nullable
 as String,clientPublicKey: freezed == clientPublicKey ? _self.clientPublicKey : clientPublicKey // ignore: cast_nullable_to_non_nullable
 as String?,obfuscation: freezed == obfuscation ? _self.obfuscation : obfuscation // ignore: cast_nullable_to_non_nullable
-as Obfuscation?,
+as Obfuscation?,stream: freezed == stream ? _self.stream : stream // ignore: cast_nullable_to_non_nullable
+as StreamTransport?,
   ));
 }
 
@@ -958,6 +1261,18 @@ $ObfuscationCopyWith<$Res>? get obfuscation {
 
   return $ObfuscationCopyWith<$Res>(_self.obfuscation!, (value) {
     return _then(_self.copyWith(obfuscation: value));
+  });
+}/// Create a copy of DialParams
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$StreamTransportCopyWith<$Res>? get stream {
+    if (_self.stream == null) {
+    return null;
+  }
+
+  return $StreamTransportCopyWith<$Res>(_self.stream!, (value) {
+    return _then(_self.copyWith(stream: value));
   });
 }
 }

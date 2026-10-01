@@ -18,10 +18,12 @@ import '../../auth/state/auth_providers.dart';
 import '../data/control_probe.dart';
 import '../data/device_store.dart';
 import '../data/gateway_probe.dart';
+import '../data/helper_client.dart';
 import '../data/key_manager.dart';
 import '../data/models.dart';
 import '../data/network_monitor.dart';
 import '../data/platform_info.dart';
+import '../data/stream_transport.dart';
 import '../data/tunnel_adapter.dart';
 import '../data/tunnel_tuning.dart';
 import '../data/vpn_api.dart';
@@ -158,10 +160,13 @@ class ConnectionController extends Notifier<ConnState> {
   /// wedged reader is absence of evidence, not a blocked protocol.
   ///
   /// Demotion is sticky for the process: once a network has proven it
-  /// fingerprints WireGuard, every later connect stays obfuscated rather than
-  /// re-paying the failed-probe cycle, and an unblocked network pays only the
-  /// padding the parameters add. A restart re-probes native once.
-  bool _obfuscationDemoted = false;
+  /// fingerprints WireGuard, every later connect stays on the lower rung rather
+  /// than re-paying the failed-probe cycle, and an unblocked network pays only
+  /// what the rung costs. A restart re-probes native once.
+  ///
+  /// Walked one rung per heal by [_demoteRung]; see [ObfuscationRung] for the
+  /// order and why the stream rung is last.
+  ObfuscationRung _obfuscationRung = ObfuscationRung.native;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was
   /// *performed-dead* (`false`, never null). Reaching
@@ -233,6 +238,24 @@ class ConnectionController extends Notifier<ConnState> {
     _stageSub = null;
     _tunnelOverride = wg == null ? null : WireGuardTunnelAdapter.test(wg);
   }
+
+  /// Test seam: the transport the last tunnel start handed to the adapter, so a
+  /// suite can assert the spec the helper receives without a real helper. Null
+  /// whenever the start was on the native or AmneziaWG rung.
+  @visibleForTesting
+  TunnelTransport? debugLastTransport;
+
+  /// Test seam: the capability tokens the ladder gates the stream rung on.
+  ///
+  /// Production reads [TunnelAdapter.daemonCapabilities], which is empty unless
+  /// the privileged helper is in use — and the state suites drive the *plugin*
+  /// adapter, so without this the stream rung could never be exercised at all.
+  @visibleForTesting
+  Set<String>? debugDaemonCapabilities;
+
+  /// Capability tokens backing decisions, preferring the test seam.
+  Set<String> get _daemonCapabilities =>
+      debugDaemonCapabilities ?? _tunnel.daemonCapabilities;
 
   /// Test seam: when non-null, forces the through-tunnel-first decision in
   /// [switchServer] (production reads [Env.isLoopbackApi], which is a

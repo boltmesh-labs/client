@@ -47,6 +47,28 @@ Map<String, dynamic> _$ObfuscationParamsToJson(_ObfuscationParams instance) =>
       'h4': instance.h4,
     };
 
+_StreamTransport _$StreamTransportFromJson(Map<String, dynamic> json) =>
+    _StreamTransport(
+      server: json['server'] as String? ?? '',
+      serverName: json['server_name'] as String? ?? '',
+      spkiPins:
+          (json['spki_sha256'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          const <String>[],
+      psk: json['psk'] as String? ?? '',
+      clientId: json['client_id'] as String? ?? '',
+    );
+
+Map<String, dynamic> _$StreamTransportToJson(_StreamTransport instance) =>
+    <String, dynamic>{
+      'server': instance.server,
+      'server_name': instance.serverName,
+      'spki_sha256': instance.spkiPins,
+      'psk': instance.psk,
+      'client_id': instance.clientId,
+    };
+
 _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   deviceId: json['id'] as String,
   assignedIp: json['assigned_ip'] as String,
@@ -60,6 +82,9 @@ _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   obfuscation: json['obfuscation'] == null
       ? null
       : Obfuscation.fromJson(json['obfuscation'] as Map<String, dynamic>),
+  stream: json['stream'] == null
+      ? null
+      : StreamTransport.fromJson(json['stream'] as Map<String, dynamic>),
 );
 
 Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
@@ -74,6 +99,7 @@ Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
       'wg_public_key': instance.wgPublicKey,
       'client_public_key': instance.clientPublicKey,
       'obfuscation': instance.obfuscation,
+      'stream': instance.stream,
     };
 
 _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>

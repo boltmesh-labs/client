@@ -622,6 +622,48 @@ rest of the pipeline (which files, when, verify) is unchanged.
   kill escalates in ~15s rather than a full poll interval. There is no
   same-server config-refresh rung: a reboot-rotated server key is picked up
   by a server move or a manual reconnect.
+- Transport ladder: a path the health policy confirmed dead *locally* is
+  rebuilt one rung lower per heal, so an unobstructed network pays nothing.
+  `native` (kernel WireGuard) → `awg` (in-process AmneziaWG, Linux) →
+  `stream` (the tunnel's datagrams inside a TLS session to the node, Linux).
+  A rung is only selected when the region can serve it *and* this platform
+  can run it *and* the installed helper advertises `stream-transport` — the
+  daemon advertises that token only on builds whose `up` would honour the
+  spec, so an older helper or a Windows/macOS one keeps the rung off the
+  ladder instead of selecting a rung guaranteed to be refused. Demotion rides
+  the existing heal (no new budget, timer, or state) and is sticky for the
+  process: no automatic promotion, because every promotion re-pays for a probe
+  that already failed. One rung at a time — the helper rejects a stream
+  transport combined with the AmneziaWG directives.
+  The heal budget is one restart per session, so a region offering both AWG
+  and stream reaches stream *across* a server move or reconnect rather than
+  within one outage: the rung is sticky while the budget resets. A heal that
+  the new rung does not fix falls through to the existing escalation (move,
+  then the surfaced recovery error), never a new failure mode.
+  - Stream rung contract. `config` and every bind response carry a
+    per-device `stream` object; it is deliberately *not* on the region list,
+    because the PSK is a per-device secret and discovery is fetched by every
+    client of a region:
+
+    ```json
+    "stream": {
+      "server": "vpn.example.net:443",
+      "server_name": "vpn.example.net",
+      "spki_sha256": ["<base64 sha256 of the node's leaf SPKI>"],
+      "psk": "<base64, 32 bytes>",
+      "client_id": "<base64, 16 bytes>"
+    }
+    ```
+
+    Every field is size-validated client-side against the same values the
+    daemon enforces, so a malformed credential is never turned into a
+    transport — `isUsable` is the only gate. On this rung the client allocates
+    two free loopback ports per start: the peer's `Endpoint` is rewritten to
+    the bridge's listen address, and the conf pins `ListenPort` to the port the
+    bridge delivers to (an interface left at `0` takes an ephemeral port
+    nothing can guess). The spec rides the helper's `up`; the PSK never reaches
+    a log, and the loopback bind is what keeps the privileged daemon from
+    relaying for anyone.
 - Byte counters are display-only (Home card) and never drive heals.
 - OS link transitions are watched (`NetworkMonitor.linkChanges`): losing
   the link raises the no-network banner at once, and a returning link runs

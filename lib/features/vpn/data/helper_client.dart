@@ -18,6 +18,7 @@ import 'helper_socket.dart';
 import 'helper_socket_stub.dart'
     if (dart.library.io) 'helper_socket_io.dart'
     as socket_platform;
+import 'stream_transport.dart';
 
 class _MutationSlot {
   final Completer<void> done = Completer<void>();
@@ -38,6 +39,11 @@ const helperProtocolVersion = 1;
 /// daemon's own list comes back on `ping` and is informational only — the
 /// daemon enforces validation regardless, and absence is tolerated.
 const helperCapabilities = <String>['strict-validation', 'caps'];
+
+/// The token the daemon advertises when its build can run a stream transport.
+/// Matched against [HelperClient.capabilities] from `ping` before the stream
+/// rung is ever selected.
+const capStreamTransport = 'stream-transport';
 
 /// Tunnel stages the helper protocol permits, mirroring the daemon's
 /// `protocol.Stage*` constants. Any other value is a contract violation (an
@@ -203,16 +209,20 @@ class HelperClient {
   }
 
   /// Validates and starts the tunnel with [wgQuickConfig].
-  Future<HelperStatus> up(String wgQuickConfig, {Duration? timeout}) =>
-      _enqueueMutation(
-        _effectiveTimeout(timeout),
-        (track) => _call(
-          'up',
-          config: wgQuickConfig,
-          timeout: timeout,
-          onExchange: track,
-        ),
-      );
+  Future<HelperStatus> up(
+    String wgQuickConfig, {
+    TunnelTransport? transport,
+    Duration? timeout,
+  }) => _enqueueMutation(
+    _effectiveTimeout(timeout),
+    (track) => _call(
+      'up',
+      config: wgQuickConfig,
+      transport: transport?.toSpecJson(),
+      timeout: timeout,
+      onExchange: track,
+    ),
+  );
 
   /// Idempotent teardown.
   Future<HelperStatus> down({Duration? timeout}) => _enqueueMutation(
@@ -298,6 +308,7 @@ class HelperClient {
   Future<HelperStatus> _call(
     String op, {
     String? config,
+    Map<String, Object?>? transport,
     Duration? timeout,
     void Function(Future<Map<String, dynamic>>)? onExchange,
   }) async {
@@ -309,6 +320,9 @@ class HelperClient {
       'caps': helperCapabilities,
       'op': op,
       'config': ?config,
+      // Only ever set on `up`, and the daemon rejects it on every other
+      // operation — so it is omitted rather than sent as null.
+      'transport': ?transport,
     };
     final Map<String, dynamic> response;
     try {

@@ -41,6 +41,21 @@ bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   return p == TargetPlatform.linux;
 }
 
+/// True where the stream transport is available: the Linux `boltmeshd` helper
+/// runs the bridge in-process, and it is the only build whose transport
+/// lifecycle and bypass route exist. Everywhere else the daemon *rejects* a
+/// transport spec rather than ignoring it, so a rung selected there could only
+/// fail — the platform gate keeps the ladder from offering it.
+///
+/// This is the static half of the gate; the runtime half is the daemon's
+/// advertised `stream-transport` capability, which also covers a Linux helper
+/// that is too old to know the transport at all.
+bool streamTransportSupported({TargetPlatform? platform, bool web = kIsWeb}) {
+  if (web) return false;
+  final p = platform ?? defaultTargetPlatform;
+  return p == TargetPlatform.linux;
+}
+
 /// Network-extension bundle ID for iOS/macOS
 /// (`--dart-define=VPN_PROVIDER_BUNDLE_ID=<ext id>`); ignored elsewhere.
 const _kProviderBundleId = String.fromEnvironment('VPN_PROVIDER_BUNDLE_ID');

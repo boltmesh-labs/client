@@ -66,6 +66,7 @@ String buildWgQuickConfig({
   required String dns,
   bool allowLocal = true,
   ObfuscationParams? obfuscation,
+  int? listenPort,
 }) {
   if (privateKey.trim().isEmpty) {
     throw ArgumentError('Missing WireGuard private key.');
@@ -123,10 +124,19 @@ String buildWgQuickConfig({
           _headerLine('H3', obfuscation.h3),
           _headerLine('H4', obfuscation.h4),
         ];
+  // A pinned local listen port exists only for the stream rung: the helper's
+  // bridge has to know where to hand the node's datagrams, and an interface
+  // left at ListenPort=0 takes an ephemeral port nobody can guess. The native
+  // and AmneziaWG rungs omit it and let the kernel choose, as before.
+  if (listenPort != null && (listenPort <= 0 || listenPort > 65535)) {
+    throw ArgumentError('Invalid listen port: $listenPort');
+  }
+  final listenLine = listenPort == null ? '' : 'ListenPort = $listenPort\n';
   return '[Interface]\n'
       'PrivateKey = $priv\n'
       'Address = $address\n'
       'DNS = $normalizedDns\n'
+      '$listenLine'
       '${obfLines.isEmpty ? '' : '${obfLines.join('\n')}\n'}'
       '\n'
       '[Peer]\n'

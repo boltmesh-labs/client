@@ -145,19 +145,25 @@ extension ConnectionTunnel on ConnectionController {
     }
     final allowLocal = await _device.allowLocal();
     if (!sessionCurrent()) return;
-    // The obfuscation parameters ride the conf only after the ladder demoted
-    // this process (a confirmed local stall) *and* this platform has a data
-    // plane that runs them; the native-first default costs an unobstructed
-    // network nothing. See `conn_obfuscation.dart`.
+    // The transport the ladder selected for this start. Native resolves to null
+    // and costs an unobstructed network nothing; the stream rung rewrites the
+    // peer endpoint onto the helper's bridge and pins the local listen port it
+    // delivers to. See `conn_obfuscation.dart`.
+    final transport = await _streamTransportFor(dial);
+    if (!sessionCurrent()) return;
+    debugLastTransport = transport;
     final conf = buildWgQuickConfig(
       privateKey: priv,
       assignedIp: dial.assignedIp,
       serverPublicKey: dial.wgPublicKey,
-      endpointHost: dial.endpoint,
-      endpointPort: dial.wgPort,
+      // On the stream rung the peer endpoint is the bridge's loopback address,
+      // not the node: the bridge is what reaches the node.
+      endpointHost: transport?.listen.split(':').first ?? dial.endpoint,
+      endpointPort: transport?.listenPort ?? dial.wgPort,
       dns: dial.wgDns,
       allowLocal: allowLocal,
       obfuscation: _obfuscationParamsFor(dial),
+      listenPort: transport?.deliverPort,
     );
     // Android needs the OS VPN consent before the plugin will bring the TUN
     // up, and the user answers a system dialog: an unbounded wait that must
@@ -192,9 +198,13 @@ extension ConnectionTunnel on ConnectionController {
     // Apple platforms only (see `resolveProviderBundleId`): the plugin
     // requires a non-null String and ignores it on every other OS.
     await _tunnel.start(
+      // The node's own address is still what the adapter reports: it names the
+      // tunnel's peer for the OS VPN surface, not the WireGuard endpoint, which
+      // the conf (and the bridge) own on the stream rung.
       serverAddress: formatEndpoint(dial.endpoint, dial.wgPort),
       wgQuickConfig: conf,
       providerBundleId: bundleId,
+      transport: transport,
     );
     if (!sessionCurrent()) {
       // The auth listener can invalidate the operation while the native

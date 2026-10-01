@@ -6,10 +6,16 @@
 // pulling the controller/provider graph (the tests import `vpn_providers`
 // themselves). `fakes.dart` stays the lower layer of concrete doubles.
 
+import 'dart:convert';
+
 import 'package:boltmesh/core/errors.dart';
 import 'package:dio/dio.dart';
 
 import 'fakes.dart' as support;
+
+/// Standard base64 of [bytes], for credential fields the daemon validates at
+/// an exact size.
+String base64Encode(List<int> bytes) => base64.encode(bytes);
 
 /// Canonical successful dial payload (backend `DialOut`).
 Map<String, dynamic> dialJson({
@@ -23,6 +29,7 @@ Map<String, dynamic> dialJson({
   String wgPublicKey = 'SRV',
   String? clientPublicKey,
   Object? obfuscation,
+  Object? stream,
 }) => {
   'id': deviceId,
   'assigned_ip': assignedIp,
@@ -36,8 +43,25 @@ Map<String, dynamic> dialJson({
   // exercising key reconciliation supplies the server-side peer key.
   'client_public_key': ?clientPublicKey,
   // Same: omitted by default so existing suites exercise the native
-  // data plane. Obfuscation suites pass [awgObfuscationJson].
+  // data plane. Obfuscation suites pass [awgObfuscationJson], and the
+  // stream-transport suites pass a `stream` credential object.
   'obfuscation': ?obfuscation,
+  'stream': ?stream,
+};
+
+/// Canonical per-device stream-transport credential (backend `stream` object):
+/// the node's TLS address, a certificate pin, and this device's PSK and id.
+Map<String, dynamic> streamTransportJson({
+  String server = 'vpn.example.net:443',
+  String serverName = 'vpn.example.net',
+  Object? psk,
+  Object? spkiSha256,
+}) => {
+  'server': server,
+  'server_name': serverName,
+  'spki_sha256': spkiSha256 ?? [base64Encode(List<int>.filled(32, 0xaa))],
+  'psk': psk ?? base64Encode(List<int>.filled(32, 0xbb)),
+  'client_id': base64Encode(List<int>.filled(16, 0xcc)),
 };
 
 /// Canonical complete AmneziaWG obfuscation descriptor (backend

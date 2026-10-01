@@ -12,6 +12,7 @@ import 'helper_socket_stub.dart'
     as helper_platform;
 import 'helper_tunnel_adapter.dart';
 import 'platform_info.dart';
+import 'stream_transport.dart';
 import 'tunnel_tuning.dart';
 
 /// True where the plugin has no handshake source of its own and the native
@@ -58,11 +59,24 @@ abstract class TunnelAdapter {
   /// [providerBundleId] is the Apple Network-Extension bundle ID
   /// (iOS/macOS only); pass `''` on every other platform, where the
   /// plugin ignores it. Use `resolveProviderBundleId()` to build it.
+  ///
+  /// [transport] is set only for the stream rung, and only where
+  /// [daemonCapabilities] offers the stream token — see
+  /// [streamTransportSupported]. An adapter that cannot run a transport must
+  /// throw rather than ignore it: the conf already points its peer at the
+  /// bridge's loopback address, so ignoring the spec would bring the tunnel up
+  /// on an endpoint nothing is listening on.
   Future<void> start({
     required String serverAddress,
     required String wgQuickConfig,
     required String providerBundleId,
+    TunnelTransport? transport,
   });
+
+  /// Capability tokens the backing daemon advertised. Empty when there is no
+  /// daemon (the plugin path), which is why it is safe to gate a rung on:
+  /// "no daemon" reads as "no transport support".
+  Set<String> get daemonCapabilities => const <String>{};
 
   /// Graceful teardown with an automated hard-kill retry. Never throws.
   Future<void> stop(String reason);
@@ -182,6 +196,13 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   bool get handshakeReaderSupported =>
       _handshakeReader != null || _hostHandshakeSupported;
 
+  /// No daemon on this path — the plugin owns the data plane — so no
+  /// capability tokens. An explicit override because `implements` does not
+  /// inherit the interface's default body; the empty set is what keeps a
+  /// daemon-gated rung from ever selecting itself here.
+  @override
+  Set<String> get daemonCapabilities => const <String>{};
+
   @override
   Future<void> ensureInitialized() async {
     if (_initialized) return;
@@ -217,7 +238,18 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
     required String serverAddress,
     required String wgQuickConfig,
     required String providerBundleId,
+    TunnelTransport? transport,
   }) async {
+    // Fail closed rather than ignore: the caller only sets a transport when
+    // the helper is the one that can run it, so reaching here means the gate
+    // and this adapter disagree — and starting the tunnel anyway would point
+    // its peer at a loopback address nothing is bound to.
+    if (transport != null) {
+      throw UnsupportedError(
+        'This platform cannot run a stream transport; the plugin data plane '
+        'has no transport lifecycle.',
+      );
+    }
     final wg = _raw;
     if (wg == null) {
       throw StateError('VPN tunnel is unavailable on this platform.');

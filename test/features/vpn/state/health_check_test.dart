@@ -5,8 +5,11 @@ import 'package:boltmesh/core/errors.dart';
 import 'package:boltmesh/features/vpn/data/control_probe.dart';
 import 'package:boltmesh/features/vpn/data/device_store.dart';
 import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
+import 'package:boltmesh/features/vpn/data/helper_client.dart';
+import 'package:boltmesh/features/vpn/data/helper_tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
+import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
 import 'package:boltmesh/features/vpn/state/connection_tuning.dart';
@@ -17,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
+import '../../../support/fakes.dart';
 import '../../../support/fakes.dart' as support;
 import '../../../support/vpn_harness.dart';
 
@@ -79,12 +83,17 @@ ProviderContainer makeContainer({
   Clock? clock,
   GatewayProbe? gatewayProbe,
   ControlPlaneProbe? controlProbe,
+  TunnelAdapter? tunnel,
 }) {
   final container = ProviderContainer(
     overrides: [
       deviceStoreProvider.overrideWithValue(store),
       keyManagerProvider.overrideWithValue(keys),
       vpnApiProvider.overrideWithValue(api),
+      // A suite that needs the privileged helper (the stream rung only runs
+      // there) injects it; the rest drive the plugin adapter through
+      // [seedConnected]'s `debugTunnel`.
+      if (tunnel != null) tunnelAdapterProvider.overrideWithValue(tunnel),
       if (clock != null) clockProvider.overrideWithValue(clock),
       // Default pins the diagnostic pipeline to the legacy total-blackout
       // path: link up, gateway dead, control plane unreachable. Keeps
@@ -505,6 +514,258 @@ void main() {
         expect(container.read(connectionProvider).autoHealAttempts, 0);
       },
     );
+    group('stream rung', () {
+      // The stream rung sits below AWG, so these start from a region that
+      // offers both and walk all the way down — which is the only way to
+      // prove the walk visits stream at all rather than skipping it.
+      Map<String, dynamic> streamDial() => dialJson(
+        obfuscation: awgObfuscationJson(),
+        stream: streamTransportJson(),
+      );
+
+      /// [dialJson] with the stream credential but no obfuscation descriptor:
+      /// a region whose only rung below native is the stream transport.
+      Map<String, dynamic> streamOnlyDial() =>
+          dialJson(stream: streamTransportJson());
+
+      /// The stream rung only ever runs through the privileged helper, so these
+      /// suites drive [HelperTunnelAdapter] over a fake socket rather than the
+      /// plugin adapter the rest of the file uses. That is also what makes the
+      /// capability gate testable for real: the tokens come from the socket's
+      /// responses, exactly as they come from a daemon's `ping`.
+      Future<(ProviderContainer, FakeHelperSocket)> seedStream({
+        Set<String>? caps,
+        Map<String, dynamic> Function()? dial,
+      }) async {
+        final events = <String>[];
+        final socket = FakeHelperSocket()..caps = caps ?? {capStreamTransport};
+        final store = FakeStore();
+        final api = VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/config')) return (dial ?? streamDial)();
+            if (o.path.endsWith('/status')) throw networkTimeout(o);
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+        final container = makeContainer(
+          store: store,
+          keys: FakeKeys(const []),
+          api: api,
+          tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
+        );
+        await store.setDeviceId('dev-1');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        final ctl = container.read(connectionProvider.notifier);
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.connect();
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        events.clear();
+        return (container, socket);
+      }
+
+      /// Arms one heal with a stale handshake.
+      Future<void> healOnce(ProviderContainer container) async {
+        final ctl = container.read(connectionProvider.notifier);
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+      }
+
+      test('native does not take the stream rung on the first stall', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+
+        await healOnce(container);
+
+        // AWG is the cheaper rung and the region offers it, so the first heal
+        // must land there rather than skipping to the stream transport.
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+      });
+
+      test('a second stall walks from AWG onto the stream rung', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+        final ctl = container.read(connectionProvider.notifier);
+
+        await healOnce(container);
+        expect(socket.lastConfig, contains('Jc = 3'));
+
+        // The AWG rebuild did not fix it, which is the evidence the next rung
+        // acts on. The budget is spent, so the step happens after a reconnect:
+        // the rung is sticky while the heal budget resets.
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.disconnect();
+        await ctl.connect();
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        // The peer endpoint now points at the bridge's loopback address, the
+        // local listen port is pinned so the bridge knows where to deliver,
+        // and the obfuscation directives are gone: one rung at a time, and the
+        // helper rejects the combination anyway.
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastConfig, contains('ListenPort = '));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+      });
+
+      test(
+        'the bridge receives the transport spec on the stream rung',
+        () async {
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream();
+          final ctl = container.read(connectionProvider.notifier);
+
+          await healOnce(container);
+          ctl.debugHandshakeReader = () async => DateTime.now();
+          await ctl.disconnect();
+          await ctl.connect();
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+
+          // The spec the helper receives is what makes the bridge real: the
+          // credential passes through from the control plane, and the two
+          // loopback addresses are this client's contribution, agreeing with
+          // the conf the same start built.
+          final spec = socket.lastTransport;
+          expect(spec, isNotNull);
+          expect(spec!['mode'], 'stream');
+          expect(spec['server'], 'vpn.example.net:443');
+          expect(spec['server_name'], 'vpn.example.net');
+          expect(spec['psk'], isNotEmpty);
+          expect(spec['listen'], isNot(spec['deliver']));
+
+          // The conf the same start built has to agree with the spec, or the
+          // tunnel's peer endpoint and the bridge's listener would be different
+          // addresses and nothing would ever handshake.
+          final listen = spec['listen'] as String;
+          final deliverPort = (spec['deliver'] as String).split(':').last;
+          expect(socket.lastConfig, contains('Endpoint = $listen'));
+          expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
+        },
+      );
+
+      test(
+        'a region offering only the stream credential reaches it at once',
+        () async {
+          useLinuxDataPlane();
+          // No AWG descriptor at all, so the walk has nowhere to go but stream
+          // on the *first* heal — no second cycle needed.
+          final (container, socket) = await seedStream(dial: streamOnlyDial);
+
+          await healOnce(container);
+
+          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          expect(socket.lastTransport, isNotNull);
+          expect(
+            container.read(connectionProvider.notifier).obfuscationRung,
+            ObfuscationRung.stream,
+          );
+        },
+      );
+
+      test('a daemon without the capability never offers the rung', () async {
+        // An older Linux helper knows nothing about transports, so its missing
+        // token has to keep the rung off the ladder entirely.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(caps: const {});
+        final ctl = container.read(connectionProvider.notifier);
+
+        await healOnce(container);
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+      });
+
+      test('a platform without the data plane never offers the rung', () async {
+        // No platform override: the suite runs as Android, where the daemon
+        // rejects a transport spec rather than ignoring it.
+        final (container, socket) = await seedStream();
+        final ctl = container.read(connectionProvider.notifier);
+
+        await healOnce(container);
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        // AWG is also Linux-only, so nothing demotes: the heal still ran, but
+        // the conf is the native one.
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+        expect(ctl.obfuscationRung, ObfuscationRung.native);
+      });
+
+      test('the walk stops at the last rung rather than inventing one', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+        final ctl = container.read(connectionProvider.notifier);
+
+        await healOnce(container);
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.disconnect();
+        await ctl.connect();
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+
+        // One more cycle on the bottom rung. There is nothing below stream, so
+        // the rung must not move and the rebuild must stay a stream rebuild —
+        // this is where a missing `null` case would invent a fourth rung.
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.disconnect();
+        await ctl.connect();
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastTransport, isNotNull);
+      });
+
+      test(
+        'a region without a stream credential never demotes to it',
+        () async {
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream(
+            dial: () => dialJson(obfuscation: awgObfuscationJson()),
+          );
+          final ctl = container.read(connectionProvider.notifier);
+
+          await healOnce(container);
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+
+          // AWG is the only rung the region can serve, so the walk stops there
+          // and the heal keeps rebuilding the same conf.
+          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+          expect(socket.lastConfig, contains('Jc = 3'));
+        },
+      );
+
+      test('a malformed credential is never selected as a rung', () async {
+        // A PSK of the wrong size is exactly what the daemon refuses, so
+        // the ladder must not build a transport from it.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          dial: () => dialJson(
+            obfuscation: awgObfuscationJson(),
+            stream: streamTransportJson(
+              psk: base64Encode(List<int>.filled(16, 0xbb)),
+            ),
+          ),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await healOnce(container);
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+      });
+    });
   });
 
   test(

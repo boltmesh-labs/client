@@ -89,6 +89,58 @@ void main() {
       expect(conf, contains('Endpoint = [fd00::1]:51820'));
     });
 
+    test('the local listen port is omitted unless a transport needs it', () {
+      // Native and AmneziaWG leave ListenPort alone so the kernel picks an
+      // ephemeral port, exactly as before the stream rung existed.
+      final conf = buildWgQuickConfig(
+        privateKey: 'PRIV',
+        assignedIp: '10.8.0.5',
+        serverPublicKey: 'SRV',
+        endpointHost: '203.0.113.10',
+        endpointPort: 51820,
+        dns: '10.8.0.1',
+      );
+      expect(conf, isNot(contains('ListenPort')));
+    });
+
+    test('the stream rung pins the local port the bridge delivers to', () {
+      final conf = buildWgQuickConfig(
+        privateKey: 'PRIV',
+        assignedIp: '10.8.0.5',
+        serverPublicKey: 'SRV',
+        // The peer endpoint is the bridge's loopback address, not the node.
+        endpointHost: '127.0.0.1',
+        endpointPort: 51821,
+        dns: '10.8.0.1',
+        listenPort: 51820,
+      );
+      expect(conf, contains('ListenPort = 51820'));
+      expect(conf, contains('Endpoint = 127.0.0.1:51821'));
+      // And it stays in the [Interface] section, where wg-quick reads it.
+      final interface = conf.split('\n[Peer]').first;
+      expect(interface, contains('ListenPort = 51820'));
+    });
+
+    test('an out-of-range listen port is refused', () {
+      // The daemon refuses it too, but failing here names the client's own
+      // bug instead of surfacing as an opaque bad_config from the helper.
+      for (final port in [0, -1, 70000]) {
+        expect(
+          () => buildWgQuickConfig(
+            privateKey: 'PRIV',
+            assignedIp: '10.8.0.5',
+            serverPublicKey: 'SRV',
+            endpointHost: '127.0.0.1',
+            endpointPort: 51821,
+            dns: '10.8.0.1',
+            listenPort: port,
+          ),
+          throwsArgumentError,
+          reason: 'port $port',
+        );
+      }
+    });
+
     test('blank inputs throw', () {
       String build({
         String privateKey = 'PRIV',

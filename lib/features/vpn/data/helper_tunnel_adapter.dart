@@ -4,6 +4,7 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart
 
 import '../../../core/log.dart';
 import 'helper_client.dart';
+import 'stream_transport.dart';
 import 'tunnel_adapter.dart';
 import 'tunnel_tuning.dart';
 
@@ -55,10 +56,22 @@ class HelperTunnelAdapter implements TunnelAdapter {
     required String serverAddress,
     required String wgQuickConfig,
     required String providerBundleId,
+    TunnelTransport? transport,
   }) async {
-    await _client.up(wgQuickConfig, timeout: TunnelTuning.helperOpTimeout);
+    await _client.up(
+      wgQuickConfig,
+      transport: transport,
+      timeout: TunnelTuning.helperOpTimeout,
+    );
     _initialized = true;
   }
+
+  /// The daemon's advertised capabilities, from the `ping` that
+  /// [ensureInitialized] performs. Empty until that succeeds, which is the safe
+  /// direction: a rung gated on a token reads "unsupported" rather than
+  /// selecting itself before the daemon has said what it can do.
+  @override
+  Set<String> get daemonCapabilities => _client.capabilities;
 
   @override
   Future<void> stop(String reason) async {

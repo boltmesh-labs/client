@@ -1,6 +1,8 @@
 // DTOs for backend/app/vpn schemas (devices.py, regions.py).
 // Field names match the JSON contract exactly.
 
+import 'dart:convert';
+
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 part 'models.freezed.dart';
@@ -107,6 +109,74 @@ abstract class ObfuscationParams with _$ObfuscationParams {
       range[0] <= range[1];
 }
 
+/// Per-device stream-transport credential (backend `stream` object).
+///
+/// Carries everything the helper's in-process bridge needs to carry the
+/// tunnel's datagrams to the node inside a TLS session: the node's address and
+/// the name its certificate is issued for, the pins that authenticate it, and
+/// the pre-shared key that authenticates this device to the node.
+///
+/// Every field is validated against the same sizes the daemon enforces
+/// (32-byte PSK, 16-byte client id, 32-byte SHA-256 pins, base64), so a
+/// malformed descriptor can never produce a transport that is built and then
+/// refused: [isUsable] is the only gate, and an incomplete credential set means
+/// the rung is not offered at all.
+///
+/// This is deliberately on [DialParams] and *not* on [DiscoveryServer]. The
+/// PSK is a per-device secret, and the discovery payload is fetched by every
+/// client of a region — a credential that authenticates a device to a node
+/// cannot live in a shared listing.
+@freezed
+abstract class StreamTransport with _$StreamTransport {
+  const StreamTransport._();
+
+  const factory StreamTransport({
+    // `host[:port]`; a bare host means 443, the only port a stream dials.
+    @JsonKey(name: 'server') @Default('') String server,
+    // The SNI presented and the name the pin is checked against.
+    @JsonKey(name: 'server_name') @Default('') String serverName,
+    // SHA-256 digests of the node's leaf SPKI, base64. Several are allowed so
+    // the node can rotate its key without a client release.
+    @JsonKey(name: 'spki_sha256') @Default(<String>[]) List<String> spkiPins,
+    // The device's pre-shared key, base64. Never logged.
+    @JsonKey(name: 'psk') @Default('') String psk,
+    // The device's stream identity, base64.
+    @JsonKey(name: 'client_id') @Default('') String clientId,
+  }) = _StreamTransport;
+
+  factory StreamTransport.fromJson(Map<String, Object?> json) =>
+      _$StreamTransportFromJson(json);
+
+  /// True when the credential set is complete and well-formed.
+  ///
+  /// Mirrors the daemon's `TransportSpec` validation field for field, so a
+  /// descriptor this accepts is one the helper will accept. Anything less and
+  /// the stream rung is simply not offered.
+  bool get isUsable =>
+      server.trim().isNotEmpty &&
+      serverName.trim().isNotEmpty &&
+      spkiPins.isNotEmpty &&
+      spkiPins.every((pin) => _base64OfSize(pin, streamSPKISize)) &&
+      _base64OfSize(psk, streamPSKSize) &&
+      _base64OfSize(clientId, streamClientIDSize);
+}
+
+/// Byte sizes the stream credential fields must decode to. Mirrored from the
+/// helper's protocol package so the two sides cannot drift.
+const streamPSKSize = 32;
+const streamClientIDSize = 16;
+const streamSPKISize = 32;
+
+/// True when [value] is standard base64 decoding to exactly [size] bytes.
+bool _base64OfSize(String value, int size) {
+  if (value.isEmpty) return false;
+  try {
+    return base64.decode(value).length == size;
+  } on FormatException {
+    return false;
+  }
+}
+
 @freezed
 abstract class DialParams with _$DialParams {
   const factory DialParams({
@@ -126,6 +196,9 @@ abstract class DialParams with _$DialParams {
     // Per-region obfuscation descriptor. Null on backends that predate the
     // field (native data plane).
     @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
+    // This device's stream-transport credential. Null on backends that predate
+    // the field, and for a region whose node runs no ingress.
+    @JsonKey(name: 'stream') StreamTransport? stream,
   }) = _DialParams;
 
   factory DialParams.fromJson(Map<String, Object?> json) =>

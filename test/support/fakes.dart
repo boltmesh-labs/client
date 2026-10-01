@@ -497,6 +497,32 @@ class FakeHelperSocket implements HelperSocket {
   /// Ops sent, in order (convenience view over [requests]).
   List<String> get ops => [for (final r in requests) r['op'] as String];
 
+  /// Capability tokens the daemon advertises in its responses, which is how
+  /// [HelperClient.capabilities] is populated from `ping`. Absent by default so
+  /// a suite has to opt in to a daemon that offers a capability — the same
+  /// direction as a daemon too old to know the feature at all.
+  Set<String> caps = const {};
+
+  /// The `up` request's `transport` field, or null when the last start was
+  /// native. Convenience view for the stream-transport suites.
+  Map<String, Object?>? get lastTransport {
+    for (final r in requests.reversed) {
+      if (r['op'] == 'up') {
+        final value = r['transport'];
+        return value is Map<String, Object?> ? value : null;
+      }
+    }
+    return null;
+  }
+
+  /// The `config` the last `up` carried.
+  String? get lastConfig {
+    for (final r in requests.reversed) {
+      if (r['op'] == 'up') return r['config'] as String?;
+    }
+    return null;
+  }
+
   @override
   bool get isSupported => true;
 
@@ -512,6 +538,7 @@ class FakeHelperSocket implements HelperSocket {
       'id': request['id'],
       'ok': true,
       'status': status,
+      'caps': caps.toList(),
     };
   }
 }
