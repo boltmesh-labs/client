@@ -567,10 +567,20 @@ extension ConnectionConnect on ConnectionController {
         sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     final best = autoPickRegion(regions);
     if (best == null) {
-      AppLog.info('quick connect: no capacity');
+      // "Nothing is up" and "nothing this build can run" are different problems,
+      // and only the second is the user's to act on: reporting it as no capacity
+      // would name a cause that is not true.
+      final unsupported = regions.any(
+        (r) => r.hasCapacity && !regionServable(r),
+      );
+      AppLog.info(
+        'quick connect: no capacity${unsupported ? ' this build can serve' : ''}',
+      );
       snap = snap.copyWith(
         phase: ConnPhase.error,
-        message: 'No servers available right now.',
+        message: unsupported
+            ? 'The available regions need a VPN mode this app build does not support.'
+            : 'No servers available right now.',
       );
       return;
     }

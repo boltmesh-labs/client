@@ -638,13 +638,16 @@ rest of the pipeline (which files, when, verify) is unchanged.
   `stream-transport` — the daemon advertises that token only on builds whose
   `up` would honour the spec, so an older helper or a Windows/macOS one keeps
   the rung off the ladder instead of selecting a rung guaranteed to be
-  refused. Off Linux an obfuscated region is unservable (there is no floor to
-  raise to) and the native rung stands: closing that gap is the data-plane
-  work, not a client-side refusal. Demotion rides the existing heal (no new
-  budget, timer, or state) and is sticky across connects: no automatic
-  promotion, because every promotion re-pays for a probe that already failed.
-  One rung at a time — the helper rejects a stream transport combined with the
-  AmneziaWG directives.
+  refused. Off Linux an obfuscated region is unservable — there is no obfuscated
+  data plane here at all — so region selection skips it: Auto and the failover
+  candidates both require a format this build can run, and a pinned or
+  control-plane-returned one is refused at the start rather than sent a native
+  conf its node cannot read. The Regions tab still lists such a region (the list
+  is discovery, not policy), so choosing one there surfaces the refusal instead
+  of hiding it. Demotion rides the existing heal (no new budget, timer, or
+  state) and is sticky across connects: no automatic promotion, because every
+  promotion re-pays for a probe that already failed. One rung at a time — the
+  helper rejects a stream transport combined with the AmneziaWG directives.
   The heal budget is one restart per session, so a region offering both AWG
   and stream reaches stream *across* a server move or reconnect rather than
   within one outage: the rung is sticky while the budget resets. A heal that

@@ -35,10 +35,11 @@ String currentPlatformLabel() {
 /// forking (see `tunnel_adapter.dart`), and Apple is the Network Extension.
 ///
 /// An obfuscated region's node runs the AmneziaWG device, so a stock datagram
-/// is illegible to it: off Linux the region is unservable, and the ladder has
-/// no floor to raise to (see `conn_obfuscation.dart`). The data-plane work is
-/// what closes that gap; this predicate is the single place it is decided.
-/// Parameters injectable for tests.
+/// is illegible to it: off Linux the region is unservable, and both the ladder
+/// (see `conn_obfuscation.dart`) and region selection (see `region_policy.dart`)
+/// refuse it rather than start native. The data-plane work is what closes that
+/// gap; this predicate is the single place it is decided. Parameters injectable
+/// for tests.
 bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;

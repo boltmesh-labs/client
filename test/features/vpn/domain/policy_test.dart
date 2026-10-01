@@ -4,14 +4,22 @@ import 'package:boltmesh/features/vpn/domain/tunnel_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
-DiscoveryServer srv(String id, int peers) => DiscoveryServer(
-  id: id,
-  name: id,
-  endpoint: 'e.example.com',
-  wgPort: 51820,
-  wgDns: '10.8.0.1',
-  activePeers: peers,
-);
+import '../../../support/vpn_harness.dart';
+
+/// The obfuscated descriptor the discovery projection stamps onto every server
+/// of an obfuscated region.
+final awgDescriptor = awgObfuscation();
+
+DiscoveryServer srv(String id, int peers, {Obfuscation? obfuscation}) =>
+    DiscoveryServer(
+      id: id,
+      name: id,
+      endpoint: 'e.example.com',
+      wgPort: 51820,
+      wgDns: '10.8.0.1',
+      activePeers: peers,
+      obfuscation: obfuscation,
+    );
 
 void main() {
   test('isDegradedStage flags waiting states only', () {
@@ -144,6 +152,55 @@ void main() {
     expect(autoPickRegion([empty, a, b])?.id, 'b');
     expect(autoPickRegion([empty]), isNull);
     expect(regionLoad(a), 10);
+  });
+
+  test('autoPickRegion skips a region this build cannot serve', () {
+    // flutter test runs as Android, where there is no obfuscated data plane, so
+    // an obfuscated region is not a candidate however light its load — dialing
+    // it could only end in a start that refuses.
+    final obfuscated = Region(
+      id: 'obf',
+      name: 'Obfuscated',
+      countryCode: 'DE',
+      servers: [srv('s1', 1, obfuscation: awgDescriptor)],
+    );
+    final stock = Region(
+      id: 'stock',
+      name: 'Stock',
+      countryCode: 'US',
+      servers: [srv('s2', 9)],
+    );
+    expect(autoPickRegion([obfuscated, stock])?.id, 'stock');
+    expect(autoPickRegion([obfuscated]), isNull);
+  });
+
+  test('regionServable needs a data plane this build can run', () {
+    expect(regionServable(Region(id: 'a', servers: [srv('s1', 0)])), isTrue);
+    expect(
+      regionServable(
+        Region(
+          id: 'b',
+          servers: [srv('s1', 0, obfuscation: awgDescriptor)],
+        ),
+      ),
+      isFalse,
+    );
+    // No servers is not "servable": there is nothing to dial.
+    expect(regionServable(const Region(id: 'c')), isFalse);
+    // A region is servable if any of its servers is, so a mixed list is not
+    // collapsed to whichever server happened to be listed first.
+    expect(
+      regionServable(
+        Region(
+          id: 'd',
+          servers: [
+            srv('s1', 0, obfuscation: awgDescriptor),
+            srv('s2', 0),
+          ],
+        ),
+      ),
+      isTrue,
+    );
   });
 
   test('regionsVisible filters by query and sorts by load', () {

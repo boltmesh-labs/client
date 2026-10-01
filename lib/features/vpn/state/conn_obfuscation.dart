@@ -177,15 +177,16 @@ extension ConnectionObfuscation on ConnectionController {
   /// The health policy's demotion survives both: this only raises to the floor
   /// and lowers to the ceiling, so a walk down the ladder is never undone.
   ///
-  /// A region whose format this build has no data plane for — an obfuscated
-  /// region off Linux (see `platform_info.dart`) — has no floor to raise to, so
-  /// the native rung stands. It is unservable either way, and refusing the start
-  /// would turn a failover that can still reach a stock region into a dead end;
-  /// closing that gap is the data-plane work, not a client-side refusal.
-  ObfuscationRung _rungFor(DialParams dial) {
+  /// A region whose format this build cannot produce a datagram for — an
+  /// obfuscated region off Linux (see `platform_info.dart`) — has no rung at
+  /// all, and null says so. Selection keeps such a region out of Auto and out of
+  /// the failover candidates ([regionServable]), so this is reached only by a
+  /// target the user pinned or the control plane handed back; [_applyRung]
+  /// refuses rather than sending a native start the node cannot read.
+  ObfuscationRung? _rungFor(DialParams dial) {
     final obf = dial.obfuscation;
+    if (!formatServable(obf)) return null;
     final obfuscated = obf != null && obf.isAwg;
-    if (obfuscated && !awgDataPlaneSupported()) return ObfuscationRung.native;
     final floor = obfuscated ? ObfuscationRung.awg : ObfuscationRung.native;
     final ceiling = _streamRungAvailable(dial) ? ObfuscationRung.stream : floor;
     if (_obfuscationRung.index < floor.index) return floor;
@@ -193,14 +194,27 @@ extension ConnectionObfuscation on ConnectionController {
     return _obfuscationRung;
   }
 
-  /// Applies [_rungFor] before a start, logging the move.
+  /// Applies [_rungFor] before a start, logging the move, and refuses a region
+  /// whose format this build cannot run.
   ///
   /// Called at the top of every [_startWith] — the one point a connect, a
   /// switch, a heal and a cold restore all pass through — so a move onto a
   /// region with a different format can never start on the previous region's
   /// rung, and an obfuscated region can never start native.
+  ///
+  /// Refusing is the point: the region's node would reject every datagram this
+  /// side could send, so a native start there cannot connect and leaks the
+  /// plaintext handshake doing it. Selection keeps these regions out of the
+  /// automatic paths, so reaching this names a target the user chose or the
+  /// control plane returned.
   void _applyRung(DialParams dial) {
     final next = _rungFor(dial);
+    if (next == null) {
+      throw UnsupportedError(
+        'The region serving "${dial.serverName}" runs obfuscated WireGuard, '
+        'which this build cannot run. Choose a region with a stock data plane.',
+      );
+    }
     if (next == _obfuscationRung) return;
     AppLog.info(
       'transport rung set ${_obfuscationRung.name} -> ${next.name} '

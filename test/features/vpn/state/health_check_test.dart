@@ -120,6 +120,7 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
   Clock? clock,
   GatewayProbe? gatewayProbe,
   ControlPlaneProbe? controlProbe,
+  bool expectConnected = true,
 }) async {
   final store = FakeStore();
   final keys = FakeKeys(List.of(keyQueue));
@@ -141,7 +142,11 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
   // to drive heals. Fresh means live rekeys, so nothing heals unprompted.
   ctl.debugHandshakeReader = () async => DateTime.now();
   await ctl.connect();
-  expect(container.read(connectionProvider).phase, ConnPhase.connected);
+  // A connect that is expected to fail (a region this build cannot serve) has
+  // its own assertions; the phase is not `connected` for it.
+  if (expectConnected) {
+    expect(container.read(connectionProvider).phase, ConnPhase.connected);
+  }
   events.clear();
   return (container, tunnel);
 }
@@ -481,17 +486,23 @@ void main() {
       expect(tunnel.lastConfig, isNot(contains('Jc =')));
     });
 
-    test('a platform without the data plane ignores the descriptor', () async {
-      // No platform override: the test runs as Android, whose plugin data
-      // plane has no obfuscated path.
-      final (container, tunnel) = await seedObfuscated();
-      final ctl = container.read(connectionProvider.notifier);
+    test('a platform without the data plane refuses the region', () async {
+      // No platform override: the test runs as Android, whose plugin data plane
+      // has no obfuscated path. The region's node runs the AmneziaWG device, so
+      // no conf this build could send it would be legible: the start is refused
+      // rather than sending the native one, which cannot connect and leaks the
+      // plaintext handshake doing it.
+      final events = <String>[];
+      final (container, tunnel) = await seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return obfDial();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      }, expectConnected: false);
 
-      staleHandshake(ctl);
-      await ctl.checkHealthOnce();
-
-      expect(container.read(connectionProvider).autoHealAttempts, 1);
-      expect(tunnel.lastConfig, isNot(contains('Jc =')));
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.error);
+      expect(state.message, contains('obfuscated WireGuard'));
+      expect(tunnel.configs, isEmpty);
     });
 
     test(
@@ -575,6 +586,7 @@ void main() {
         Set<String>? caps,
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
+        bool expectConnected = true,
       }) async {
         final events = <String>[];
         final socket = FakeHelperSocket()..caps = caps ?? {capStreamTransport};
@@ -600,7 +612,9 @@ void main() {
         final ctl = container.read(connectionProvider.notifier);
         ctl.debugHandshakeReader = () async => DateTime.now();
         await ctl.connect();
-        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        if (expectConnected) {
+          expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        }
         events.clear();
         return (container, socket);
       }
@@ -730,21 +744,15 @@ void main() {
         expect(ctl.obfuscationRung, ObfuscationRung.awg);
       });
 
-      test('a platform without the data plane never offers the rung', () async {
+      test('a platform without the data plane refuses the region', () async {
         // No platform override: the suite runs as Android, where the daemon
-        // rejects a transport spec rather than ignoring it.
-        final (container, socket) = await seedStream();
-        final ctl = container.read(connectionProvider.notifier);
+        // rejects a transport spec rather than ignoring it. AWG is Linux-only
+        // too, so the region has no rung at all and the start is refused rather
+        // than falling back to a native conf the node cannot read.
+        final (container, socket) = await seedStream(expectConnected: false);
 
-        await healOnce(container);
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
-
-        // AWG is also Linux-only, so nothing demotes: the heal still ran, but
-        // the conf is the native one.
-        expect(socket.lastConfig, isNot(contains('Jc =')));
-        expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
-        expect(ctl.obfuscationRung, ObfuscationRung.native);
+        expect(container.read(connectionProvider).phase, ConnPhase.error);
+        expect(socket.lastConfig, isNull);
       });
 
       test('the walk stops at the last rung rather than inventing one', () async {

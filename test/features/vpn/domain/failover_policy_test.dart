@@ -2,18 +2,22 @@ import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/domain/failover_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/vpn_harness.dart';
+
 Region region(String id, List<DiscoveryServer> servers) =>
     Region(id: id, name: id, servers: servers);
 
-DiscoveryServer server(String id, {int peers = 0}) => DiscoveryServer(
-  id: id,
-  name: id,
-  endpoint: '203.0.113.1',
-  wgPort: 51820,
-  wgDns: '10.8.0.1',
-  wgPublicKey: 'K',
-  activePeers: peers,
-);
+DiscoveryServer server(String id, {int peers = 0, Obfuscation? obfuscation}) =>
+    DiscoveryServer(
+      id: id,
+      name: id,
+      endpoint: '203.0.113.1',
+      wgPort: 51820,
+      wgDns: '10.8.0.1',
+      wgPublicKey: 'K',
+      activePeers: peers,
+      obfuscation: obfuscation,
+    );
 
 void main() {
   // The policy functions take their thresholds as required arguments so the
@@ -293,6 +297,41 @@ void main() {
       final regions = [
         region('us', [server('dead')]),
         region('empty', []),
+      ];
+      expect(
+        pickFailoverTarget(
+          regions: regions,
+          currentRegionId: 'us',
+          currentServerId: 'dead',
+        ),
+        isNull,
+      );
+    });
+
+    test('skips a region this build cannot serve', () {
+      // flutter test runs as Android, where there is no obfuscated data plane.
+      // The obfuscated region is the emptier one, so it would win on load — but
+      // a move there could only reach a start that refuses, so it is not a
+      // candidate and the failover moves to a server that works instead.
+      final regions = [
+        region('us', [server('dead')]),
+        region('eu', [server('obf', peers: 1, obfuscation: awgObfuscation())]),
+        region('ap', [server('c', peers: 8)]),
+      ];
+      expect(
+        pickFailoverTarget(
+          regions: regions,
+          currentRegionId: 'us',
+          currentServerId: 'dead',
+        ),
+        'c',
+      );
+    });
+
+    test('null when the only other capacity is unservable', () {
+      final regions = [
+        region('us', [server('dead')]),
+        region('eu', [server('obf', obfuscation: awgObfuscation())]),
       ];
       expect(
         pickFailoverTarget(

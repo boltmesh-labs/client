@@ -9,6 +9,7 @@
 import 'dart:convert';
 
 import 'package:boltmesh/core/errors.dart';
+import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:dio/dio.dart';
 
 import 'fakes.dart' as support;
@@ -83,6 +84,10 @@ Map<String, dynamic> awgObfuscationJson() => {
     'h4': [171, 171],
   },
 };
+
+/// [awgObfuscationJson] decoded into the model, for suites that build discovery
+/// or region objects rather than a dial payload.
+Obfuscation awgObfuscation() => Obfuscation.fromJson(awgObfuscationJson());
 
 /// [dialJson] for the same server after a reboot rotated its WireGuard key.
 Map<String, dynamic> rotatedDialJson() => {
