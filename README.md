@@ -131,7 +131,7 @@ progress that has not been made.
 | --- | --- | --- | --- | --- |
 | **Android** | in-process (`VpnService`) | not needed | build, lint, minified-bridge + API 30/35 instrumentation | **shipping** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
-| **Windows** | WireGuard-for-Windows service | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** |
+| **Windows** | WireGuard-for-Windows service | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (stream rung on stock regions; no AWG data plane — see [Flows](README.md#flows)) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
 | **iOS** | Network Extension only | not possible (sandbox) | none | **blocked on Apple hardware** |
 
@@ -625,34 +625,53 @@ rest of the pipeline (which files, when, verify) is unchanged.
 - Transport ladder: where it *starts* is the region's data plane, and a path
   the health policy confirmed dead *locally* is rebuilt one rung lower per
   heal, so an unobstructed network pays nothing. `native` (kernel WireGuard) →
-  `awg` (in-process AmneziaWG, Linux) → `stream` (the tunnel's datagrams
-  inside a TLS session to the node, Linux). A stock region's node runs stock
-  WireGuard, so its floor is `native`; an obfuscated region's node runs the
-  AmneziaWG device, so a stock datagram is illegible to it and its floor is
-  `awg` — starting native there would be a guaranteed-failed attempt that put
-  a plaintext WireGuard handshake on the wire first, which is exactly the
-  fingerprint the rung exists to hide. The floor is re-derived on every start,
-  so a server move follows the new region's format and never keeps a rung the
-  new region cannot serve. A rung is only selected when the region can serve
-  it *and* this platform can run it *and* the installed helper advertises
+  `awg` (in-process AmneziaWG, Linux only) → `stream` (the tunnel's datagrams
+  inside a TLS session to the node, Linux and Windows). A stock region's node
+  runs stock WireGuard, so its floor is `native`; an obfuscated region's node
+  runs the AmneziaWG device, so a stock datagram is illegible to it and its
+  floor is `awg` — starting native there would be a guaranteed-failed attempt
+  that put a plaintext WireGuard handshake on the wire first, which is exactly
+  the fingerprint the rung exists to hide. The floor is re-derived on every
+  start, so a server move follows the new region's format and never keeps a
+  rung the new region cannot serve. A rung is only selected when the region can
+  serve it *and* this platform can run it *and* the installed helper advertises
   `stream-transport` — the daemon advertises that token only on builds whose
-  `up` would honour the spec, so an older helper or a Windows/macOS one keeps
-  the rung off the ladder instead of selecting a rung guaranteed to be
-  refused. Off Linux an obfuscated region is unservable — there is no obfuscated
-  data plane here at all — so region selection skips it: Auto and the failover
-  candidates both require a format this build can run, and a pinned or
-  control-plane-returned one is refused at the start rather than sent a native
-  conf its node cannot read. The Regions tab still lists such a region (the list
-  is discovery, not policy), so choosing one there surfaces the refusal instead
-  of hiding it. Demotion rides the existing heal (no new budget, timer, or
-  state) and is sticky across connects: no automatic promotion, because every
-  promotion re-pays for a probe that already failed. One rung at a time — the
-  helper rejects a stream transport combined with the AmneziaWG directives.
+  `up` would honour the spec, so an older helper or a macOS one keeps the rung
+  off the ladder instead of selecting a rung guaranteed to be refused.
+- The two rungs have different platform reach, and the gap is not the same on
+  each. The **stream** transport is a bridge plus a bypass route: the bridge is
+  platform-independent, and the route is a `/32` through the physical interface
+  installed *before* the tunnel's own routes exist — on Linux ahead of
+  `wg-quick` (and repeated in each table `wg-quick`'s fwmark policy rules
+  select), on Windows ahead of the tunnel service (where the longest-prefix
+  match wins outright, so one route is enough). It needs no special data plane,
+  so **Windows gets the stream rung on stock regions**. The **AWG** data plane is
+  in-process on Linux only: Windows drives the WireGuard-for-Windows *kernel*
+  service, which has no concept of the obfuscation directives, so a userspace
+  AmneziaWG device (and the `wintun.dll` it would load) is not there yet. The
+  two gates are independent by design and the ladder requires both for an
+  obfuscated region, so **Windows cannot serve one**: region selection skips
+  it, and a pinned or control-plane-returned one is refused at the start rather
+  than sent a native conf its node cannot read. The Regions tab still lists
+  such a region (the list is discovery, not policy), so choosing one there
+  surfaces the refusal instead of hiding it. Demotion rides the existing heal
+  (no new budget, timer, or state) and is sticky across connects: no automatic
+  promotion, because every promotion re-pays for a probe that already failed.
+  One rung at a time — the helper rejects a stream transport combined with the
+  AmneziaWG directives.
   The heal budget is one restart per session, so a region offering both AWG
   and stream reaches stream *across* a server move or reconnect rather than
   within one outage: the rung is sticky while the budget resets. A heal that
   the new rung does not fix falls through to the existing escalation (move,
   then the surfaced recovery error), never a new failure mode.
+  - Bypass-route lifetime. The pinned routes outlive the daemon that installed
+    them, so the set is recorded beside the config and written *before* each
+    install — a crash in between would otherwise leak a `/32` nothing accounts
+    for, while the reverse order would only strand a record naming a route that
+    was never installed. A restarted daemon sweeps from that record rather than
+    from memory. This matters because a stranded `/32` is not a cosmetic
+    leftover: it exempts one destination from the tunnel on every connect
+    afterwards. The record holds routes only, never the PSK.
   - Stream rung contract. `config` and every bind response carry a
     per-device `stream` object; it is deliberately *not* on the region list,
     because the PSK is a per-device secret and discovery is fetched by every
