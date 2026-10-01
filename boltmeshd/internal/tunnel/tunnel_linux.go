@@ -211,7 +211,11 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *proto
 	}
 	// A live transport counts as a live tunnel: it is torn down
 	// with the link it carries, so a retry must never leave one orphaned.
-	if m.linkExists(m.iface) || m.transport != nil {
+	// The config file and the pin record count too, for the reason the
+	// obfuscated path already gives: after a daemon restart the link may be
+	// gone while a stream transport's bypass routes are still installed, and
+	// those are exactly the state this call has to sweep.
+	if m.linkExists(m.iface) || m.transport != nil || m.configExists() || m.transportPinsRecorded() {
 		if err := m.down(ctx); err != nil {
 			return nil, err
 		}

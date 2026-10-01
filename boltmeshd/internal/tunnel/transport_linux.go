@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
@@ -105,12 +106,16 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 		}
 		tr.via, tr.dev = via, dev
 		mainPin := transportPin{prefix: hostPrefixFor(ip), v6: ip.To4() == nil}
+		tr.pins = append(tr.pins, mainPin)
+		// Record the pin *before* installing it, so a crash in between leaves a
+		// route the record names rather than one nothing accounts for. See
+		// transport_state_linux.go.
+		if err := m.recordTransportPins(tr.pins); err != nil {
+			return err
+		}
 		if err := m.pinRouteVia(ctx, ipTool, mainPin, via, dev); err != nil {
 			return err
 		}
-		// Record it as a main-table pin so teardown removes exactly what was
-		// installed, in every table.
-		tr.pins = append(tr.pins, mainPin)
 	}
 
 	// Record the live transport before starting it: one that fails to start
@@ -179,10 +184,14 @@ func (m *Manager) pinTransportTables(ctx context.Context) error {
 		for _, pin := range prefixes {
 			withTable := pin
 			withTable.table = table
+			tr.pins = append(tr.pins, withTable)
+			// Record before installing, as in bringUpTransport.
+			if err := m.recordTransportPins(tr.pins); err != nil {
+				return err
+			}
 			if err := m.pinRoute(ctx, ipTool, withTable); err != nil {
 				return err
 			}
-			tr.pins = append(tr.pins, withTable)
 		}
 	}
 	return nil
@@ -191,9 +200,16 @@ func (m *Manager) pinTransportTables(ctx context.Context) error {
 // downTransport stops the transport and removes the routes pinned for it.
 // Idempotent: a no-op when no transport is live, and every step is
 // best-effort-tolerated so one failure cannot strand the rest of the teardown.
+//
+// The pin set comes from the on-disk record when there is no live transport,
+// not only from memory. A restart loses [liveTransport] while the routes it
+// installed survive, so a memory-only sweep would leave a host route through
+// the physical path behind — silently exempting the node from every tunnel
+// after it, which is exactly what the pin existed to prevent. The record is
+// removed only once every named route is gone.
 func (m *Manager) downTransport(ctx context.Context) error {
 	tr := m.transport
-	if tr == nil {
+	if tr == nil && !m.transportPinsRecorded() {
 		return nil
 	}
 	m.transport = nil
@@ -202,15 +218,16 @@ func (m *Manager) downTransport(ctx context.Context) error {
 	ipTool, ipErr := m.tool(ipBinary)
 	// The transport stops first: once it is gone nothing can use the pinned
 	// routes, so removing them is the safe order.
-	if tr.client != nil {
+	if tr != nil && tr.client != nil {
 		if err := tr.client.Stop(); err != nil {
 			errs = append(errs, fmt.Errorf("stop stream transport: %w", err))
 		}
 	}
+	pins := m.recordedTransportPins()
 	if ipErr != nil {
 		errs = append(errs, ipErr)
 	} else {
-		for _, pin := range tr.pins {
+		for _, pin := range pins {
 			if err := m.unpinRoute(ctx, ipTool, pin); err != nil {
 				errs = append(errs, err)
 			}
@@ -219,7 +236,14 @@ func (m *Manager) downTransport(ctx context.Context) error {
 	if len(errs) > 0 {
 		return &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(errs...)}
 	}
-	return nil
+	return m.removeTransportPinRecord()
+}
+
+// transportPinsRecorded reports whether a pin record exists, so a teardown with
+// no in-memory transport still knows there is something to sweep.
+func (m *Manager) transportPinsRecorded() bool {
+	_, err := os.Stat(m.transportPinPath())
+	return err == nil
 }
 
 // transportErrorCode reports the protocol code a transport failure should

@@ -266,7 +266,8 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string, transp
 	// config is the handle on the underlay routes that must be swept. Skip
 	// the down only when there is nothing of the sort: a fresh machine must
 	// not run teardown commands.
-	if m.awgLive() || m.linkExists(m.iface) || m.configExists() || m.transport != nil {
+	if m.awgLive() || m.linkExists(m.iface) || m.configExists() ||
+		m.transport != nil || m.transportPinsRecorded() {
 		if err := m.down(ctx); err != nil {
 			return nil, err
 		}

@@ -11,8 +11,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"boltmeshd/internal/protocol"
 )
@@ -481,6 +485,163 @@ func TestUpWithStreamTransportResolvesTheServerThroughThePhysicalResolver(t *tes
 	}
 	if _, err := m.Up(context.Background(), streamConfig, spec); err != nil {
 		t.Fatalf("Up = %v, want nil", err)
+	}
+}
+
+// restart simulates a daemon restart: a fresh Manager over the same directory,
+// with the in-memory transport state gone but the routes, the config file, and
+// the pin record all still on disk. Every other seam is carried over so the
+// only thing that changed is the lost state.
+func (h *transportHarness) restart(t *testing.T) *transportHarness {
+	t.Helper()
+	m := NewManager(h.m.dir, h.m.iface)
+	m.lookup = h.m.lookup
+	m.linkExists = func(string) bool { return false }
+	m.device = h.m.device
+	m.resolveHost = h.m.resolveHost
+	m.run = h.m.run
+	m.streamTransport = h.m.streamTransport
+	*h.calls = (*h.calls)[:0]
+	return &transportHarness{m: m, calls: h.calls, dev: h.dev, streams: h.streams}
+}
+
+// The bypass routes outlive the daemon that installed them, so a restarted
+// daemon has to sweep them from the on-disk record. Without it the pin survives
+// every future connect and permanently exempts the node from the tunnel.
+func TestDownAfterRestartSweepsTransportPinsFromTheRecord(t *testing.T) {
+	h := newTransportHarness(t, false)
+	h.up(t)
+
+	restarted := h.restart(t)
+	if restarted.m.transport != nil {
+		t.Fatal("restart left in-memory transport state, so this proves nothing")
+	}
+	if _, err := restarted.m.Down(context.Background()); err != nil {
+		t.Fatalf("Down after restart = %v, want nil", err)
+	}
+
+	// Both tables the original up pinned, and nothing invented.
+	if !restarted.has("ip", "route", "del", "203.0.113.10/32") {
+		t.Errorf("main-table bypass route left behind after a restart:\n%v", restarted.callStrings())
+	}
+	if !restarted.has("ip", "route", "del", "203.0.113.10/32", "table", "51820") {
+		t.Errorf("wg-quick-table bypass route left behind after a restart:\n%v", restarted.callStrings())
+	}
+	if restarted.m.transportPinsRecorded() {
+		t.Error("pin record survived a complete sweep")
+	}
+}
+
+// The same leak through the retry path rather than an explicit disconnect: the
+// next connect must sweep the previous tunnel's pins, not stack a second set on
+// top of them.
+func TestUpAfterRestartSweepsTheOldPinsBeforeInstallingNewOnes(t *testing.T) {
+	h := newTransportHarness(t, false)
+	h.up(t)
+
+	restarted := h.restart(t)
+	if _, err := restarted.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
+		t.Fatalf("Up after restart = %v, want nil", err)
+	}
+
+	delIdx, replaceIdx := -1, -1
+	for i, c := range *restarted.calls {
+		joined := strings.Join(c.args, " ")
+		if c.name == "ip" && strings.HasPrefix(joined, "route del 203.0.113.10/32") && delIdx < 0 {
+			delIdx = i
+		}
+		if c.name == "ip" && strings.HasPrefix(joined, "route replace 203.0.113.10/32") && replaceIdx < 0 {
+			replaceIdx = i
+		}
+	}
+	if delIdx < 0 {
+		t.Fatalf("stale bypass route never swept before the retry:\n%v", restarted.callStrings())
+	}
+	if replaceIdx < delIdx {
+		t.Errorf("new pin installed before the stale one was swept (%d < %d):\n%v",
+			replaceIdx, delIdx, restarted.callStrings())
+	}
+}
+
+// The record must name a pin *before* it is installed, not after: a crash
+// between the two leaks a route nothing accounts for. The ordering is checked
+// from inside the install itself — read the record as the command runs, which
+// is the only moment the two orderings differ. An install that then fails and
+// gets swept by the recovery pass proves nothing about ordering, so this
+// installs successfully and inspects the record mid-command.
+func TestTransportPinRecordIsWrittenBeforeEachRouteIsInstalled(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir, DefaultInterface)
+	m.lookup = func(name string) (string, error) { return name, nil }
+	m.linkExists = func(string) bool { return false }
+	m.device = func(string) (*wgtypes.Device, error) { return nil, os.ErrNotExist }
+
+	var atInstall []string
+	m.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "route" && args[1] == "get" {
+			return []byte("203.0.113.10 via 192.168.1.1 dev eth0"), nil
+		}
+		if name == "ip" && len(args) >= 2 && args[0] == "route" && args[1] == "replace" {
+			// Snapshot the record as the install is about to run.
+			recorded, err := os.ReadFile(filepath.Join(dir, DefaultInterface+".conf.pins"))
+			if err != nil {
+				atInstall = append(atInstall, "READ ERROR: "+err.Error())
+			} else {
+				atInstall = append(atInstall, string(recorded))
+			}
+		}
+		return []byte("ok"), nil
+	}
+
+	if _, err := m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
+		t.Fatalf("Up = %v, want nil", err)
+	}
+
+	if len(atInstall) == 0 {
+		t.Fatal("no pin install observed")
+	}
+	for i, snapshot := range atInstall {
+		if !strings.Contains(snapshot, "203.0.113.10/32") {
+			t.Errorf("install %d ran before its pin was recorded; record read as:\n%s", i, snapshot)
+		}
+	}
+}
+
+// The record is a root-only file and must never carry anything credential-like.
+// It names routes only, so a stray read cannot leak the PSK.
+func TestTransportPinRecordHoldsOnlyRoutesAndNoCredentials(t *testing.T) {
+	h := newTransportHarness(t, false)
+	h.up(t)
+
+	data, err := os.ReadFile(h.m.transportPinPath())
+	if err != nil {
+		t.Fatalf("read pin record: %v", err)
+	}
+	text := string(data)
+	for _, secret := range []string{h.passSpec.PSK, h.passSpec.ClientID, h.passSpec.ServerName} {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Errorf("pin record leaked %q:\n%s", secret, text)
+		}
+	}
+	if !strings.Contains(text, "203.0.113.10/32") {
+		t.Errorf("pin record does not name the pinned route:\n%s", text)
+	}
+}
+
+// A plain tunnel never touches the pin record: no transport means no pins, and
+// a stray record from an earlier transport must still be swept by the retry.
+func TestUpWithoutTransportSweepsALingeringPinRecord(t *testing.T) {
+	h := newTransportHarness(t, true)
+	h.up(t)
+
+	restarted := h.restart(t)
+	// A native retry with no transport: the pins from the dead transport must
+	// still go, or they outlive the tunnel that justified them.
+	if _, err := restarted.m.Up(context.Background(), validConfig, nil); err != nil {
+		t.Fatalf("Up(native after restart) = %v, want nil", err)
+	}
+	if !restarted.has("ip", "route", "del", "203.0.113.10/32") {
+		t.Errorf("stale bypass route left behind by a native retry:\n%v", restarted.callStrings())
 	}
 }
 
