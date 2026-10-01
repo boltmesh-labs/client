@@ -56,13 +56,13 @@ either namespace — without the bridge leg the agent could never register.
 6. The harness asserts a kernel handshake on both sides, 0% loss on an in-tunnel
    ping, and that the client interface actually received WireGuard bytes. A
    wrong-PSK session is then driven and must be refused.
-7. Against an obfuscated region, `client.py --force-native` builds the inner conf
-   as stock WireGuard — exactly the attempt a client that ignored the region's
-   format would make. The node runs the AmneziaWG device, so that session must
-   complete no handshake and move no bytes. It is the premise the ladder's floor
-   rests on (see `conn_obfuscation.dart`): a native start there can only fail,
-   after leaking the plaintext fingerprint. Drive it by hand against an
-   obfuscated staging region.
+7. Against an obfuscated region, a second negative check drives
+   `client.py --force-native`: the inner conf built as stock WireGuard, which is
+   exactly the attempt a client that ignored the region's format would make. The
+   node runs the AmneziaWG device, so that session must complete no handshake and
+   move no bytes. It is the premise the ladder's floor rests on (see
+   `conn_obfuscation.dart`): a native start there can only fail, after leaking
+   the plaintext fingerprint.
 
 ## Running it against a real control plane
 

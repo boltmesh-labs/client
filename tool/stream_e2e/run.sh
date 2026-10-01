@@ -321,6 +321,49 @@ if [[ $client_only -eq 1 ]]; then
     tail -3 "$workdir/badpsk.log" | sed 's/^/    /'
   fi
 
+  # The ladder's floor rests on one claim: an obfuscated region's node runs the
+  # AmneziaWG device, so it cannot read a stock datagram — which is why a native
+  # start there can only fail, after leaking the plaintext fingerprint. Reproduce
+  # that attempt. A stock conf takes the kernel path rather than the userspace
+  # device (see `tunnel_linux.go`), so the kernel's own `wg show` is what reports
+  # it — the opposite read from the obfuscated run above.
+  if [[ "$inner_format" == "awg" ]]; then
+    log "negative check: a stock inner format must not reach an obfuscated node"
+    python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --down \
+      >"$workdir/down.log" 2>&1 || true
+    sleep 1
+    if python3 "$here/client.py" \
+        --socket "$workdir/boltmeshd.sock" \
+        --staging-state "$staging_state" \
+        --api-user "$BOLTMESH_E2E_API_USER" \
+        --api-password "$BOLTMESH_E2E_API_PASSWORD" \
+        --tunnel-cidr "$tunnel_cidr" \
+        --force-native \
+        --state-out "$workdir/native-state.json" >"$workdir/native.log" 2>&1; then
+      # The interface has to exist before the reads below mean anything: an empty
+      # `wg show` is also what a missing link produces, and that would pass the
+      # check for the wrong reason.
+      if ! ip link show "$client_iface" >/dev/null 2>&1; then
+        note_failure "a stock conf brought up no $client_iface, so the check proves nothing"
+      else
+        for _ in $(seq 1 8); do
+          ping -c1 -W1 "$node_tunnel_ip" >/dev/null 2>&1 || true
+          sleep 1
+        done
+        native_hs="$(wg_field "$client_iface" latest-handshakes 2 | head -1)"
+        native_rx="$(wg_field "$client_iface" transfer 2 | head -1)"
+        if [[ -n "$native_hs" && "$native_hs" != "0" ]] || [[ -n "$native_rx" && "$native_rx" != "0" ]]; then
+          note_failure "a stock inner format reached an obfuscated node (hs=${native_hs:-none} rx=${native_rx:-0})"
+        else
+          echo "a stock inner format produced no handshake against the obfuscated node, as it must"
+        fi
+      fi
+    else
+      echo "a stock inner format was refused before the tunnel came up, as it must:"
+      tail -3 "$workdir/native.log" | sed 's/^/    /'
+    fi
+  fi
+
   # Leave the host as we found it: this mode runs in the host namespace, so a
   # leftover interface and its routes would follow the box, not the harness.
   python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --down >/dev/null 2>&1 || true
