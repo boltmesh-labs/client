@@ -353,6 +353,12 @@ def main() -> int:
     ap.add_argument("--force-psk",
                     help="override the PSK, for the negative check. The daemon must "
                          "refuse a session presenting a credential it was never told")
+    ap.add_argument("--force-native", action="store_true",
+                    help="build the inner config as stock WireGuard even when the "
+                         "region is obfuscated, for the negative check. An obfuscated "
+                         "node runs the AmneziaWG device, so a stock inner config must "
+                         "be illegible to it — which is why the client must not start "
+                         "on the native rung there")
     ap.add_argument("--tunnel-cidr",
                     help="the node's tunnel subnet, for the conf's AllowedIPs. The dial "
                          "payload carries only the node's tunnel address, not the prefix "
@@ -443,6 +449,13 @@ def main() -> int:
         stream = None
         obfuscation = None
         node_tunnel_ip = args.node_tunnel_ip
+
+    # The negative check for the ladder's floor: an obfuscated region's node runs
+    # the AmneziaWG device, so a stock inner config has to be illegible to it.
+    # This builds the config the way a client that ignored the region's format
+    # would, which is exactly the attempt the floor removes.
+    if args.force_native:
+        obfuscation = None
 
     listen_port = free_udp_port()
     deliver_port = free_udp_port()
