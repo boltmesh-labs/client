@@ -32,6 +32,11 @@ Thumbs.db
 boltmeshd/bin
 coverage
 
+# Python bytecode from the stream-transport end-to-end harness (tool/stream_e2e).
+# Its self-tests are run directly, so the cache is a local artifact.
+__pycache__/
+*.pyc
+
 # ---> Local build configuration
 # Compile-time defines read by `flutter --dart-define-from-file=.env`;
 # commit .env.example instead.
