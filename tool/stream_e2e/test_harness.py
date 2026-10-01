@@ -228,11 +228,42 @@ class WgQuickConfigTest(unittest.TestCase):
         self.assertIn("ListenPort = 51820", conf)
         self.assertNotIn("ListenPort = 51821", conf)
 
-    def test_no_obfuscation_directives(self) -> None:
-        # One rung at a time; the daemon rejects the combination outright.
+    def test_a_stock_region_adds_no_obfuscation_directives(self) -> None:
+        # No descriptor (a stock region): the node runs stock WireGuard, so the
+        # datagrams inside the stream are stock too.
         conf = self.build()
         for directive in ("Jc =", "Jmin =", "S1 =", "H1 ="):
             self.assertNotIn(directive, conf)
+
+    def test_an_obfuscated_region_carries_its_directives(self) -> None:
+        # The inner format follows the region: an obfuscated region's node runs
+        # the AmneziaWG device, so the stream must carry the same directives the
+        # direct AWG rung would. The endpoint stays the bridge's loopback address.
+        conf = client.build_wg_quick_config(
+            private_key="PRIV",
+            assigned_ip="10.254.0.2/32",
+            server_public_key="SRV",
+            endpoint="127.0.0.1:51821",
+            listen_port=51820,
+            allowed_ips="10.254.0.0/16",
+            obfuscation={
+                "mode": "awg",
+                "params": {
+                    "jc": 4, "jmin": 31, "jmax": 621,
+                    "s1": 36, "s2": 36, "s3": 11, "s4": 35,
+                    "h1": [1342177280, 1350193902],
+                    "h2": [1610612736, 1618846586],
+                    "h3": [1879048192, 1894861561],
+                    "h4": [2147483648, 2163863382],
+                },
+            },
+        )
+        self.assertIn("Jc = 4", conf)
+        self.assertIn("Jmin = 31", conf)
+        self.assertIn("H1 = 1342177280-1350193902", conf)
+        self.assertIn("H4 = 2147483648-2163863382", conf)
+        self.assertIn("Endpoint = 127.0.0.1:51821", conf)
+        self.assertIn("ListenPort = 51820", conf)
 
     def test_no_dns_line(self) -> None:
         # resolvconf talks to a resolver in the host namespace, which does not

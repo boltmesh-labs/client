@@ -88,6 +88,34 @@ class Helper:
         return self.call("ping").get("caps", [])
 
 
+def obfuscation_lines(obfuscation: dict | None) -> str:
+    """The AmneziaWG directives for a region's obfuscation descriptor.
+
+    The inner WireGuard format follows the region, not the rung: a region whose
+    node runs the obfuscated data plane hands its descriptor to every client, and
+    the node's AmneziaWG device drops stock datagrams — so the stream rung's conf
+    has to reproduce those directives. A `None` descriptor (a stock region) adds
+    nothing. Mirrors the Flutter client's `buildWgQuickConfig` formatting,
+    including the `lo-hi` range form for the magic headers.
+    """
+    if not obfuscation or obfuscation.get("mode") != "awg":
+        return ""
+    params = obfuscation.get("params") or {}
+    lines = [
+        f"Jc = {params['jc']}",
+        f"Jmin = {params['jmin']}",
+        f"Jmax = {params['jmax']}",
+        f"S1 = {params['s1']}",
+        f"S2 = {params['s2']}",
+        f"S3 = {params['s3']}",
+        f"S4 = {params['s4']}",
+    ]
+    for name in ("h1", "h2", "h3", "h4"):
+        lo, hi = params[name]
+        lines.append(f"{name.upper()} = {lo}-{hi}")
+    return "\n".join(lines) + "\n"
+
+
 def build_wg_quick_config(
     *,
     private_key: str,
@@ -96,6 +124,7 @@ def build_wg_quick_config(
     endpoint: str,
     listen_port: int,
     allowed_ips: str,
+    obfuscation: dict | None = None,
 ) -> str:
     """The client's wg-quick config for the stream rung.
 
@@ -110,8 +139,9 @@ def build_wg_quick_config(
       the bridge already holds that one, so the kernel would fail to bind it and
       `wg-quick up` would die with "Address already in use" on the *mtu* step,
       which points nowhere near the real cause.
-    - the obfuscation directives are absent: one rung at a time, and the daemon
-      rejects the combination outright.
+    - `obfuscation` reproduces the region's descriptor when its node runs the
+      AmneziaWG device. It is the *inner* format and is orthogonal to the rung:
+      the bridge carries whatever the node's device expects.
 
     No `DNS=` line. It is in the Flutter client's config but cannot work here:
     `resolvconf` talks to a resolver running in the *host* namespace, which does
@@ -123,6 +153,7 @@ def build_wg_quick_config(
         f"PrivateKey = {private_key}\n"
         f"Address = {assigned_ip}\n"
         f"ListenPort = {listen_port}\n"
+        f"{obfuscation_lines(obfuscation)}"
         "\n"
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
@@ -334,12 +365,16 @@ def main() -> int:
     ap.add_argument("--api-user", help="API user, for --staging-state")
     ap.add_argument("--api-password", help="API password, for --staging-state")
     ap.add_argument("--down", action="store_true", help="tear the tunnel down and exit")
+    ap.add_argument("--status", action="store_true",
+                    help="print the daemon's own view of the tunnel and exit. The "
+                         "kernel's `wg show` cannot read a userspace AmneziaWG device, "
+                         "so this is the equivalent read when the region is obfuscated")
     args = ap.parse_args()
 
     # Validate the up-path arguments here rather than letting them be silently
     # empty: a missing --server would otherwise produce a conf pointing at
     # "None:0", and the run would fail somewhere much less legible.
-    if not args.down:
+    if not (args.down or args.status):
         # In staging mode the backend supplies the server, its name and the
         # device's address, so only the socket and the output path are the
         # caller's to provide.
@@ -354,6 +389,12 @@ def main() -> int:
         if missing:
             ap.error("the following arguments are required without --down: "
                      + ", ".join(missing))
+
+    if args.status:
+        with Helper(args.socket) as helper:
+            response = helper.call("status")
+        print(json.dumps(response.get("status") or {}), flush=True)
+        return 0
 
     if args.down:
         with Helper(args.socket) as helper:
@@ -380,6 +421,9 @@ def main() -> int:
         pin = stream["spki_sha256"][0]
         client_private = state["client_private_key"]
         node_tunnel_ip = payload.get("wg_dns") or ""
+        # The region's inner format, from the same dial payload the Flutter
+        # client reads. A stock region carries null here.
+        obfuscation = payload.get("obfuscation")
         # The backend is authoritative about where its node is and what it is
         # called; the harness's own flags would be a second source of truth.
         args.server = stream["server"]
@@ -397,6 +441,7 @@ def main() -> int:
         pin = wait_for_pin(args.control_plane)
         client_private = None
         stream = None
+        obfuscation = None
         node_tunnel_ip = args.node_tunnel_ip
 
     listen_port = free_udp_port()
@@ -441,10 +486,12 @@ def main() -> int:
             endpoint=transport["listen"],
             listen_port=deliver_port,
             allowed_ips=args.tunnel_cidr or "10.254.0.0/16",
+            obfuscation=obfuscation,
         )
 
         print(f"pin from the node's heartbeat: {pin}", flush=True)
         print(f"bridge listen={transport['listen']} deliver={transport['deliver']}", flush=True)
+        print(f"inner format={(obfuscation or {}).get('mode') or 'native'}", flush=True)
         response = helper.call("up", config=conf, transport=transport)
         status = response.get("status") or {}
         print(f"up: interface={status.get('interface')} stage={status.get('stage')} "
@@ -455,7 +502,11 @@ def main() -> int:
                    "deliver_port": deliver_port, "pin": pin,
                    "node_tunnel_ip": node_tunnel_ip,
                    "assigned_ip": args.client_ip, "server": args.server,
-                   "server_name": args.server_name}, handle)
+                   "server_name": args.server_name,
+                   # Which read the assertions should use: the kernel's `wg show`
+                   # cannot see a userspace AmneziaWG device.
+                   "inner_format": (obfuscation or {}).get("mode") or "native"},
+                  handle)
     print(f"wrote {args.state_out}", flush=True)
     return 0
 

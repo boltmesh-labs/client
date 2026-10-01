@@ -240,10 +240,36 @@ if [[ $client_only -eq 1 ]]; then
   node_tunnel_ip="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_tunnel_ip"])' \
     "$workdir/client-state.json")"
 
-  log "asserting on the kernel's view"
+  # On an obfuscated region the client's interface is a userspace AmneziaWG tun,
+  # not a kernel WireGuard device, so `wg show` reads nothing and a working tunnel
+  # looks dead. The daemon's own status is the equivalent view there; on the
+  # native path the kernel's is the stronger one, so it is kept.
+  inner_format="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("inner_format","native"))' \
+    "$workdir/client-state.json")"
+  echo "inner format: $inner_format"
+  daemon_field() {
+    python3 "$here/client.py" --socket "$workdir/boltmeshd.sock" --status \
+      | python3 -c "import json,sys; print(json.load(sys.stdin).get('$1', 0))"
+  }
+  client_handshake() {
+    if [[ "$inner_format" == "awg" ]]; then
+      daemon_field lastHandshake
+    else
+      wg_field "$client_iface" latest-handshakes 2 | head -1
+    fi
+  }
+  client_rx() {
+    if [[ "$inner_format" == "awg" ]]; then
+      daemon_field rxBytes
+    else
+      wg_field "$client_iface" transfer 2 | head -1
+    fi
+  }
+
+  log "asserting on the tunnel's view"
   handshakes_ok=0
   for _ in $(seq 1 30); do
-    c_hs="$(wg_field "$client_iface" latest-handshakes 2 | head -1)"
+    c_hs="$(client_handshake)"
     if [[ -n "$c_hs" && "$c_hs" != "0" ]]; then
       handshakes_ok=1
       break
@@ -252,7 +278,7 @@ if [[ $client_only -eq 1 ]]; then
     sleep 0.5
   done
   [[ $handshakes_ok -eq 1 ]] || note_failure "no completed handshake on $client_iface"
-  c_rx="$(wg_field "$client_iface" transfer 2 | head -1)"
+  c_rx="$(client_rx)"
   echo "client received: ${c_rx:-0} bytes over WireGuard"
   [[ -n "${c_rx:-}" && "$c_rx" != "0" ]] || note_failure "the client received nothing over WireGuard"
 
@@ -283,8 +309,8 @@ if [[ $client_only -eq 1 ]]; then
       ping -c1 -W1 "$node_tunnel_ip" >/dev/null 2>&1 || true
       sleep 1
     done
-    bad_hs="$(wg_field "$client_iface" latest-handshakes 2 | head -1)"
-    bad_rx="$(wg_field "$client_iface" transfer 2 | head -1)"
+    bad_hs="$(client_handshake)"
+    bad_rx="$(client_rx)"
     if [[ -n "$bad_hs" && "$bad_hs" != "0" ]] || [[ -n "$bad_rx" && "$bad_rx" != "0" ]]; then
       note_failure "a mutated PSK completed a handshake (hs=${bad_hs:-none} rx=${bad_rx:-0})"
     else

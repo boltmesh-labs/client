@@ -10,11 +10,10 @@ manual node, and a device bound to that node, and writes everything the run need
 It is deliberately stdlib-only so it can run on any host the harness runs on,
 using the box's own `wg` to generate the device keypair.
 
-One step cannot be done through the API, and that is by design rather than an
-oversight: a region's stream policy (`stream_enabled`, `stream_listen_port`,
-`obfuscation`) has no admin write surface yet, so it is configured directly in the
-database. This script *checks* the policy and tells you exactly what to run if it
-is wrong, rather than silently leaving a region that will never serve the rung.
+The region's obfuscation profile and its nodes' stream ports are editable from
+the admin surface now, but this script still only *reports* them: a node reads
+both at registration, so applying a change is a restart the operator owns. Doing
+it silently would leave a region that looks configured and serves nothing.
 
 Usage:
 
@@ -259,9 +258,11 @@ def ensure_device(api: Api, args: argparse.Namespace) -> dict:
 def check_region_serves_the_rung(api: Api, region_id: str, stream_port: int) -> bool:
     """Reports whether the region is configured to serve the stream transport.
 
-    There is no admin write surface for this yet, so the script can only tell the
-    operator what to run. Doing it silently would leave a region that looks
-    configured and serves nothing.
+    The descriptor is only observable when the region has at least one online
+    server, so a region with none reads as unconfigured even when its profile is
+    set. The profile is editable from the admin surface now; this stays a report
+    rather than a write because a running node only reads it at registration, so
+    the restart is the operator's.
     """
     discovery = api.get("/vpn-regions")
     region = next((r for r in discovery if r.get("id") == region_id), None)

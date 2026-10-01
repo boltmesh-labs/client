@@ -47,8 +47,11 @@ either namespace — without the bridge leg the agent could never register.
 3. The node reports its SPKI pin on the heartbeat. The harness reads the pin back
    from the stub — so the client's pin comes from a node that actually bound its
    port, never from a fixture constant.
-4. `boltmeshd` starts with its own wg-quick config whose peer `Endpoint` is the
-   bridge's loopback address and whose `ListenPort` is the bridge's deliver port.
+4. `boltmeshd` starts with its own config whose peer `Endpoint` is the bridge's
+   loopback address and whose `ListenPort` is the bridge's deliver port. On an
+   obfuscated region the conf also carries the region's AmneziaWG directives, so
+   the daemon runs the userspace device rather than wg-quick: the inner format
+   follows the region, and the bridge carries whatever the node's device expects.
 5. `client.py` sends `up` with a `transport` spec carrying that pin.
 6. The harness asserts a kernel handshake on both sides, 0% loss on an in-tunnel
    ping, and that the client interface actually received WireGuard bytes. A
