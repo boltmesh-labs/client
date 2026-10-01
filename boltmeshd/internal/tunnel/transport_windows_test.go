@@ -450,21 +450,33 @@ func TestUpRejectsAnInvalidSpecBeforeTouchingAnything(t *testing.T) {
 	}
 }
 
-// An address that cannot be resolved is a bad config the client chose, not a
-// daemon fault, and must not leave a tunnel on a dead endpoint.
+// An address that cannot be resolved must not leave a tunnel on a dead endpoint.
+// The code is internal rather than bad-config on purpose: the server address
+// comes from the control plane, so a name that does not resolve is the same
+// transient DNS condition the client's health policy already retries — and it
+// matches what the Linux backend reports for the identical failure.
+//
+// The spec carries a *hostname*, not an address: an IP literal short-circuits
+// the resolver entirely, so testing this against a literal would never reach the
+// failure being tested.
 func TestUpFailsClosedWhenTheServerCannotBeResolved(t *testing.T) {
 	h := newTransportHarness(t)
+	spec := streamSpec()
+	spec.Server = "node.example.net:443"
 	h.m.resolveHost = func(context.Context, string) ([]net.IP, error) {
 		return nil, errors.New("no such host")
 	}
 
-	_, err := h.m.Up(context.Background(), streamConfig, streamSpec())
+	_, err := h.m.Up(context.Background(), streamConfig, spec)
 	var opErr *protocol.OpError
-	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
-		t.Fatalf("Up = %v, want bad_config", err)
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up = %v, want an internal error (retryable), matching the Linux backend", err)
 	}
 	if h.svc.starts != 0 {
 		t.Errorf("tunnel service started %d times with no reachable upstream", h.svc.starts)
+	}
+	if h.stream.started != 0 {
+		t.Error("bridge started with no reachable upstream")
 	}
 }
 
@@ -498,23 +510,6 @@ func TestDownKeepsTheRecordWhenARouteCannotBeSwept(t *testing.T) {
 		t.Error("pin record deleted even though a route could not be swept")
 	}
 }
-
-// A route already gone is the desired end state, not a failure: the goal is "no
-// bypass route left", not one successful delete call per installed route.
-func TestDownToleratesARouteThatIsAlreadyGone(t *testing.T) {
-	h := newTransportHarness(t)
-	h.up(t)
-	h.routes.deleteErr = errRouteGone{}
-
-	if _, err := h.m.Down(context.Background()); err != nil {
-		t.Fatalf("Down = %v, want nil when the route is already gone", err)
-	}
-}
-
-// errRouteGone stands in for the seam reporting "no such route".
-type errRouteGone struct{}
-
-func (errRouteGone) Error() string { return "route not found" }
 
 func TestSplitServerDefaultsToTLSPort(t *testing.T) {
 	host, port := splitServer("vpn.example.net")

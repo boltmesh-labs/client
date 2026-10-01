@@ -71,6 +71,12 @@ type physicalRoute struct {
 
 // windowsRoutes is the seam the transport drives. The production
 // implementation is [liveWindowsRoutes].
+//
+// Note what the seam does *not* cover: a route that is already gone is treated as
+// success inside [liveWindowsRoutes.deleteHostRoute], not here, so no unit test
+// through this interface can observe that tolerance — a fake that reports an
+// error is reporting something the real implementation never would. That
+// tolerance is only exercisable against a live forward table.
 type windowsRoutes interface {
 	// bestRoute reports where dst currently goes.
 	bestRoute(dst net.IP) (physicalRoute, error)

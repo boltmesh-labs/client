@@ -204,11 +204,16 @@ func TestRequestTransportInheritsEnvelopeValidation(t *testing.T) {
 func TestSupportedCapabilitiesMatchThePlatformsTransport(t *testing.T) {
 	// The client selects the stream rung only when it sees this token. So the
 	// token must be present exactly where `up` can honour the spec, and absent
-	// everywhere else: advertising it on Windows or macOS would let the client
-	// pick a rung whose only possible outcome is a rejected spec.
+	// everywhere else: advertising it on macOS would let the client pick a rung
+	// whose only possible outcome is a rejected spec.
+	//
+	// The token says nothing about the *inner* format. On Windows the tunnel is
+	// the kernel WireGuard service, which has no AmneziaWG directives, so an
+	// obfuscated region stays unservable there — but the transport itself runs,
+	// and on a stock region that is enough. The client gates the two separately.
 	caps := SupportedCapabilities()
 	advertised := slices.Contains(caps, CapStreamTransport)
-	want := runtime.GOOS == "linux"
+	want := runtime.GOOS == "linux" || runtime.GOOS == "windows"
 	if advertised != want {
 		t.Fatalf("SupportedCapabilities() = %v, stream-transport advertised = %v, want %v (GOOS %s)",
 			caps, advertised, want, runtime.GOOS)
