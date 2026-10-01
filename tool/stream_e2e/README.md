@@ -15,22 +15,31 @@ the real client code.
 
 ## What it does
 
-Two network namespaces on one Linux host, joined by a veth pair, each running its
-own helper as a separate process:
+A bridge on the host gives every participant one address family, and each helper
+runs as its own process in its own namespace:
 
 ```text
- netns client                          netns node
- ┌──────────────────────────┐          ┌────────────────────────────┐
- │ boltmeshd (root)         │          │ agentd                     │
- │   wg-quick → wg0         │          │   wg0 (kernel wgctrl)      │
- │   internal/stream bridge │          │   internal/stream ingress  │
- │     127.0.0.1:<listen>   │          │     0.0.0.0:<stream_port> │
- └───────────┬──────────────┘          └──────────────┬─────────────┘
-             │        TLS 1.3 over the veth pair        │
-             └─────────────────────────────────────────┘
+                 host  br-bm  192.168.100.1
+                  │  (stub control plane: registration, heartbeat, peers-sync)
+        ┌─────────┴──────────┐
+        │                    │
+ netns bm-client       netns bm-node
+ 192.168.100.2         192.168.100.3
+ ┌──────────────────┐  ┌────────────────────────────┐
+ │ boltmeshd        │  │ agentd                     │
+ │   wg-quick → wg0 │  │   wg0 (kernel wgctrl)      │
+ │   stream bridge  │  │   stream ingress           │
+ │   127.0.0.1:<listen> │  0.0.0.0:<stream_port>   │
+ └────────┬─────────┘  └─────────────┬──────────────┘
+          │      TLS 1.3 over the bridge    │
+          └─────────────────────────────────┘
 ```
 
-1. `controlplane.py` starts: a stub control plane serving registration, heartbeat,
+The host leg is not decoration. A network namespace has its **own** loopback, so
+a stub control plane bound to the host's `127.0.0.1` is unreachable from inside
+either namespace — without the bridge leg the agent could never register.
+
+1. `controlplane.py` starts on the host: a stub serving registration, heartbeat,
    peers-sync, and token re-mints. It holds the one device credential both ends
    are handed, so the client and the node cannot disagree about the PSK.
 2. `agentd` registers against it, receives a `stream_ingress` descriptor, **mints
@@ -42,15 +51,50 @@ own helper as a separate process:
    bridge's loopback address and whose `ListenPort` is the bridge's deliver port.
 5. `client.py` sends `up` with a `transport` spec carrying that pin.
 6. The harness asserts a kernel handshake on both sides, 0% loss on an in-tunnel
-   ping, and that the two `wg` interfaces see each other's keys.
+   ping, and that the client interface actually received WireGuard bytes. A
+   wrong-PSK session is then driven and must be refused.
 
 ## Requirements
 
-Root (namespaces, veth, and `wg` are all privileged), plus:
+Root (namespaces, veth, and `wg` are all privileged), plus `iproute2`,
+`wireguard-tools`, `python3`, and a working kernel WireGuard module.
 
-- `iproute2`, `wireguard-tools` (`wg`, `wg-quick`), `python3`, and a working
-  kernel WireGuard module
-- both repos buildable (`go build ./...` in `boltmeshd/` and in the agent repo)
+A Go toolchain is needed **only to build the two helpers**. To run a box without
+one, cross-compile elsewhere and point the harness at the binaries:
+
+```sh
+GOOS=linux GOARCH=amd64 go build -o /tmp/e2e/boltmeshd ./cmd/boltmeshd
+(cd ../agent && GOOS=linux GOARCH=amd64 go build -o /tmp/e2e/agentd ./cmd/agentd)
+sudo tool/stream_e2e/run.sh --bin-dir=/tmp/e2e
+```
+
+## What a real box needs, and what the harness does about it
+
+Each of these was found by running the harness on a stock Rocky 10 host, and each
+one fails in a way that points somewhere other than the cause:
+
+| Symptom | Cause | What the harness does |
+| --- | --- | --- |
+| `No route to host` from a namespace, **while ping works** | firewalld puts the new bridge in the `public` zone, which rejects unsolicited TCP with ICMP host-prohibited | places the bridge in the `trusted` zone for the run, removes it after |
+| agent exits `INVALID_ZONE: vpn` | the `vpn` firewalld zone is baked in by the AMI build; a bare box has none | creates it (`--permanent` + reload, firewalld's only way) and removes it after, if it created it |
+| agent exits `must use https://` | it refuses cleartext HTTP to a non-loopback host, by design | sets `ALLOW_INSECURE_HTTP=true`; the lab bridge is not loopback |
+| `unknown group boltmesh` | `boltmeshd` defaults its socket group to a packaged-install artifact | `BOLTMESHD_SOCKET_GROUP=""` (root-only) |
+| `wg-quick` fails on the **mtu** step with `Address already in use` | a port conflict, reported against the wrong command — see below | pins `ListenPort` to the bridge's *deliver* port, never its listen port |
+| `wg-quick` fails `Failed to set DNS configuration` | `resolvconf` talks to a resolver in the host namespace, which does not know this namespace's interface | omits the `DNS=` line; DNS is out of scope here |
+
+The mtu one is worth spelling out, because it is the mistake that makes a working
+transport look broken. `wg-quick` echoes each command before running it, so a
+failure on `ip link set mtu ... up` is reported *after* the address line. That
+command returns `EADDRINUSE` when the WireGuard listen port is already bound — so
+configuring `ListenPort` as the bridge's listen port, rather than its deliver
+port, surfaces as an address error on a step that has nothing to do with
+addresses.
+
+Note also that `set -o pipefail` plus an unguarded `wg show <iface>` in a command
+substitution kills the script silently when the interface name is wrong, which
+reads as "the run just stopped". The harness names both interfaces explicitly
+(`boltmesh0` on the client, the control plane's `interface_name` on the node) and
+guards every read.
 
 ## Running it
 
@@ -63,9 +107,14 @@ Flags, all optional:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--agent-repo=PATH` | `../agent` | agent checkout, for its `go.mod` |
-| `--keep` | off | leave the namespaces up for manual poking |
-| `--skip-build` | off | reuse existing binaries |
+| `--agent-repo=PATH` | `../agent` | agent checkout, to build `agentd` from |
+| `--bin-dir=DIR` | none | use prebuilt `boltmeshd`/`agentd`; skips the Go toolchain entirely |
+| `--keep` | off | leave the network up for manual poking |
+| `--skip-build` | off | requires `--bin-dir`; the work directory is per-run |
+
+`BOLTMESH_E2E_DEBUG=1` keeps the network *and* the logs even when the run fails,
+so the live namespaces can be inspected. Without it a failed run keeps only its
+logs, and a successful one removes both.
 
 Set `--keep` and then, from the host:
 

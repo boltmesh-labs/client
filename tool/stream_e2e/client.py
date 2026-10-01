@@ -93,34 +93,39 @@ def build_wg_quick_config(
     private_key: str,
     assigned_ip: str,
     server_public_key: str,
-    listen_addr: str,
-    dns: str,
+    endpoint: str,
+    listen_port: int,
 ) -> str:
     """The client's wg-quick config for the stream rung.
 
-    Two fields are specific to this rung and both are the harness's job to get
-    right, because they are what make the bridge work rather than something the
-    daemon can infer:
+    Three fields are specific to this rung and all three are the harness's job to
+    get right, because they are what make the bridge work rather than something
+    the daemon can infer:
 
-    - the peer's `Endpoint` is the bridge's **loopback** address, not the node —
+    - the peer's `Endpoint` is the bridge's **listen** address, not the node —
       the bridge is what reaches the node;
-    - `ListenPort` is pinned to the bridge's **deliver** port. A bare `wg-quick`
-      config would take an ephemeral port, and the bridge would have no way to
-      know where to hand the node's datagrams.
+    - the interface's `ListenPort` is the bridge's **deliver** port, the one the
+      bridge sends the node's datagrams back to. It must NOT be the listen port:
+      the bridge already holds that one, so the kernel would fail to bind it and
+      `wg-quick up` would die with "Address already in use" on the *mtu* step,
+      which points nowhere near the real cause.
+    - the obfuscation directives are absent: one rung at a time, and the daemon
+      rejects the combination outright.
 
-    The obfuscation directives are deliberately absent: one rung at a time, and
-    the daemon rejects the combination outright.
+    No `DNS=` line. It is in the Flutter client's config but cannot work here:
+    `resolvconf` talks to a resolver running in the *host* namespace, which does
+    not know this namespace's interface, so `wg-quick` would fail its DNS step
+    and tear the link down. DNS is out of scope for a transport harness.
     """
     return (
         "[Interface]\n"
         f"PrivateKey = {private_key}\n"
         f"Address = {assigned_ip}\n"
-        f"DNS = {dns}\n"
-        f"ListenPort = {listen_addr.rsplit(':', 1)[1]}\n"
+        f"ListenPort = {listen_port}\n"
         "\n"
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
-        f"Endpoint = {listen_addr}\n"
+        f"Endpoint = {endpoint}\n"
         "AllowedIPs = 10.254.0.0/16\n"
         "PersistentKeepalive = 25\n"
     )
@@ -177,10 +182,17 @@ def main() -> int:
                          "teardown cannot fail merely because the stub has already gone away")
     ap.add_argument("--server", help="host:port the bridge dials, i.e. the node's ingress")
     ap.add_argument("--server-name", help="SNI, and the name the node issued for")
-    ap.add_argument("--node-tunnel-ip", default="10.254.0.1")
     ap.add_argument("--client-ip", default="10.254.0.2/32")
     ap.add_argument("--state-out",
                     help="where to write the chosen keys, for the assertions")
+    ap.add_argument("--inline-client-private",
+                    help="the client's WireGuard private key, wg genkey form. Supplied "
+                         "when the harness has already registered the matching public "
+                         "half with the control plane, so the node's peer and this conf "
+                         "agree without a mid-run race")
+    ap.add_argument("--force-psk",
+                    help="override the PSK, for the negative check. The daemon must "
+                         "refuse a session presenting a credential it was never told")
     ap.add_argument("--down", action="store_true", help="tear the tunnel down and exit")
     args = ap.parse_args()
 
@@ -223,9 +235,14 @@ def main() -> int:
     while deliver_port == listen_port:
         deliver_port = free_udp_port()
 
-    # Fresh keypairs per run: a reused private key would be remembered by the
-    # node's peer table from a previous run and hide a real failure.
-    client_private = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+    # Fresh keypairs per run unless the harness supplied one: a reused private key
+    # would be remembered by the node's peer table from a previous run and hide a
+    # real failure. When it did supply one, that is the private half of the public
+    # key it already registered with the control plane, and the node's peer row is
+    # built from that public key — so the two must be used together.
+    client_private = args.inline_client_private or base64.b64encode(
+        secrets.token_bytes(32)
+    ).decode("ascii")
 
     with Helper(args.socket) as helper:
         caps = helper.capabilities()
@@ -241,16 +258,20 @@ def main() -> int:
             "server_name": args.server_name,
             "spki_sha256": [pin],
             # The device credential, from the same control plane the node reads
-            # it from, so the two ends cannot disagree about the PSK.
-            "psk": state["psk"],
+            # it from, so the two ends cannot disagree about the PSK. Overridable
+            # only so the negative check can present one the node never saw.
+            "psk": args.force_psk or state["psk"],
             "client_id": state["client_id"],
         }
         conf = build_wg_quick_config(
             private_key=client_private,
             assigned_ip=args.client_ip,
             server_public_key=node_public_key,
-            listen_addr=transport["listen"],
-            dns=args.node_tunnel_ip,
+            # The peer endpoint is the bridge; the interface's own port is the
+            # bridge's deliver port. Swapping these is the one mistake that makes
+            # a correct transport look broken, so they are separate arguments.
+            endpoint=transport["listen"],
+            listen_port=deliver_port,
         )
 
         print(f"pin from the node's heartbeat: {pin}", flush=True)

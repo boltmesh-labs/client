@@ -204,8 +204,10 @@ class WgQuickConfigTest(unittest.TestCase):
             private_key="PRIV",
             assigned_ip="10.254.0.2/32",
             server_public_key="SRV",
-            listen_addr="127.0.0.1:51821",
-            dns="10.254.0.1",
+            # The bridge's listen address is the peer endpoint...
+            endpoint="127.0.0.1:51821",
+            # ...and a DIFFERENT port is the interface's own.
+            listen_port=51820,
         )
 
     def test_peer_endpoint_is_the_bridge_not_the_node(self) -> None:
@@ -216,16 +218,26 @@ class WgQuickConfigTest(unittest.TestCase):
         self.assertIn("Endpoint = 127.0.0.1:51821", conf)
         self.assertNotIn("198.51.100.2", conf)
 
-    def test_listen_port_is_pinned_to_the_bridges_deliver_port(self) -> None:
-        # An unpinned interface takes an ephemeral port the bridge cannot know.
+    def test_listen_port_is_the_deliver_port_not_the_bridge_port(self) -> None:
+        # The bug this test exists for: setting ListenPort to the bridge's own
+        # listen port makes the kernel try to bind a port the bridge already
+        # holds, so `wg-quick up` fails on the *mtu* step with "Address already
+        # in use" — an error that points nowhere near the configuration mistake.
         conf = self.build()
-        self.assertIn("ListenPort = 51821", conf)
+        self.assertIn("ListenPort = 51820", conf)
+        self.assertNotIn("ListenPort = 51821", conf)
 
     def test_no_obfuscation_directives(self) -> None:
         # One rung at a time; the daemon rejects the combination outright.
         conf = self.build()
         for directive in ("Jc =", "Jmin =", "S1 =", "H1 ="):
             self.assertNotIn(directive, conf)
+
+    def test_no_dns_line(self) -> None:
+        # resolvconf talks to a resolver in the host namespace, which does not
+        # know this namespace's interface, so a DNS line would make wg-quick fail
+        # its DNS step and tear the link down.
+        self.assertNotIn("DNS", self.build())
 
     def test_allowed_ips_covers_only_the_tunnel_subnet(self) -> None:
         # A split-tunnel AllowedIPs; the harness asserts on the tunnel subnet
