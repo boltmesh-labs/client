@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"boltmeshd/internal/config"
 	"boltmeshd/internal/protocol"
@@ -23,6 +25,11 @@ const (
 	// code-execution primitive.
 	wireguardSvcExe = "wireguard_svc.exe"
 	wireguardDLL    = "wireguard.dll"
+
+	// cleanupTimeout bounds the recovery pass after a failed up. It must not
+	// inherit an already-canceled request context, and the manager gate stays
+	// held throughout so a retry cannot race the recovery.
+	cleanupTimeout = 5 * time.Second
 )
 
 // DefaultConfigDir is the directory holding the privileged wg-quick config.
@@ -81,6 +88,21 @@ type Manager struct {
 	// replace them with no-ops so a temp dir is never locked down.
 	protectDir  func(string) error
 	protectFile func(string) error
+
+	// Stream transport: the in-process bridge carrying the tunnel's datagrams,
+	// and the host routes pinned so its own egress stays outside the tunnel. The
+	// bridge is not a privilege boundary — it binds a loopback port and dials
+	// out — but the daemon owns its lifecycle because the tunnel's lifecycle is
+	// the daemon's, and only the daemon can pin its egress. transport is nil
+	// when none is live; routes is the seam over the IP forward table, replaced
+	// by tests so sequencing is checkable without touching this machine's
+	// routing. resolveHost is the pre-tunnel resolver, for the same reason the
+	// Linux backend resolves through the physical one: the transport comes up
+	// before any tunnel DNS state exists.
+	transport       *liveTransport
+	routes          windowsRoutes
+	resolveHost     func(ctx context.Context, host string) ([]net.IP, error)
+	streamTransport func(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error)
 }
 
 // NewManager returns a Manager for iface storing its config in dir.
@@ -94,6 +116,11 @@ func NewManager(dir, iface string) *Manager {
 		stat:        os.Stat,
 		protectDir:  protectConfigDir,
 		protectFile: protectConfigFile,
+		routes:      liveWindowsRoutes{},
+		resolveHost: func(ctx context.Context, host string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(ctx, "ip", host)
+		},
+		streamTransport: newStreamClient,
 	}
 }
 
@@ -101,15 +128,6 @@ func NewManager(dir, iface string) *Manager {
 // tunnel service. Any existing tunnel is torn down first so the requested
 // config is always the one applied.
 func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
-	if transport != nil {
-		// Stream transport is Linux-only for now (see the darwin backend):
-		// the Windows data plane has no transport lifecycle, and ignoring
-		// the spec would leave the tunnel on a dead loopback endpoint.
-		return nil, &protocol.OpError{
-			Code: protocol.CodeBadConfig,
-			Err:  errors.New("stream transport is not supported on this platform"),
-		}
-	}
 	// Validate before taking the lock: a malformed config must not consume
 	// the privileged operation slot or touch disk.
 	if err := config.Validate(wgQuickConfig); err != nil {
@@ -138,6 +156,15 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *proto
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("protect config dir: %w", err)}
 	}
 
+	// A live transport is torn down before its config is replaced, for the same
+	// reason the service is: the pinned routes outlive the daemon, so a retry
+	// must not leave the previous tunnel's pins installed underneath the new
+	// one. It comes before the service stop because the transport carries the
+	// tunnel, not the other way round.
+	if err := m.downTransport(ctx); err != nil {
+		return nil, err
+	}
+
 	// Stop the old service before replacing its fixed config path. A running
 	// WireGuard service may hold the old file without delete sharing, which
 	// would make an otherwise-correct atomic replacement fail.
@@ -148,7 +175,44 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *proto
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("write config: %w", err)}
 	}
 
+	// The transport and its bypass route come up *before* the service starts:
+	// from the moment the tunnel adapter installs its default route, the
+	// transport's own egress must already be pinned through the physical path
+	// or its packets (and the WireGuard datagrams they carry) would loop back
+	// into the tunnel. Windows matches the longest prefix first, so the /32 is
+	// what keeps them out — but it has to exist first.
+	if transport != nil {
+		if err := m.bringUpTransport(ctx, transport); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			defer cancel()
+			// Keep the transport's own code: a spec or credential the client
+			// got wrong is a bad config, not a daemon fault, and the client
+			// decides what to do about each.
+			code := transportErrorCode(err)
+			if cleanupErr := m.downTransport(cleanupCtx); cleanupErr != nil {
+				return nil, &protocol.OpError{
+					Code: code,
+					Err:  fmt.Errorf("stream transport: %w; cleanup failed: %w", err, cleanupErr),
+				}
+			}
+			_ = os.Remove(m.configPath())
+			return nil, &protocol.OpError{Code: code, Err: fmt.Errorf("stream transport: %w", err)}
+		}
+	}
+
 	if err := m.service.start(ctx, exePath, []string{"-service", "-config-file=" + m.configPath()}); err != nil {
+		// The service may have installed the adapter and its routes before
+		// reporting failure, so the recovery stops the transport and sweeps its
+		// pins rather than only removing the config file. The manager gate stays
+		// held while it runs, so a retry cannot race it.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		if cleanupErr := m.downTransport(cleanupCtx); cleanupErr != nil {
+			return nil, &protocol.OpError{
+				Code: protocol.CodeInternal,
+				Err:  fmt.Errorf("start tunnel service: %w; cleanup failed: %w", err, cleanupErr),
+			}
+		}
 		_ = os.Remove(m.configPath())
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("start tunnel service: %w", err)}
 	}
@@ -172,6 +236,12 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 	if err := m.service.stop(ctx); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("stop tunnel service: %w", err)}
 	}
+	// The transport goes down with the tunnel it carries, and its pinned routes
+	// with it. This runs even when no transport is live in memory, because a
+	// pin record left by a previous run is still a route installed.
+	if err := m.downTransport(ctx); err != nil {
+		return nil, err
+	}
 	_ = os.Remove(m.configPath())
 	return m.readServiceStatus(ctx)
 }
@@ -184,6 +254,12 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 // and a service marked for deletion may otherwise outlive the helper
 // executable.
 func (m *Manager) Uninstall(ctx context.Context) error {
+	// The transport goes first: its bypass routes point at the physical path,
+	// and leaving them installed would keep exempting the node from every
+	// tunnel on a machine that no longer has this client installed.
+	if err := m.downTransport(ctx); err != nil {
+		return fmt.Errorf("remove stream transport: %w", err)
+	}
 	// remove is deliberately one destructive operation: it stops the service,
 	// waits for the service process to release the config, deletes the
 	// registration, and waits until that registration is gone. Only then is it
@@ -194,6 +270,9 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 	if err := removeConfigFile(m.configPath()); err != nil {
 		return fmt.Errorf("remove tunnel config: %w", err)
 	}
+	// The record goes with them, or a later install would sweep pins it has no
+	// memory of having installed.
+	_ = os.Remove(m.transportPinPath())
 	return nil
 }
 

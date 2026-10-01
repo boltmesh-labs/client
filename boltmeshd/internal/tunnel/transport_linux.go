@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 
@@ -109,7 +108,7 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 		tr.pins = append(tr.pins, mainPin)
 		// Record the pin *before* installing it, so a crash in between leaves a
 		// route the record names rather than one nothing accounts for. See
-		// transport_state_linux.go.
+		// transport_state.go.
 		if err := m.recordTransportPins(tr.pins); err != nil {
 			return err
 		}
@@ -223,11 +222,10 @@ func (m *Manager) downTransport(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("stop stream transport: %w", err))
 		}
 	}
-	pins := m.recordedTransportPins()
 	if ipErr != nil {
 		errs = append(errs, ipErr)
 	} else {
-		for _, pin := range pins {
+		for _, pin := range m.recordedTransportPins() {
 			if err := m.unpinRoute(ctx, ipTool, pin); err != nil {
 				errs = append(errs, err)
 			}
@@ -237,13 +235,6 @@ func (m *Manager) downTransport(ctx context.Context) error {
 		return &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(errs...)}
 	}
 	return m.removeTransportPinRecord()
-}
-
-// transportPinsRecorded reports whether a pin record exists, so a teardown with
-// no in-memory transport still knows there is something to sweep.
-func (m *Manager) transportPinsRecorded() bool {
-	_, err := os.Stat(m.transportPinPath())
-	return err == nil
 }
 
 // transportErrorCode reports the protocol code a transport failure should
@@ -271,6 +262,38 @@ func (m *Manager) noteStreamSession(up bool, err error) {
 		return
 	}
 	slog.Warn("stream transport session unavailable", "interface", m.iface, "error", err)
+}
+
+// recordTransportPins writes the pin record from the live set. A Linux pin
+// carries a table as well as a prefix, because the same prefix is installed
+// once per table wg-quick's policy rules select and each is a separate route.
+func (m *Manager) recordTransportPins(pins []transportPin) error {
+	lines := make([]string, 0, len(pins))
+	for _, pin := range pins {
+		lines = append(lines, encodePin(pin.prefix, pin.table))
+	}
+	return m.writeTransportPinRecord(lines)
+}
+
+// recordedTransportPins reads the pin record back into the sweep shape. A line
+// that does not decode is skipped rather than failing the read: a partial sweep
+// is better than none, and [Manager.unpinRoute] already tolerates a route that
+// is gone.
+func (m *Manager) recordedTransportPins() []transportPin {
+	lines := m.readTransportPinRecord()
+	pins := make([]transportPin, 0, len(lines))
+	for _, line := range lines {
+		prefix, table, ok := decodePin(line)
+		if !ok {
+			continue
+		}
+		pins = append(pins, transportPin{
+			prefix: prefix,
+			v6:     strings.Contains(prefix, ":"),
+			table:  table,
+		})
+	}
+	return pins
 }
 
 // pinRoute installs (replacing any existing) the bypass host route for one
@@ -384,17 +407,7 @@ func indexToken(fields []string, want string) int {
 	return -1
 }
 
-// splitServer splits the transport's server into host and port. A bare host is
-// legal (the envelope validation already rejected an empty or malformed one);
-// stream transports all dial TLS, so 443 is the implied port.
-func splitServer(server string) (string, string) {
-	if host, port, err := net.SplitHostPort(server); err == nil {
-		return strings.TrimSpace(host), port
-	}
-	return strings.TrimSpace(server), "443"
-}
-
-// resolveServer turns the server host into addresses. A literal IP needs no
+// resolveServer // resolveServer turns the server host into addresses. A literal IP needs no
 // resolver; a hostname does, and the *current* (physical) resolver is the
 // right one: the transport comes up before any tunnel DNS state exists.
 func (m *Manager) resolveServer(ctx context.Context, host string) ([]net.IP, error) {

@@ -46,19 +46,25 @@ bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   return p == TargetPlatform.linux;
 }
 
-/// True where the stream transport is available: the Linux `boltmeshd` helper
-/// runs the bridge in-process, and it is the only build whose transport
-/// lifecycle and bypass route exist. Everywhere else the daemon *rejects* a
-/// transport spec rather than ignoring it, so a rung selected there could only
-/// fail — the platform gate keeps the ladder from offering it.
+/// True where the stream transport is available: the `boltmeshd` helper runs the
+/// bridge in-process on Linux and Windows, and only those builds have a
+/// transport lifecycle and a bypass route. Everywhere else the daemon *rejects*
+/// a transport spec rather than ignoring it, so a rung selected there could
+/// only fail — the platform gate keeps the ladder from offering it.
 ///
 /// This is the static half of the gate; the runtime half is the daemon's
-/// advertised `stream-transport` capability, which also covers a Linux helper
-/// that is too old to know the transport at all.
+/// advertised `stream-transport` capability, which also covers a helper that is
+/// too old to know the transport at all.
+///
+/// Note this says nothing about the *inner* format. The transport carries
+/// whatever datagrams the tunnel produces, so on an obfuscated region it also
+/// needs the obfuscated data plane (see [awgDataPlaneSupported]); on a stock
+/// region the two are independent. `_streamRungAvailable` in the ladder
+/// requires both, so the gate here is not on its own enough to offer the rung.
 bool streamTransportSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;
-  return p == TargetPlatform.linux;
+  return p == TargetPlatform.linux || p == TargetPlatform.windows;
 }
 
 /// Network-extension bundle ID for iOS/macOS

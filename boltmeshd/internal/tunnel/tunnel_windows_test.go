@@ -102,6 +102,11 @@ type fakeService struct {
 	startErr   error
 	stopErr    error
 	removeErr  error
+	// onStart/onStop observe each transition. The transport suite uses them to
+	// assert ordering against the pinned routes, which is the whole point of
+	// bringing the transport up before the service starts.
+	onStart func()
+	onStop  func()
 }
 
 func (f *fakeService) start(_ context.Context, exe string, args []string) error {
@@ -109,6 +114,9 @@ func (f *fakeService) start(_ context.Context, exe string, args []string) error 
 	defer f.mu.Unlock()
 	f.starts++
 	f.exe, f.args = exe, args
+	if f.onStart != nil {
+		f.onStart()
+	}
 	if f.startErr != nil {
 		return f.startErr
 	}
@@ -121,6 +129,9 @@ func (f *fakeService) stop(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops++
+	if f.onStop != nil {
+		f.onStop()
+	}
 	if f.stopErr != nil {
 		return f.stopErr
 	}

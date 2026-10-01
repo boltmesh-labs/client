@@ -469,6 +469,10 @@ void main() {
   group('awgDataPlaneSupported', () {
     test('linux helper only', () {
       expect(awgDataPlaneSupported(platform: TargetPlatform.linux), isTrue);
+      // Windows drives the kernel WireGuard tunnel service, which has no
+      // concept of the obfuscation directives, so an obfuscated region stays
+      // unservable there. The stream transport works on Windows, but only with
+      // a stock inner format.
       expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isFalse);
       expect(awgDataPlaneSupported(platform: TargetPlatform.android), isFalse);
       expect(awgDataPlaneSupported(platform: TargetPlatform.macOS), isFalse);
@@ -476,6 +480,37 @@ void main() {
         awgDataPlaneSupported(platform: TargetPlatform.linux, web: true),
         isFalse,
       );
+    });
+  });
+
+  group('streamTransportSupported', () {
+    test('linux and windows helpers', () {
+      expect(streamTransportSupported(platform: TargetPlatform.linux), isTrue);
+      expect(
+        streamTransportSupported(platform: TargetPlatform.windows),
+        isTrue,
+      );
+      expect(
+        streamTransportSupported(platform: TargetPlatform.android),
+        isFalse,
+      );
+      expect(streamTransportSupported(platform: TargetPlatform.macOS), isFalse);
+      expect(
+        streamTransportSupported(platform: TargetPlatform.linux, web: true),
+        isFalse,
+      );
+    });
+
+    test('is independent of the obfuscated data plane', () {
+      // The transport carries whatever the tunnel produces. The two gates are
+      // deliberately separate so a Windows build can offer the stream rung on
+      // a stock region without also claiming it can run an obfuscated one:
+      // the ladder requires both for an obfuscated region.
+      expect(
+        streamTransportSupported(platform: TargetPlatform.windows),
+        isTrue,
+      );
+      expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isFalse);
     });
   });
 }
