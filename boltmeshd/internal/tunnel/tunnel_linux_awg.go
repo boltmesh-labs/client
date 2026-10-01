@@ -245,7 +245,14 @@ type obfRoutePlan struct {
 // the native path: resolve tools before writing anything, down whatever is
 // up, write the privileged config, then apply — and on any failure run a
 // bounded recovery pass that keeps the config file until it has finished.
-func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string) (*protocol.Status, error) {
+//
+// A non-nil [transport] rides this tunnel: the stream bridge carries the
+// obfuscated datagrams to the node, whose AmneziaWG device is what accepts
+// them. It comes up before the tunnel routes for the same reason as the native
+// path: from the moment this path's default route exists, the transport's own
+// TLS egress must already be pinned through the physical path, or it would loop
+// into the tunnel it carries.
+func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
 	// The userspace data plane needs `ip`; resolve it before writing
 	// anything, exactly like the native path resolves wg-quick.
 	ipTool, err := m.tool(ipBinary)
@@ -259,7 +266,7 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string) (*prot
 	// config is the handle on the underlay routes that must be swept. Skip
 	// the down only when there is nothing of the sort: a fresh machine must
 	// not run teardown commands.
-	if m.awgLive() || m.linkExists(m.iface) || m.configExists() {
+	if m.awgLive() || m.linkExists(m.iface) || m.configExists() || m.transport != nil {
 		if err := m.down(ctx); err != nil {
 			return nil, err
 		}
@@ -293,6 +300,31 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string) (*prot
 			return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(err, rmErr)}
 		}
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: err}
+	}
+
+	// The transport and its bypass route come up *before* the tunnel routes:
+	// from the moment the obfuscated path's default route exists, the
+	// transport's own TLS egress must already be pinned through the physical
+	// path, or its packets (and the datagrams it carries) would loop back into
+	// the tunnel. This mirrors the native path's bringUpTransport-before-
+	// wg-quick ordering. There is no wg-quick here, so no pinTransportTables
+	// pass either — that pass mirrors wg-quick's fwmark policy rules, and this
+	// path installs metric-based routes instead.
+	if transport != nil {
+		if err := m.bringUpTransport(ctx, transport); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			defer cancel()
+			// Keep the transport's own code: a spec or credential the client
+			// got wrong is a bad config, not a daemon fault.
+			code := transportErrorCode(err)
+			if cleanupErr := m.teardownObfuscated(cleanupCtx); cleanupErr != nil {
+				return nil, &protocol.OpError{
+					Code: code,
+					Err:  fmt.Errorf("stream transport: %w; cleanup failed: %w", err, cleanupErr),
+				}
+			}
+			return nil, &protocol.OpError{Code: code, Err: fmt.Errorf("stream transport: %w", err)}
+		}
 	}
 
 	if err := m.startObfuscated(ctx, ipTool, uapiBody, settings, routes); err != nil {
@@ -392,6 +424,14 @@ func (m *Manager) planObfuscatedRoutes(ctx context.Context, ipTool string, setti
 		}
 	}
 	for _, ip := range ips {
+		// A stream transport carries the tunnel with its peer endpoint on the
+		// bridge's loopback address, so there is no underlay host route to pin:
+		// loopback is resolved by the local table before any tunnel route and
+		// is never captured by one. The transport's real upstream (the node's
+		// TLS address) is pinned separately by [Manager.bringUpTransport].
+		if ip.IsLoopback() {
+			continue
+		}
 		via, dev, err := m.physicalRouteFor(ctx, ipTool, ip)
 		if err != nil {
 			return plan, err
@@ -526,6 +566,12 @@ func (m *Manager) teardownObfuscated(ctx context.Context) error {
 		}
 	}
 	m.clearAwgDevice()
+	// The stream transport goes down with the tunnel it carries. No-op when no
+	// transport is live (a plain obfuscated tunnel, or one started without a
+	// transport).
+	if err := m.downTransport(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if err := m.clearObfuscatedUnderlay(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -630,6 +676,11 @@ func (m *Manager) underlayPrefixesFromConfig(ctx context.Context) ([]string, err
 	}
 	prefixes := make([]string, 0, len(ips))
 	for _, ip := range ips {
+		// A loopback endpoint (a stream-carried tunnel) pinned no underlay
+		// route, so there is none to derive for teardown.
+		if ip.IsLoopback() {
+			continue
+		}
 		prefixes = append(prefixes, hostPrefixFor(ip))
 	}
 	return prefixes, nil

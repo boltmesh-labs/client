@@ -165,7 +165,10 @@ func (m *Manager) runWithTimeout(ctx context.Context, name string, args ...strin
 // tunnel. An existing tunnel is torn down first so the requested config is
 // always the one applied (never two live tunnels). A non-nil [transport] adds
 // a stream transport carrying the tunnel's datagrams, started (and pinned
-// outside the tunnel's routes) before wg-quick runs and torn down with it.
+// outside the tunnel's routes) before the tunnel's routes exist and torn down
+// with it. That holds on both data planes: a native config runs wg-quick, an
+// obfuscated one runs the userspace AmneziaWG device, and either can carry the
+// transport — the region's format, not the rung, decides which.
 func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *protocol.TransportSpec) (*protocol.Status, error) {
 	// Validate before taking the lock: a malformed config must not consume
 	// the privileged operation slot or touch disk.
@@ -192,19 +195,12 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *proto
 
 	// An obfuscated config never reaches wg-quick: the kernel module has no
 	// concept of the AmneziaWG parameters, and writing them to a wg-quick
-	// file would only fail at up time. Route it to the userspace data plane.
+	// file would only fail at up time. Route it to the userspace data plane,
+	// which also carries a stream transport when one is requested: the tunnel
+	// the transport bridges is the obfuscated one, so its datagrams must carry
+	// the region's directives for the node's AmneziaWG device to accept them.
 	if awgObfuscated(parseWgQuick(wgQuickConfig)) {
-		if transport != nil {
-			// One rung at a time. A stream transport already carries the
-			// tunnel inside a camouflaged stream, so the obfuscation
-			// parameters would be redundant; combining them is a client-side
-			// decision this backend does not make on its own.
-			return nil, &protocol.OpError{
-				Code: protocol.CodeBadConfig,
-				Err:  errors.New("stream transport with an obfuscated config is not supported"),
-			}
-		}
-		return m.upObfuscated(ctx, wgQuickConfig)
+		return m.upObfuscated(ctx, wgQuickConfig, transport)
 	}
 
 	// Resolve before writing anything: a missing tool must not leave a

@@ -68,7 +68,6 @@ type transportHarness struct {
 	// passSpec records the spec handed to the constructor, so the test can
 	// assert the daemon did not rewrite the client's credentials.
 	passSpec *protocol.TransportSpec
-	tunMade  int
 }
 
 func b64(n int) string { return base64.StdEncoding.EncodeToString(make([]byte, n)) }
@@ -95,6 +94,35 @@ PrivateKey = ` + keyA + `
 ListenPort = 51820
 Address = 10.8.0.5/32
 DNS = 10.8.0.1
+
+[Peer]
+PublicKey = ` + keyB + `
+Endpoint = 127.0.0.1:51821
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+`
+
+// obfuscatedStreamConfig is [streamConfig] plus a complete AmneziaWG
+// obfuscation set: the conf a client builds for the stream rung on an
+// obfuscated region. The inner datagrams carry the region's directives — the
+// node's AmneziaWG device drops stock ones — while the peer endpoint is still
+// the bridge's loopback address.
+const obfuscatedStreamConfig = `[Interface]
+PrivateKey = ` + keyA + `
+ListenPort = 51820
+Address = 10.8.0.5/32
+DNS = 10.8.0.1
+Jc = 3
+Jmin = 40
+Jmax = 70
+S1 = 15
+S2 = 17
+S3 = 10
+S4 = 5
+H1 = 115-120
+H2 = 130
+H3 = 150-160
+H4 = 171
 
 [Peer]
 PublicKey = ` + keyB + `
@@ -289,20 +317,83 @@ func TestUpWithStreamTransportTearsDownBeforeRetry(t *testing.T) {
 	}
 }
 
-func TestUpRejectsTransportWithObfuscatedConfig(t *testing.T) {
+func TestUpObfuscatedWithStreamTransportCarriesTheRegionFormat(t *testing.T) {
 	h := newTransportHarness(t, false)
-	// One rung at a time: a stream already carries the tunnel inside a
-	// camouflaged stream, so the obfuscation parameters would be redundant.
-	_, err := h.m.Up(context.Background(), obfuscatedConfig, streamSpec())
-	var opErr *protocol.OpError
-	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeBadConfig {
-		t.Fatalf("Up(obfuscated + transport) = %v, want bad config", err)
+
+	// An obfuscated region: the stream rung's conf carries the region's
+	// directives and the bridge's loopback endpoint. The tunnel that rides the
+	// stream is the obfuscated one, so the node's AmneziaWG device accepts it.
+	if _, err := h.m.Up(context.Background(), obfuscatedStreamConfig, streamSpec()); err != nil {
+		t.Fatalf("Up(obfuscated + transport) = %v, want nil", err)
 	}
-	if h.tunMade != 0 || len(h.streams) != 0 {
-		t.Error("a rejected combination must not create a data plane or a transport")
+
+	// The obfuscated data plane is the one that came up: the device was
+	// configured with the region's directives rather than skipped for the
+	// transport.
+	if len(h.dev.bodies) != 1 {
+		t.Fatalf("device configured %d times, want 1", len(h.dev.bodies))
+	}
+	if !strings.Contains(h.dev.bodies[0], "jc=3") {
+		t.Errorf("device configured without the obfuscation parameters:\n%s", h.dev.bodies[0])
+	}
+	// And the bridge is carrying that tunnel.
+	if len(h.streams) != 1 || h.streams[0].started != 1 {
+		t.Fatalf("transport built=%d started=%d, want 1/1", len(h.streams), h.streams[0].started)
+	}
+
+	// The transport's real upstream is pinned through the physical path...
+	if !h.has("ip", "route", "replace", "203.0.113.10/32", "via", "192.168.1.1", "dev", "eth0") {
+		t.Errorf("bypass route not pinned through the physical path:\n%v", h.callStrings())
+	}
+	// ...but the loopback peer endpoint needs no underlay route: loopback is
+	// resolved by the local table and is never captured by a tunnel route.
+	if h.has("ip", "route", "replace", "127.0.0.1/32") {
+		t.Errorf("underlay route pinned for the loopback bridge:\n%v", h.callStrings())
+	}
+
+	// The bypass route must exist before the obfuscated path's default route:
+	// from the moment that route exists, the transport's TLS egress would be
+	// routed into the tunnel it carries.
+	pinIdx, routeIdx := -1, -1
+	for i, c := range *h.calls {
+		joined := strings.Join(c.args, " ")
+		if c.name == "ip" && strings.HasPrefix(joined, "route replace 203.0.113.10/32") && pinIdx < 0 {
+			pinIdx = i
+		}
+		if c.name == "ip" && strings.HasPrefix(joined, "route replace default dev "+h.m.iface) && routeIdx < 0 {
+			routeIdx = i
+		}
+	}
+	if pinIdx < 0 || routeIdx < 0 {
+		t.Fatalf("bypass pin=%d, tunnel default route=%d, want both:\n%v", pinIdx, routeIdx, h.callStrings())
+	}
+	if pinIdx > routeIdx {
+		t.Errorf("bypass route pinned after the tunnel default route (%d > %d):\n%v", pinIdx, routeIdx, h.callStrings())
+	}
+}
+
+func TestDownObfuscatedWithStreamTransportStopsTheBridge(t *testing.T) {
+	h := newTransportHarness(t, false)
+	if _, err := h.m.Up(context.Background(), obfuscatedStreamConfig, streamSpec()); err != nil {
+		t.Fatalf("Up = %v, want nil", err)
+	}
+
+	if _, err := h.m.Down(context.Background()); err != nil {
+		t.Fatalf("Down = %v, want nil", err)
+	}
+	// The bridge goes down with the tunnel it carries, and its bypass route is
+	// swept, so a later start does not inherit a live transport or a stale pin.
+	if h.streams[0].stopped != 1 {
+		t.Errorf("transport stopped %d times, want 1", h.streams[0].stopped)
+	}
+	if h.dev.closed != 1 {
+		t.Errorf("device closed %d times, want 1", h.dev.closed)
 	}
 	if h.m.transport != nil {
-		t.Error("a rejected combination left a live transport marker")
+		t.Error("live transport marker survived teardown")
+	}
+	if !h.has("ip", "route", "del", "203.0.113.10/32") {
+		t.Errorf("bypass route left behind:\n%v", h.callStrings())
 	}
 }
 
