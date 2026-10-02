@@ -63,6 +63,14 @@ a compile-time define, so it works for `run`, `build`, and anything else. Plain
 get the localhost default. `.env` is gitignored; `.env.example` is the
 committed template.
 
+The root `Makefile` wraps this so the flag is applied once and stays out of
+the command: `make run` is `flutter run --dart-define-from-file=.env`, and
+`make build-linux` / `make build-apk` do the same for builds. `make help` lists
+every target. With no `.env` present it passes no file, so a fresh clone keeps
+the localhost default; `make env` prints which defines the file supplies (keys
+only, never values). Point it elsewhere with `make run ENV_FILE=staging.env`,
+or turn it off with `make run ENV_FILE=`.
+
 Every entry is a compile-time `--dart-define`, and `.env` is the preferred
 place for all of them. Besides `API_BASE_URL`, these are understood:
 
@@ -85,7 +93,8 @@ fails fast instead of shipping cleartext; and to run on a physical phone over
 a LAN, replace `localhost` with your machine's IP.
 
 Release packaging does not read `.env`: `distribute_options.yaml` pins the
-production URL per job, so CI needs no `.env` of its own.
+production URL per job, so CI needs no `.env` of its own. `make release` hands
+off to fastforge and inherits that pinning.
 
 Then: log in (username or email + password, or Continue with
 Google/GitHub) → Connect tab → toggle.
@@ -784,6 +793,9 @@ down a live tunnel on exactly the platforms that have no reader.
 ## Tests
 
 ```sh
+# The root Makefile wraps these: `make check` runs the CI order end to end,
+# and `make test`, `make coverage`, `make analyze`, `make generated`,
+# `make format-check`, `make verify-native` cover them one at a time.
 flutter test
 # Coverage (report-only unless the floor is passed):
 flutter test --coverage && bash tool/coverage_gate.sh 80

@@ -111,7 +111,7 @@ flutter test
 # Coverage (report-only unless the 80% floor is passed):
 flutter test --coverage && bash tool/coverage_gate.sh 80
 
-# Everything CI enforces:
+# Everything CI enforces (or run it all in CI order with `make check`):
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
