@@ -129,7 +129,7 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | stock plugin + in-process AWG (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG emulator proof passed; final overlay retest pending** |
+| **Android** | stock plugin + in-process AWG (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG emulator proof passed on final overlay build** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
 | **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
