@@ -5,9 +5,11 @@
 // WireGuard module has no concept of them, so an obfuscated tunnel runs the
 // AmneziaWG device in-process over a tun device instead — the same
 // architecture the macOS backend uses for stock wireguard-go — and this file
-// owns everything around it: the tun and device seams, the ip route plan that
-// keeps the device's own endpoint traffic on the physical path, resolver
-// state, teardown, and the status dump.
+// owns everything around it: the ip route plan that keeps the device's own
+// endpoint traffic on the physical path, resolver state, and teardown.
+//
+// The device seam, the obfuscation settings and the status projection are shared
+// with the Windows backend and live in awg_common.go.
 package tunnel
 
 import (
@@ -17,99 +19,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strconv"
 	"strings"
-
-	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
-	awgdevice "github.com/amnezia-vpn/amneziawg-go/v3/device"
-	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
 
 	"boltmeshd/internal/protocol"
 )
-
-const (
-	// awgDefaultMTU matches the value the native path's wg-quick file would
-	// derive for a WireGuard tunnel on an ordinary 1500-byte link.
-	awgDefaultMTU = 1420
-
-	// awgDefaultRouteMetric outranks any pre-existing default route so a
-	// strict-mode tunnel (0.0.0.0/0, ::/0) claims the default without
-	// replacing the physical one.
-	awgDefaultRouteMetric = "1"
-)
-
-// awgObfuscated reports whether a validated config carries the AmneziaWG
-// obfuscation directives. [config.Validate] enforces the all-or-none rule, so
-// one directive present means the complete set is; this only decides which
-// data plane the config belongs to.
-func awgObfuscated(directives []uapiDirective) bool {
-	for _, d := range directives {
-		if d.section == "interface" && awgDirectiveNames[d.key] {
-			return true
-		}
-	}
-	return false
-}
-
-// awgDevice is the seam over the in-process AmneziaWG device, mirroring the
-// darwin backend's wireguardDevice seam: UAPI request/response framing
-// translated into method calls, with the close ordering owned by the adapter.
-type awgDevice interface {
-	configure(ctx context.Context, body []byte) error
-	dump(ctx context.Context) ([]byte, error)
-	close() error
-}
-
-// newAwgDevice wires a real AmneziaWG device to its tun. The device owns the
-// tun from here on: closing it closes both.
-func newAwgDevice(tunDev awgtun.Device) (awgDevice, error) {
-	logger := &awgdevice.Logger{
-		// Route the data plane's own diagnostics into the daemon log instead
-		// of discarding them, so a device-side failure is not invisible.
-		Verbosef: func(format string, args ...any) {
-			slog.Debug("amneziawg: "+format, args...)
-		},
-		Errorf: func(format string, args ...any) {
-			slog.Error("amneziawg: "+format, args...)
-		},
-	}
-	return &goAwgDevice{
-		inner: awgdevice.NewDevice(tunDev, awgconn.NewDefaultBind(), logger),
-		tun:   tunDev,
-	}, nil
-}
-
-// goAwgDevice adapts an AmneziaWG device to the [awgDevice] seam.
-type goAwgDevice struct {
-	inner *awgdevice.Device
-	tun   awgtun.Device
-}
-
-func (d *goAwgDevice) configure(ctx context.Context, body []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return d.inner.IpcSet(string(body))
-}
-
-func (d *goAwgDevice) dump(ctx context.Context) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	out, err := d.inner.IpcGet()
-	if err != nil {
-		return nil, err
-	}
-	return []byte(out), nil
-}
-
-func (d *goAwgDevice) close() error {
-	// Device first, then the interface: the reverse order would leave the
-	// data plane reading a closed tun. Closing the tun removes the interface;
-	// the kernel flushes its routes with it.
-	d.inner.Close()
-	return d.tun.Close()
-}
 
 // liveAwgDevice returns the live userspace device, or nil when no userspace
 // tunnel is running. Safe to call concurrently with an operation in flight;
@@ -151,68 +64,6 @@ func (m *Manager) takeAwgEndpointRoutes() []string {
 	prefixes := m.awgEndpointRoutes
 	m.awgEndpointRoutes = nil
 	return prefixes
-}
-
-// obfSettings are the parts of an obfuscated wg-quick config the device
-// protocol does not carry and the backend must apply itself. Same shape as the
-// darwin backend's clientSettings, plus the endpoint (the underlay host route
-// needs it) and the MTU (the tun is created with it).
-type obfSettings struct {
-	address    string
-	dns        string
-	allowedIPs []string
-	endpoint   string
-	mtu        int
-}
-
-// parseObfuscatedSettings pulls the backend-applied settings out of a
-// validated obfuscated config. It is separate from [ConfigToUAPI] because the
-// device rejects these directives as unknown, yet the backend still needs
-// them. The endpoint is required: the underlay host route is what keeps the
-// device's own UDP out of the tunnel, and a config without it cannot come up
-// safely on this data plane.
-func parseObfuscatedSettings(text string) (obfSettings, error) {
-	var settings obfSettings
-	settings.mtu = awgDefaultMTU
-	for _, d := range parseWgQuick(text) {
-		switch {
-		case d.section == "interface" && d.key == "address":
-			if settings.address == "" {
-				settings.address = strings.TrimSpace(d.value)
-			}
-		case d.section == "interface" && d.key == "dns":
-			if settings.dns == "" {
-				settings.dns = strings.TrimSpace(d.value)
-			}
-		case d.section == "interface" && d.key == "mtu":
-			mtu, err := strconv.Atoi(strings.TrimSpace(d.value))
-			if err != nil || mtu < 576 || mtu > 65535 {
-				return settings, fmt.Errorf("invalid Mtu %q", d.value)
-			}
-			settings.mtu = mtu
-		case d.section == "peer" && d.key == "allowedips":
-			for _, cidr := range strings.Split(d.value, ",") {
-				if cidr = strings.TrimSpace(cidr); cidr != "" {
-					settings.allowedIPs = append(settings.allowedIPs, cidr)
-				}
-			}
-		case d.section == "peer" && d.key == "endpoint":
-			if settings.endpoint == "" {
-				endpoint, err := normalizeEndpoint(d.value)
-				if err != nil {
-					return settings, err
-				}
-				settings.endpoint = endpoint
-			}
-		}
-	}
-	if settings.address == "" {
-		return settings, errors.New("config is missing [Interface] Address")
-	}
-	if settings.endpoint == "" {
-		return settings, errors.New("config is missing [Peer] Endpoint")
-	}
-	return settings, nil
 }
 
 // ipRouteSpec is one family-aware `ip route` operation: v6 prefixes need the
@@ -408,28 +259,14 @@ func (m *Manager) applyObfuscatedNetwork(ctx context.Context, ipTool string, set
 func (m *Manager) planObfuscatedRoutes(ctx context.Context, ipTool string, settings obfSettings) (obfRoutePlan, error) {
 	var plan obfRoutePlan
 
-	host, _, err := net.SplitHostPort(settings.endpoint)
+	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
 	if err != nil {
-		return plan, fmt.Errorf("invalid Endpoint %q: %w", settings.endpoint, err)
-	}
-	var ips []net.IP
-	if literal := net.ParseIP(host); literal != nil {
-		ips = []net.IP{literal}
-	} else {
-		ips, err = m.resolveHost(ctx, host)
-		if err != nil {
-			return plan, fmt.Errorf("resolve endpoint %s: %w", host, err)
-		}
-		if len(ips) == 0 {
-			return plan, fmt.Errorf("endpoint %s resolved to no addresses", host)
-		}
+		return plan, err
 	}
 	for _, ip := range ips {
-		// A stream transport carries the tunnel with its peer endpoint on the
-		// bridge's loopback address, so there is no underlay host route to pin:
-		// loopback is resolved by the local table before any tunnel route and
-		// is never captured by one. The transport's real upstream (the node's
-		// TLS address) is pinned separately by [Manager.bringUpTransport].
+		// A loopback endpoint pins no underlay route: the local table resolves
+		// it before any tunnel route exists and none captures it. That is the
+		// stream-carried case, where the transport pins its real upstream.
 		if ip.IsLoopback() {
 			continue
 		}
@@ -501,14 +338,6 @@ func (m *Manager) physicalRouteFor(ctx context.Context, ipTool string, ip net.IP
 		return "", "", fmt.Errorf("route get %s: no device in output", ip)
 	}
 	return via, dev, nil
-}
-
-// hostPrefixFor renders the host route prefix for one endpoint address.
-func hostPrefixFor(ip net.IP) string {
-	if ip.To4() == nil {
-		return ip.String() + "/128"
-	}
-	return ip.String() + "/32"
 }
 
 // setResolverState mirrors the wg-quick set_dns choice and stays symmetric
@@ -662,57 +491,11 @@ func (m *Manager) underlayPrefixesFromConfig(ctx context.Context) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	host, _, err := net.SplitHostPort(settings.endpoint)
+	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
 	if err != nil {
 		return nil, err
 	}
-	var ips []net.IP
-	if literal := net.ParseIP(host); literal != nil {
-		ips = []net.IP{literal}
-	} else {
-		ips, err = m.resolveHost(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-	}
-	prefixes := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		// A loopback endpoint (a stream-carried tunnel) pinned no underlay
-		// route, so there is none to derive for teardown.
-		if ip.IsLoopback() {
-			continue
-		}
-		prefixes = append(prefixes, hostPrefixFor(ip))
-	}
-	return prefixes, nil
-}
-
-// readObfuscatedStatus projects the live device's dump into a status. A dump
-// failure is unknown, never proof of death: the caller must not mistake it
-// for a disconnected tunnel.
-func (m *Manager) readObfuscatedStatus(ctx context.Context, dev awgDevice) (*protocol.Status, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, statusReadError(err)
-	}
-	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
-	data, err := dev.dump(ctx)
-	if err != nil {
-		return nil, &protocol.OpError{
-			Code: protocol.CodeInternal,
-			Err:  fmt.Errorf("dump obfuscated device: %w", err),
-		}
-	}
-	peers, err := ParseUAPIPeersText(data)
-	if err != nil {
-		return nil, &protocol.OpError{
-			Code: protocol.CodeInternal,
-			Err:  fmt.Errorf("parse obfuscated device state: %w", err),
-		}
-	}
-	st.Up = true
-	st.Stage = protocol.StageConnected
-	applyPeers(st, peers)
-	return st, nil
+	return underlayPrefixesFor(ips), nil
 }
 
 // removeConfig deletes the privileged config file (best effort at call

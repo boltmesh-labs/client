@@ -21,33 +21,6 @@ import (
 	"boltmeshd/internal/protocol"
 )
 
-// fakeAwgDevice records the UAPI bodies it is configured with and replays a
-// canned dump.
-type fakeAwgDevice struct {
-	configureErr error
-	dumpErr      error
-	dumpBody     string
-	bodies       []string
-	closed       int
-}
-
-func (d *fakeAwgDevice) configure(_ context.Context, body []byte) error {
-	d.bodies = append(d.bodies, string(body))
-	return d.configureErr
-}
-
-func (d *fakeAwgDevice) dump(context.Context) ([]byte, error) {
-	if d.dumpErr != nil {
-		return nil, d.dumpErr
-	}
-	return []byte(d.dumpBody), nil
-}
-
-func (d *fakeAwgDevice) close() error {
-	d.closed++
-	return nil
-}
-
 // awgRunCall records one privileged tool invocation, including the stdin
 // payload resolvconf reads.
 type awgRunCall struct {

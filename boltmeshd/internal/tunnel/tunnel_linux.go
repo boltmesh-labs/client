@@ -340,7 +340,7 @@ func (m *Manager) readDeviceStatus(ctx context.Context) (*protocol.Status, error
 	// source instead. This branch must precede the wgctrl read, which would
 	// otherwise misreport the tunnel.
 	if dev := m.liveAwgDevice(); dev != nil {
-		return m.readObfuscatedStatus(ctx, dev)
+		return readObfuscatedStatus(ctx, m.iface, dev)
 	}
 	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
 	dev, err := m.device(m.iface)
