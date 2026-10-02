@@ -101,3 +101,12 @@ region's gateway `10.1.0.1` was 3/3; `boltmesh.mooo.com` resolved through the
 tunnel to `93.177.140.197` and replied. The bridge booked one fail-closed dial
 before the VpnService registered, then connected. The pin was reverted after the
 run; restoring the rung to a stream start still requires a demotion.
+
+Still pending: the obfuscated inner format (AmneziaWG directives inside the TLS
+stream). The run above used the stock region `test1` because `test2` (the AWG
+region) was reporting `error` — its node heartbeats `degraded`, so the control
+plane stops offering it and there is no healthy AWG node to test against. The
+bridge never inspects the datagrams, and the obfuscated data plane is proven
+separately, but repeat the pinned-rung run on a healthy AWG region to close it
+out; the state tests already pin that the stream config keeps `Jc` while
+pointing `Endpoint` at the bridge (`test/features/vpn/state/health_check_test.dart`).
