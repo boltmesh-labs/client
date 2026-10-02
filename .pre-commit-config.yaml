@@ -134,6 +134,26 @@ repos:
         files: ^stream/
         pass_filenames: false
 
+      # --- Go fmt / module metadata (Android AWG JNI) ---
+      # cgo module: `make -C android/awg-native check` (gofmt, tidy, vet,
+      # golangci-lint over all four ABIs) needs the Android NDK plus
+      # golangci-lint, so only the toolchain-free parts run here. CI runs the
+      # full check; a change under `android/awg-native/` fires these.
+      - id: go-fmt-awg-native
+        name: go fmt (awg-native)
+        entry: make -C android/awg-native format
+        language: system
+        types: [go]
+        files: ^android/awg-native/
+        pass_filenames: false
+
+      - id: go-mod-tidy-awg-native
+        name: go mod tidy check (awg-native)
+        entry: make -C android/awg-native mod-tidy-check
+        language: system
+        files: ^android/awg-native/
+        pass_filenames: false
+
       # --- Generated code (l10n + build_runner) ---
       - id: check-generated
         name: check generated code

@@ -51,20 +51,21 @@ var tunnelHandles map[int32]TunnelHandle
 
 func init() {
 	tunnelHandles = make(map[int32]TunnelHandle)
-	signals := make(chan os.Signal)
+	// Buffered: signal.Notify never blocks, so an unbuffered channel drops the
+	// signal whenever this goroutine is not parked on the receive — and SIGUSR2
+	// exists to dump stacks precisely when the app is stuck. Capacity 1 is
+	// what the package docs require.
+	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, unix.SIGUSR2)
 	go func() {
 		buf := make([]byte, os.Getpagesize())
-		for {
-			select {
-			case <-signals:
-				n := runtime.Stack(buf, true)
-				if n == len(buf) {
-					n--
-				}
-				buf[n] = 0
-				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
+		for range signals {
+			n := runtime.Stack(buf, true)
+			if n == len(buf) {
+				n--
 			}
+			buf[n] = 0
+			C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
 		}
 	}()
 }
@@ -79,7 +80,9 @@ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
 
 	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
 	if err != nil {
-		unix.Close(int(tunFd))
+		// The caller handed us the descriptor and the read failed, so nothing
+		// else will close it; the return below reports the failure.
+		_ = unix.Close(int(tunFd))
 		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
 		return -1
 	}

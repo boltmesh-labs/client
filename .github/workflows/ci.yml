@@ -208,9 +208,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # vet and lint for the JNI module need cgo with the NDK (this package
+      # includes <jni.h> and <android/log.h>), so the APK build's compile is not
+      # a gate on its own: it says nothing about vet, lint or formatting.
+      # tool/build_awg_android.py owns the toolchain wiring the APK build also
+      # uses and runs every ABI, mirroring the linux/Windows/macOS lint steps
+      # for boltmeshd. golangci-lint is installed rather than invoked as an
+      # action because the check needs that NDK environment for all four ABIs.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
       - name: Check Android AWG Go module
-        working-directory: android/awg-native
-        run: go mod tidy -diff
+        run: |
+          GOPATH_BIN="$(go env GOPATH)/bin"
+          export PATH="$GOPATH_BIN:$PATH"
+          make -C android/awg-native check
 
       # Compile the exact minified variant that is shipped. This catches R8
       # rule/dependency regressions on every PR; the debug fallback means no

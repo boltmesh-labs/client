@@ -48,6 +48,10 @@ make build                # Linux + Windows helper binaries in ignored bin/
 
 The stream transport's wire format and bridge live in the top-level `stream/` module (`boltmesh/stream`), imported by both `boltmeshd` and `android/awg-native` through a local `replace`. It is standard-library only and build-tag free; a change there runs its own suite (`make -C stream test`), and because `boltmeshd` imports it, keep `boltmeshd`'s build and tests green too.
 
+`android/awg-native` is the third Go module and is cgo, which changes what can be checked where: it includes `<jni.h>` and `<android/log.h>`, so `go vet` and `golangci-lint` need the NDK toolchain and cannot run on a plain Linux runner. `make -C android/awg-native check` (gofmt, `go mod tidy -diff`, then vet + lint over all four ABIs) is the gate and is what CI runs; it delegates to `python3 tool/build_awg_android.py --check`, which shares its NDK wiring with the APK build so the two cannot drift. The pre-commit hooks cover only the toolchain-free parts. An APK build compiling this module is **not** a gate — it says nothing about vet, lint, or formatting.
+
+`tool/build_awg_android.py` has two modes: the default cross-builds the four ABIs for the APK, and `--check` gates the module. Both share `resolve_ndk`/`toolchain_for`/`abi_env`, so a check cannot pass on a toolchain the shipped build does not use, and `android/awg-native/Makefile` exposes them as `check`, `format`, `mod-tidy-check`. Note that `bash tool/verify_native.sh` is *not* this module's gate — it covers the C++ pipe test and the desktop Go modules.
+
 ## High-risk conventions
 
 - Generated Dart is committed but excluded from analysis: `lib/l10n/gen/**`, `**/*.freezed.dart`, and `**/*.g.dart`. Never hand-edit it; after changing `.arb` files or freezed/JSON models run `bash tool/check_generated.sh` and commit the regenerated output.
