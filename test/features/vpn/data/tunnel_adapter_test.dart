@@ -478,6 +478,10 @@ void main() {
         final tunnel = HangingTunnel([]);
         final adapter = AndroidTunnelAdapter(
           stock: WireGuardTunnelAdapter.test(tunnel),
+          resolveStreamServer: (server) async {
+            expect(server, 'node.example:443');
+            return '203.0.113.9:443';
+          },
         );
         Map<String, Object?>? startArgs;
         messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
@@ -514,11 +518,57 @@ void main() {
         expect(spec['mode'], 'stream');
         expect(spec['listen'], '127.0.0.1:51821');
         expect(spec['deliver'], '127.0.0.1:51822');
-        expect(spec['server'], 'node.example:443');
+        // Resolved before the native start, while the TUN is down: the bridge
+        // dials a literal address and never resolves through the tunnel it
+        // carries. The hostname survives only as the TLS SNI/verification name.
+        expect(spec['server'], '203.0.113.9:443');
         expect(spec['server_name'], 'node.example');
         expect(spec['spki_sha256'], ['pin']);
       },
     );
+
+    test('stops the native tunnel when a stream start fails', () async {
+      // A start the controller has given up on must not leave a live TUN
+      // behind, or the app and the device start disagreeing about the state.
+      final tunnel = HangingTunnel([]);
+      final adapter = AndroidTunnelAdapter(
+        stock: WireGuardTunnelAdapter.test(tunnel),
+        resolveStreamServer: (_) async => '203.0.113.9:443',
+      );
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        if (call.method == 'startAwg') {
+          throw PlatformException(code: 'AWG_START_FAILED');
+        }
+        return <String, Object?>{};
+      });
+      const transport = TunnelTransport(
+        listen: '127.0.0.1:51821',
+        deliver: '127.0.0.1:51822',
+        credential: StreamTransport(
+          server: 'node.example:443',
+          serverName: 'node.example',
+          spkiPins: ['pin'],
+          psk: 'psk',
+          clientId: 'cid',
+        ),
+      );
+
+      await expectLater(
+        adapter.start(
+          serverAddress: '198.51.100.1',
+          wgQuickConfig: stockConfig,
+          providerBundleId: '',
+          transport: transport,
+        ),
+        throwsA(isA<PlatformException>()),
+      );
+
+      expect(calls, ['stopAwg', 'startAwg', 'stopAwg']);
+    });
 
     test(
       'reads liveness and the handshake from the active AWG backend',

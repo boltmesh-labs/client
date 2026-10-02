@@ -102,11 +102,20 @@ tunnel to `93.177.140.197` and replied. The bridge booked one fail-closed dial
 before the VpnService registered, then connected. The pin was reverted after the
 run; restoring the rung to a stream start still requires a demotion.
 
-Still pending: the obfuscated inner format (AmneziaWG directives inside the TLS
-stream). The run above used the stock region `test1` because `test2` (the AWG
-region) was reporting `error` — its node heartbeats `degraded`, so the control
-plane stops offering it and there is no healthy AWG node to test against. The
-bridge never inspects the datagrams, and the obfuscated data plane is proven
-separately, but repeat the pinned-rung run on a healthy AWG region to close it
-out; the state tests already pin that the stream config keeps `Jc` while
-pointing `Endpoint` at the bridge (`test/features/vpn/state/health_check_test.dart`).
+Both inner formats are now proven. On the AWG region `test2`, with the rung
+pinned the same way, logcat showed `UAPI: Updating h1 padding` … `Updating
+header protection key` (the obfuscated inner config), `Received handshake
+response`, and `Connected · test2`; `tun0` came up on test2's overlay
+(`10.2.103.148/32`, DNS `10.2.0.1`), ping to `10.2.0.1` was 3/3, and
+`boltmesh.mooo.com` resolved through the tunnel. So the stream carries a stock
+*and* an obfuscated inner config.
+
+The node host is resolved in Dart before the native start and before the TUN
+exists (`lib/features/vpn/data/stream_server_resolver_io.dart`), and the bridge
+is handed a literal `address:port`; `server_name` stays the hostname for TLS
+SNI/verification. Resolving inside the native start was tried first, but it put
+a variable, potentially slow lookup inside the ten-second start budget, and on a
+loaded emulator that could blow the budget while the native tunnel still came
+up — the app showed `Error` with a live TUN. A literal address keeps the native
+start fast and the two states consistent; the bridge rejects a hostname that
+reaches it. After that change the same connect completed in about a second.

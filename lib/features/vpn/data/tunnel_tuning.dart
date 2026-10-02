@@ -13,6 +13,15 @@ abstract final class TunnelTuning {
   /// stall on its own) instead of stalling detection past the next tick.
   static const healthTimeout = Duration(seconds: 3);
 
+  /// Bound for resolving the stream node's host to an address before the
+  /// tunnel start. It is done up front because once the tunnel is up this app's
+  /// resolver follows the tunnel, and resolving the node through the tunnel
+  /// that the node's stream is needed to bring up is a deadlock. Kept under
+  /// [opTimeout] so the resolution plus the native start still fit a start
+  /// budget, and bounded so a broken resolver cannot stall a connect whose
+  /// whole point is a broken network.
+  static const streamResolveTimeout = Duration(seconds: 8);
+
   /// Bound for native tunnel stops. Graceful teardown gets this long, then an
   /// automated hard-kill retry fires without user input. The plugin adapter
   /// uses the same budget; the helper uses [helperStopRetryTimeout] for the

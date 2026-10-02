@@ -14,6 +14,9 @@ import 'helper_socket_stub.dart'
     as helper_platform;
 import 'helper_tunnel_adapter.dart';
 import 'platform_info.dart';
+import 'stream_server_resolver_stub.dart'
+    if (dart.library.io) 'stream_server_resolver_io.dart'
+    as stream_resolver;
 import 'stream_transport.dart';
 import 'tunnel_tuning.dart';
 
@@ -435,10 +438,19 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
 /// selects by config shape and keeps status/teardown directed to the backend
 /// that currently owns Android's single VpnService TUN.
 class AndroidTunnelAdapter implements TunnelAdapter {
-  AndroidTunnelAdapter({WireGuardTunnelAdapter? stock})
-    : _stock = stock ?? WireGuardTunnelAdapter();
+  AndroidTunnelAdapter({
+    WireGuardTunnelAdapter? stock,
+    Future<String> Function(String server)? resolveStreamServer,
+  }) : _stock = stock ?? WireGuardTunnelAdapter(),
+       _resolveStreamServer =
+           resolveStreamServer ?? stream_resolver.resolveStreamServer;
 
   final WireGuardTunnelAdapter _stock;
+
+  /// Resolves the stream node's host to a literal address before the start.
+  /// Injectable so the hand-off is testable without a real lookup.
+  final Future<String> Function(String server) _resolveStreamServer;
+
   bool _awgActive = false;
 
   @visibleForTesting
@@ -487,16 +499,33 @@ class AndroidTunnelAdapter implements TunnelAdapter {
     // config unchanged (every obfuscation directive defaults off).
     if (transport != null || _awgDirective.hasMatch(wgQuickConfig)) {
       // Android allows one owning VPN TUN. Tear down either previous engine
-      // before transferring ownership to the other one.
+      // before transferring ownership to the other one — and before resolving
+      // the node, so the query cannot follow a still-live tunnel.
       await _stopAwg('restart Android AWG tunnel');
       await _stock.stop('switch Android VPN owner to AWG');
-      await awgChannel
-          .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
-            'wgQuickConfig': wgQuickConfig,
-            if (transport != null)
-              'streamSpec': jsonEncode(transport.toSpecJson()),
-          })
-          .timeout(TunnelTuning.opTimeout);
+      final spec = transport?.toSpecJson();
+      if (spec != null) {
+        // Hand the bridge a literal address: once the TUN exists the app's
+        // resolver follows it, so the node's hostname would resolve through
+        // the very tunnel the bridge is needed to bring up. Resolving here,
+        // before the native start, keeps the query on the physical network.
+        spec['server'] = await _resolveStreamServer(spec['server']! as String);
+      }
+      try {
+        await awgChannel
+            .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
+              'wgQuickConfig': wgQuickConfig,
+              if (spec != null) 'streamSpec': jsonEncode(spec),
+            })
+            .timeout(TunnelTuning.opTimeout);
+      } catch (_) {
+        // A failed or timed-out start must not leave a live TUN behind that
+        // the controller has already given up on, or the app and the device
+        // disagree about the connection. The native side serializes stop
+        // after an in-flight start, so this cannot race the start's cleanup.
+        await _stopAwg('start failed');
+        rethrow;
+      }
       _awgActive = true;
       return;
     }

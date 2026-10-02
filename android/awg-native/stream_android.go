@@ -33,7 +33,7 @@ type streamSpec struct {
 	ClientID   string   `json:"client_id"`
 }
 
-func (s streamSpec) clientConfig(serverAddr string) (stream.ClientConfig, error) {
+func (s streamSpec) clientConfig() (stream.ClientConfig, error) {
 	if s.Mode != "stream" {
 		return stream.ClientConfig{}, fmt.Errorf("stream: unsupported mode %q", s.Mode)
 	}
@@ -56,7 +56,7 @@ func (s streamSpec) clientConfig(serverAddr string) (stream.ClientConfig, error)
 	return stream.ClientConfig{
 		ListenAddr:  s.Listen,
 		DeliverAddr: s.Deliver,
-		ServerAddr:  serverAddr,
+		ServerAddr:  s.Server,
 		ServerName:  s.ServerName,
 		SPKIPins:    pins,
 		PSK:         psk,
@@ -96,33 +96,20 @@ func protectDial(_, _ string, c syscall.RawConn) error {
 	return protectErr
 }
 
-// resolveServer turns the node hostname into an address before the tunnel comes
-// up. Go's resolver would otherwise follow the app's default network, which is
-// this very tunnel once it is established: resolving the node through the
-// tunnel that the node's stream is needed to bring up is a deadlock.
-// awgStartStream runs before the engine is started, so the query goes out on
-// the physical network.
-func resolveServer(server string) (string, error) {
-	host, port, err := net.SplitHostPort(server)
+// requireLiteralServer rejects a hostname. The Dart layer resolves the node to
+// a literal address before the start, because once the tunnel is up this app's
+// resolver follows it and dialing the node through the tunnel its stream is
+// needed to bring up is a deadlock. Failing fast here turns a slip in that
+// contract into an error instead of a stalled connect.
+func requireLiteralServer(server string) error {
+	host, _, err := net.SplitHostPort(server)
 	if err != nil {
-		return "", fmt.Errorf("stream: server must be host:port: %w", err)
+		return fmt.Errorf("stream: server must be host:port: %w", err)
 	}
-	if net.ParseIP(host) != nil {
-		return server, nil
+	if net.ParseIP(host) == nil {
+		return fmt.Errorf("stream: server %q is not a literal address", host)
 	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return "", fmt.Errorf("stream: resolve %s: %w", host, err)
-	}
-	for _, ip := range ips {
-		if v4 := ip.To4(); v4 != nil {
-			return net.JoinHostPort(v4.String(), port), nil
-		}
-	}
-	if len(ips) > 0 {
-		return net.JoinHostPort(ips[0].String(), port), nil
-	}
-	return "", fmt.Errorf("stream: %s resolved to no addresses", host)
+	return nil
 }
 
 var (
@@ -138,12 +125,11 @@ func awgStartStream(specJSON string) int32 {
 		streamLogf("start: bad spec: %v", err)
 		return -1
 	}
-	serverAddr, err := resolveServer(spec.Server)
-	if err != nil {
+	if err := requireLiteralServer(spec.Server); err != nil {
 		streamLogf("start: %v", err)
 		return -1
 	}
-	cfg, err := spec.clientConfig(serverAddr)
+	cfg, err := spec.clientConfig()
 	if err != nil {
 		streamLogf("start: %v", err)
 		return -1
