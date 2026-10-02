@@ -8,7 +8,8 @@ secrets and the test suite, see [README.md](README.md).
 
 - Flutter SDK 3.47.x stable (`flutter --version`).
 - Git.
-- Go 1.26 (used by `boltmeshd` and to build Android's AWG JNI library).
+- Go 1.26 (used by `boltmeshd`; also builds the shared `stream` module and
+  Android's AWG/stream JNI library).
 - A running backend (`podman-compose up -d` from the
   [`infra`](https://github.com/boltmesh-labs/infra) repo) plus a user account
   (`POST /v1/auth/register`).

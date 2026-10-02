@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -56,6 +57,14 @@ type ClientConfig struct {
 
 	ReconnectMin time.Duration
 	ReconnectMax time.Duration
+
+	// DialControl, when set, is installed on the dialer and runs after the
+	// socket is created but before it is connected. The Android build uses it
+	// to protect the socket from its own VpnService — the only window in which
+	// the kernel route can still be chosen for the physical network. Returning
+	// an error aborts the dial, so a failure to protect fails closed instead of
+	// leaking a connection into the tunnel this bridge exists to bypass.
+	DialControl func(network, address string, c syscall.RawConn) error
 
 	// OnSession reports session transitions, so the caller can gate
 	// readiness on a live session rather than on a bound socket.
@@ -302,7 +311,7 @@ func (c *Client) runSession(stopped <-chan struct{}) error {
 	}
 
 	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: dialTimeout},
+		NetDialer: &net.Dialer{Timeout: dialTimeout, Control: c.cfg.DialControl},
 		Config:    c.tlsConfig(),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)

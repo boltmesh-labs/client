@@ -129,7 +129,7 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | stock plugin + in-process AWG (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG emulator proof passed on final overlay build** |
+| **Android** | stock plugin + in-process AWG/stream (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG + stream emulator proofs passed** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
 | **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
@@ -626,7 +626,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   the health policy confirmed dead *locally* is rebuilt one rung lower per
   heal, so an unobstructed network pays nothing. `native` (platform WireGuard) →
   `awg` (in-process AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams
-  inside a TLS session to the node, Linux and Windows). A stock region's node
+  inside a TLS session to the node, Linux, Windows, and Android). A stock region's node
   runs stock WireGuard, so its floor is `native`; an obfuscated region's node
   runs the AmneziaWG device, so a stock datagram is illegible to it and its
   floor is `awg` — starting native there would be a guaranteed-failed attempt
@@ -634,18 +634,22 @@ rest of the pipeline (which files, when, verify) is unchanged.
   the fingerprint the rung exists to hide. The floor is re-derived on every
   start, so a server move follows the new region's format and never keeps a
   rung the new region cannot serve. A rung is only selected when the region can
-  serve it *and* this platform can run it *and* the installed helper advertises
-  `stream-transport` — the daemon advertises that token only on builds whose
-  `up` would honour the spec, so an older helper or a macOS one keeps the rung
-  off the ladder instead of selecting a rung guaranteed to be refused.
+  serve it *and* this platform can run it *and* the data plane advertises
+  `stream-transport` — the `boltmeshd` daemon advertises that token only on
+  builds whose `up` would honour the spec, and the Android adapter advertises it
+  for its in-process native bridge, so an older helper or a macOS one keeps the
+  rung off the ladder instead of selecting a rung guaranteed to be refused.
   - The two lower rungs have different platform reach. The **stream** transport
-  is a bridge plus a bypass route: the bridge is platform-independent, and the
-  route is a `/32` through the physical interface installed *before* the
-  tunnel's own routes exist — on Linux ahead of `wg-quick` (and repeated in
-  each table `wg-quick`'s fwmark policy rules select), on Windows ahead of the
-  tunnel service (where the longest-prefix match wins outright, so one route
-  is enough). **Windows gets the stream rung on stock regions**; Android does
-  not yet have the stream lifecycle/bypass implementation. The **AWG** data
+  is a bridge plus a way to keep the bridge's own egress off the tunnel it
+  carries. The bridge is the same `boltmesh/stream` code everywhere; what
+  differs is the bypass. On Linux and Windows it is a `/32` through the physical
+  interface installed *before* the tunnel's own routes exist — on Linux ahead of
+  `wg-quick` (and repeated in each table `wg-quick`'s fwmark policy rules
+  select), on Windows ahead of the tunnel service (where the longest-prefix
+  match wins outright, so one route is enough). Android has no route to pin:
+  `VpnService.protect` exempts the bridge's TLS socket from the tunnel, so the
+  rung reaches stock and obfuscated regions there too, and the bridge runs on the
+  AWG host's VpnService even for a stock inner config. The **AWG** data
   plane runs in-process on Linux and Windows, and through Android's VpnService
   TUN. Windows cannot use its stock kernel service for AWG because that service
   has no concept of the obfuscation directives. The desktop adapters are Linux
@@ -667,8 +671,9 @@ rest of the pipeline (which files, when, verify) is unchanged.
   surfaces the refusal instead of hiding it. Demotion rides the existing heal
   (no new budget, timer, or state) and is sticky across connects: no automatic
   promotion, because every promotion re-pays for a probe that already failed.
-  One rung at a time — the helper rejects a stream transport combined with the
-  AmneziaWG directives.
+  One rung at a time — a start runs on a single rung, and the transport carries
+  the region's own inner format: an obfuscated region's stream is the AmneziaWG
+  conf inside the TLS session, never a stock one.
   The heal budget is one restart per session, so a region offering both AWG
   and stream reaches stream *across* a server move or reconnect rather than
   within one outage: the rung is sticky while the budget resets. A heal that

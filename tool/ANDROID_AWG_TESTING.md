@@ -1,4 +1,4 @@
-# Android AmneziaWG test notes
+# Android AmneziaWG and stream test notes
 
 ## Build and attach the emulator
 
@@ -55,8 +55,49 @@ notification.
   appears to be a UTP/remote-device result issue, not a failed test assertion.
   Recheck on the CI-local API 30/35 emulators when CI is next intentionally run;
   do not poll CI for this task.
-- Android supports native → AWG; the stream rung remains unavailable on Android.
-  Do not live-test a stock-format handshake against test2: that would send a
-  plaintext WireGuard handshake to an AWG-only node. The Android policy test
-  instead verifies the AWG floor is chosen, and unsupported platforms refuse
-  the region rather than falling back to stock.
+- Android supports native → AWG → stream. Do not live-test a stock-format
+  handshake against an AWG-only node: that would send a plaintext WireGuard
+  handshake to it. The Android policy test instead verifies the AWG floor is
+  chosen, and unsupported platforms refuse the region rather than falling back
+  to stock.
+
+## Stream rung
+
+The stream rung runs the same `boltmesh/stream` bridge `boltmeshd` runs, inside
+the AWG host's native library, and keeps its TLS socket off the tunnel with
+`VpnService.protect` instead of a route. It is reached only after a confirmed
+local stall demotes AWG → stream, so to exercise it on a device without inducing
+a stall, temporarily pin the rung:
+
+```bash
+# lib/features/vpn/state/connection_controller.dart
+-  ObfuscationRung _obfuscationRung = ObfuscationRung.native;
++  ObfuscationRung _obfuscationRung = ObfuscationRung.stream;  // revert after
+flutter build apk --debug --dart-define=API_BASE_URL=https://api.boltmesh.mooo.com/v1
+```
+
+Connect to a region with a usable `stream` credential and enough capacity
+(`test1` / US East 99 is stock; `test2` / US East 98 is obfuscated), then:
+
+```bash
+adb logcat -d | grep 'boltmesh0-stream'          # session established
+adb logcat -d | grep 'Received handshake response'
+adb shell dumpsys connectivity | grep -oE 'InterfaceName: tun0.*DnsAddresses: \[ [0-9./]+ \]'
+```
+
+The overlay gateway is per-region (`10.1.0.1` for test1, `10.2.0.1` for test2),
+so ping the one `dumpsys` reports. Expect an early
+`session unavailable: ... could not be protected from the VPN` line before the
+VpnService registers the protector: the bridge fails closed until then and
+retries, which is the intended behavior, not a failure. A successful run shows a
+later `session established`, an inner `Received handshake response`, and tunnel
+DNS resolution.
+
+Verified on the final build: with the rung pinned, the app connected to test1
+(stock inner config). Logcat showed
+`stream: session established with <node>:443`, the inner WireGuard handshake
+response, and `[BoltMesh] tunnel connected ... server=test1`. Ping to the
+region's gateway `10.1.0.1` was 3/3; `boltmesh.mooo.com` resolved through the
+tunnel to `93.177.140.197` and replied. The bridge booked one fail-closed dial
+before the VpnService registered, then connected. The pin was reverted after the
+run; restoring the rung to a stream start still requires a demotion.

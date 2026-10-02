@@ -6,6 +6,7 @@ import android.os.Build
 import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import org.amnezia.awg.config.Config
+import org.amnezia.awg.GoBackend as AwgJni
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 
@@ -31,30 +32,50 @@ internal object AndroidAwgHost {
   @Volatile private var backend: GoBackend? = null
   @Volatile private var liveConfig: Config? = null
 
-  fun start(context: Context, wgQuickConfig: String): Map<String, Any> = synchronized(lock) {
+  /// The native stream bridge for the current start, or -1. Started before the
+  /// engine so the loopback port the tunnel's peer points at is bound when the
+  /// engine sends its first datagram, and stopped with the tunnel.
+  @Volatile private var liveStreamHandle: Int = -1
+
+  fun start(context: Context, wgQuickConfig: String, streamSpec: String? = null): Map<String, Any> = synchronized(lock) {
     val parsed = Config.parse(
       ByteArrayInputStream(wgQuickConfig.toByteArray(StandardCharsets.UTF_8)),
     )
     require(parsed.peers.size == 1) { "BoltMesh Android AWG requires one peer" }
 
     val owner = backend ?: GoBackend(context.applicationContext).also { backend = it }
+    var streamHandle = -1
+    if (streamSpec != null) {
+      streamHandle = AwgJni.awgStartStream(streamSpec)
+      check(streamHandle > 0) { "AmneziaWG stream bridge did not start" }
+    }
     try {
       val state = owner.setState(tunnel, Tunnel.State.UP, parsed)
       check(state == Tunnel.State.UP) { "AmneziaWG backend did not bring the tunnel up" }
       liveConfig = parsed
+      liveStreamHandle = streamHandle
       startForegroundNotification(context.applicationContext)
       statusLocked(owner)
     } catch (failure: Throwable) {
       // Do not leave a live TUN behind if its keep-alive notification could not
       // be started or the backend only partially accepted the config.
+      if (streamHandle > 0) {
+        runCatching { AwgJni.awgStopStream(streamHandle) }
+      }
       runCatching { owner.setState(tunnel, Tunnel.State.DOWN, null) }
       liveConfig = null
+      liveStreamHandle = -1
       stopForegroundNotification(context.applicationContext)
       throw failure
     }
   }
 
   fun stop(context: Context): Map<String, Any> = synchronized(lock) {
+    val streamHandle = liveStreamHandle
+    liveStreamHandle = -1
+    if (streamHandle > 0) {
+      runCatching { AwgJni.awgStopStream(streamHandle) }
+    }
     val owner = backend
     if (owner != null && owner.getState(tunnel) == Tunnel.State.UP) {
       owner.setState(tunnel, Tunnel.State.DOWN, null)

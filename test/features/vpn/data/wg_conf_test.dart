@@ -494,7 +494,7 @@ void main() {
       );
       expect(
         streamTransportSupported(platform: TargetPlatform.android),
-        isFalse,
+        isTrue,
       );
       expect(streamTransportSupported(platform: TargetPlatform.macOS), isFalse);
       expect(

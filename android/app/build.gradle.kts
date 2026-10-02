@@ -141,6 +141,9 @@ val buildAwgAndroidNative = tasks.register<Exec>("buildAwgAndroidNative") {
     group = "build"
     description = "Build AmneziaWG's Android JNI libraries"
     inputs.dir(awgNativeDir)
+    // The stream bridge imports the shared module, so a change there has to
+    // rebuild the native library too, not just the Dart side.
+    inputs.dir(rootProject.file("../stream"))
     inputs.file(awgBuildScript)
     inputs.property("goVersion", "1.26")
     inputs.property("ndkVersion", awgNdkVersion)

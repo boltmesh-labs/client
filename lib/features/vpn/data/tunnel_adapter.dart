@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,7 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart
 import 'package:wireguard_flutter_plus/wireguard_flutter_plus.dart';
 
 import '../../../core/log.dart';
+import 'helper_client.dart' show capStreamTransport;
 import 'helper_socket_stub.dart'
     if (dart.library.io) 'helper_socket_io.dart'
     as helper_platform;
@@ -73,9 +75,11 @@ abstract class TunnelAdapter {
     TunnelTransport? transport,
   });
 
-  /// Capability tokens the backing daemon advertised. Empty when there is no
-  /// daemon (the plugin path), which is why it is safe to gate a rung on:
-  /// "no daemon" reads as "no transport support".
+  /// Capability tokens the backing data plane advertises. Empty when there is
+  /// no daemon (the plugin path), which is why it is safe to gate a rung on:
+  /// "no daemon" reads as "no transport support". The Android adapter is the
+  /// exception — it has no daemon either, but its in-process native bridge can
+  /// run the stream transport, so it advertises the same token.
   Set<String> get daemonCapabilities => const <String>{};
 
   /// Graceful teardown with an automated hard-kill retry. Never throws.
@@ -455,8 +459,12 @@ class AndroidTunnelAdapter implements TunnelAdapter {
   @override
   Future<void> ensureInitialized() => _stock.ensureInitialized();
 
+  /// Android has no privileged daemon, but its in-process native bridge is a
+  /// real stream data plane, so it advertises the token the ladder gates on.
+  /// Without it `_streamRungAvailable` would never offer the rung here even
+  /// though the bridge can run it.
   @override
-  Set<String> get daemonCapabilities => const <String>{};
+  Set<String> get daemonCapabilities => const <String>{capStreamTransport};
 
   @override
   bool get handshakeReaderSupported => true;
@@ -471,13 +479,13 @@ class AndroidTunnelAdapter implements TunnelAdapter {
     required String providerBundleId,
     TunnelTransport? transport,
   }) async {
-    if (transport != null) {
-      throw UnsupportedError(
-        'Android does not have a stream transport backend yet.',
-      );
-    }
-
-    if (_awgDirective.hasMatch(wgQuickConfig)) {
+    // The stream rung points the peer endpoint at the bridge's loopback
+    // address. It always runs on the AWG host — the in-process engine that
+    // owns the VpnService the bridge protects its TLS socket through — even
+    // when the inner config is stock: the plugin's data plane owns its own
+    // VpnService and cannot carry the bridge. The AWG engine parses a stock
+    // config unchanged (every obfuscation directive defaults off).
+    if (transport != null || _awgDirective.hasMatch(wgQuickConfig)) {
       // Android allows one owning VPN TUN. Tear down either previous engine
       // before transferring ownership to the other one.
       await _stopAwg('restart Android AWG tunnel');
@@ -485,6 +493,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
       await awgChannel
           .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
             'wgQuickConfig': wgQuickConfig,
+            if (transport != null)
+              'streamSpec': jsonEncode(transport.toSpecJson()),
           })
           .timeout(TunnelTuning.opTimeout);
       _awgActive = true;

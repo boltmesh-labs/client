@@ -23,6 +23,8 @@ import org.amnezia.awg.crypto.Key;
 import org.amnezia.awg.crypto.KeyFormatException;
 import org.amnezia.awg.util.NonNullForAll;
 
+import com.boltmesh.boltmesh.StreamSocketProtector;
+
 import java.net.InetAddress;
 import java.util.Collections;
 import java.util.Set;
@@ -499,6 +501,15 @@ public final class GoBackend implements Backend {
         @Override
         public void onCreate() {
             vpnService.complete(this);
+            // BoltMesh addition: the stream bridge protects its TLS socket
+            // through this service. Guarded because Always-on VPN can start the
+            // service before our native library is loaded; a miss only means
+            // the stream rung fails closed until the next attach.
+            try {
+                StreamSocketProtector.nativeAttach(this);
+            } catch (final Throwable t) {
+                Log.w(TAG, "stream socket protector unavailable", t);
+            }
             super.onCreate();
         }
 
@@ -514,6 +525,10 @@ public final class GoBackend implements Backend {
                     owner.currentConfig = null;
                     tunnel.onStateChange(State.DOWN);
                 }
+            }
+            try {
+                StreamSocketProtector.nativeDetach(this);
+            } catch (final Throwable ignored) {
             }
             vpnService = vpnService.newIncompleteFuture();
             super.onDestroy();

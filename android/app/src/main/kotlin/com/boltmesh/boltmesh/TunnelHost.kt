@@ -188,10 +188,13 @@ internal object TunnelHost {
             result.error("BAD_CONFIG", "AWG config is missing", null)
             return@setMethodCallHandler
           }
+          // Present only on the stream rung: the validated transport spec the
+          // native bridge dials the node with. Null on the plain AWG rung.
+          val streamSpec = call.argument<String>("streamSpec")
           val app = appContext ?: context.applicationContext
           ioScope.launch {
             val reply = try {
-              AndroidAwgHost.start(app, wgQuickConfig)
+              AndroidAwgHost.start(app, wgQuickConfig, streamSpec)
             } catch (t: Throwable) {
               Log.w(LOG_TAG, "AWG tunnel start failed (${t.javaClass.simpleName})")
               main.post {

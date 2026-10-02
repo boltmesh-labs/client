@@ -46,6 +46,8 @@ make build                # Linux + Windows helper binaries in ignored bin/
 
 `make all` is a broad build/check target but does not replace `make lint-windows` or Windows-tagged tests. `bin/` is ignored; do not commit helper binaries.
 
+The stream transport's wire format and bridge live in the top-level `stream/` module (`boltmesh/stream`), imported by both `boltmeshd` and `android/awg-native` through a local `replace`. It is standard-library only and build-tag free; a change there runs its own suite (`make -C stream test`), and because `boltmeshd` imports it, keep `boltmeshd`'s build and tests green too.
+
 ## High-risk conventions
 
 - Generated Dart is committed but excluded from analysis: `lib/l10n/gen/**`, `**/*.freezed.dart`, and `**/*.g.dart`. Never hand-edit it; after changing `.arb` files or freezed/JSON models run `bash tool/check_generated.sh` and commit the regenerated output.

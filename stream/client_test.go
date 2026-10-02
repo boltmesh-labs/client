@@ -8,8 +8,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -415,6 +418,102 @@ func TestClientOffersALPNLikeABrowser(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the session was never handed to the test")
+	}
+}
+
+// dialControlClient builds a client that records how many times its
+// DialControl hook ran, so the Android protect path can be pinned without a
+// device.
+func dialControlClient(
+	t *testing.T,
+	node *stubNode,
+	psk, cid []byte,
+	control func(network, address string, c syscall.RawConn) error,
+) (*Client, chan bool) {
+	t.Helper()
+	deliver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deliver.Close() })
+	reports := make(chan bool, 8)
+	client, err := NewClient(ClientConfig{
+		ListenAddr:   "127.0.0.1:0",
+		DeliverAddr:  deliver.LocalAddr().String(),
+		ServerAddr:   node.addr(),
+		ServerName:   "stream.test",
+		SPKIPins:     [][]byte{node.pin},
+		PSK:          psk,
+		ClientID:     cid,
+		ReconnectMin: 10 * time.Millisecond,
+		ReconnectMax: 20 * time.Millisecond,
+		DialControl:  control,
+		OnSession: func(up bool, _ error) {
+			select {
+			case reports <- up:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Stop() })
+	return client, reports
+}
+
+// TestDialControlRunsBeforeConnect pins the Android protect contract: the hook
+// runs on the dial and can reach the raw socket before the connection is
+// established — the only window in which VpnService.protect can keep the
+// socket off the tunnel it is carrying.
+func TestDialControlRunsBeforeConnect(t *testing.T) {
+	psk, cid := testKeyPair(t, 7)
+	node := newStubNode(t, psk, cid, false)
+	var calls atomic.Int32
+	var gotFd atomic.Uintptr
+	client, reports := dialControlClient(t, node, psk, cid, func(_ string, _ string, c syscall.RawConn) error {
+		calls.Add(1)
+		return c.Control(func(fd uintptr) { gotFd.Store(fd) })
+	})
+	client.Start()
+
+	select {
+	case up := <-reports:
+		if !up {
+			t.Fatal("the session did not come up")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no session")
+	}
+	if calls.Load() == 0 {
+		t.Error("DialControl was never called")
+	}
+	if gotFd.Load() <= 2 {
+		t.Errorf("DialControl saw socket fd %d, want a real descriptor", gotFd.Load())
+	}
+}
+
+// TestDialControlFailureFailsClosed pins that a protection failure aborts the
+// dial rather than connecting unprotected: a connection that leaked into the
+// tunnel would defeat the rung and could not be retracted.
+func TestDialControlFailureFailsClosed(t *testing.T) {
+	psk, cid := testKeyPair(t, 8)
+	node := newStubNode(t, psk, cid, false)
+	client, reports := dialControlClient(t, node, psk, cid, func(_ string, _ string, _ syscall.RawConn) error {
+		return errors.New("protection unavailable")
+	})
+	client.Start()
+
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case up := <-reports:
+			if up {
+				t.Fatal("a session came up despite failed protection")
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
 

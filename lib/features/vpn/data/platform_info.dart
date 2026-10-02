@@ -52,14 +52,16 @@ bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
       p == TargetPlatform.android;
 }
 
-/// True where the stream transport is available: the `boltmeshd` helper runs the
-/// bridge in-process on Linux and Windows, and only those builds have a
-/// transport lifecycle and a bypass route. Everywhere else the daemon *rejects*
-/// a transport spec rather than ignoring it, so a rung selected there could
-/// only fail — the platform gate keeps the ladder from offering it.
+/// True where the stream transport is available. Linux and Windows run the
+/// bridge in-process in `boltmeshd`, which also owns the transport lifecycle
+/// and its bypass route. Android runs the same `boltmesh/stream` bridge in the
+/// AWG host's native library and protects its TLS socket through the VpnService
+/// instead of a route. Everywhere else the platform has no bridge, so a rung
+/// selected there could only fail — the gate keeps the ladder from offering it.
 ///
-/// This is the static half of the gate; the runtime half is the daemon's
-/// advertised `stream-transport` capability, which also covers a helper that is
+/// This is the static half of the gate; the runtime half is the stream
+/// capability the adapter advertises ([TunnelAdapter.daemonCapabilities] for a
+/// helper, or the Android adapter's own native bridge), which covers a helper
 /// too old to know the transport at all.
 ///
 /// Note this says nothing about the *inner* format. The transport carries
@@ -70,7 +72,9 @@ bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
 bool streamTransportSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;
-  return p == TargetPlatform.linux || p == TargetPlatform.windows;
+  return p == TargetPlatform.linux ||
+      p == TargetPlatform.windows ||
+      p == TargetPlatform.android;
 }
 
 /// Network-extension bundle ID for iOS/macOS

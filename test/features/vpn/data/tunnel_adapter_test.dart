@@ -1,5 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:boltmesh/features/vpn/data/helper_client.dart'
+    show capStreamTransport;
+import 'package:boltmesh/features/vpn/data/models.dart';
+import 'package:boltmesh/features/vpn/data/stream_transport.dart';
 import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
@@ -456,6 +461,64 @@ void main() {
       expect(calls, ['stopAwg']);
       expect(tunnel.configs, [stockConfig]);
     });
+
+    test('advertises the stream capability of its native bridge', () {
+      final adapter = AndroidTunnelAdapter(
+        stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
+      );
+      expect(adapter.daemonCapabilities, contains(capStreamTransport));
+    });
+
+    test(
+      'routes the stream rung through AWG with the transport spec',
+      () async {
+        // The stream rung always runs on the AWG host, even for a stock inner
+        // config: that host owns the VpnService the bridge protects its TLS
+        // socket through, and its engine parses a stock config unchanged.
+        final tunnel = HangingTunnel([]);
+        final adapter = AndroidTunnelAdapter(
+          stock: WireGuardTunnelAdapter.test(tunnel),
+        );
+        Map<String, Object?>? startArgs;
+        messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+          call,
+        ) async {
+          if (call.method == 'startAwg') {
+            startArgs = Map<String, Object?>.from(call.arguments as Map);
+          }
+          return <String, Object?>{'up': call.method == 'startAwg'};
+        });
+        const transport = TunnelTransport(
+          listen: '127.0.0.1:51821',
+          deliver: '127.0.0.1:51822',
+          credential: StreamTransport(
+            server: 'node.example:443',
+            serverName: 'node.example',
+            spkiPins: ['pin'],
+            psk: 'psk',
+            clientId: 'cid',
+          ),
+        );
+
+        await adapter.start(
+          serverAddress: '198.51.100.1',
+          wgQuickConfig: stockConfig,
+          providerBundleId: '',
+          transport: transport,
+        );
+
+        expect(tunnel.configs, isEmpty);
+        final spec = jsonDecode(
+          startArgs!['streamSpec'] as String,
+        ) as Map<String, Object?>;
+        expect(spec['mode'], 'stream');
+        expect(spec['listen'], '127.0.0.1:51821');
+        expect(spec['deliver'], '127.0.0.1:51822');
+        expect(spec['server'], 'node.example:443');
+        expect(spec['server_name'], 'node.example');
+        expect(spec['spki_sha256'], ['pin']);
+      },
+    );
 
     test(
       'reads liveness and the handshake from the active AWG backend',
