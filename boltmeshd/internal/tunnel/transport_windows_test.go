@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,6 +27,10 @@ type fakeRoutes struct {
 	added   []net.IP
 	deleted []net.IP
 	routes  map[string]physicalRoute
+	// prefixes records the tunnel-side installs, separately from the host pins: they
+	// name a prefix and an interface rather than a single destination and a gateway,
+	// and the obfuscated suite asserts on the shape.
+	prefixes []string
 
 	bestErr   error
 	addErr    error
@@ -73,6 +78,25 @@ func (f *fakeRoutes) installed() []string {
 		out = append(out, ip)
 	}
 	return out
+}
+
+func (f *fakeRoutes) addPrefixRoute(prefix net.IP, bits uint8, luid uint64, nextHop net.IP, metric uint32) error {
+	if f.addErr != nil {
+		return f.addErr
+	}
+	f.prefixes = append(f.prefixes, fmt.Sprintf("%s/%d on luid %d metric %d nextHop %v",
+		prefix, bits, luid, metric, nextHop))
+	return nil
+}
+
+func (f *fakeRoutes) deletePrefixRoute(prefix net.IP, bits uint8) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	// Truncated to the prefix's own length, because the host routes this fake also
+	// records are single addresses and one shape has to hold both.
+	f.deleted = append(f.deleted, prefix[:bits/8])
+	return nil
 }
 
 // fakeStream is the transport double: it counts its lifecycle so the privileged

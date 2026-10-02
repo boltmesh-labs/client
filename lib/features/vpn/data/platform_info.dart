@@ -29,21 +29,25 @@ String currentPlatformLabel() {
   }
 }
 
-/// True where the obfuscated (AmneziaWG) data plane is available: the Linux
-/// `boltmeshd` helper runs the device in-process. The Windows helper's
-/// data plane has no obfuscated path (yet), Android's plugin cannot be
-/// forking (see `tunnel_adapter.dart`), and Apple is the Network Extension.
+/// True where the obfuscated (AmneziaWG) data plane is available: the Linux and
+/// Windows `boltmeshd` helpers both run the device in-process, over a `/dev/net/tun`
+/// and a Wintun adapter respectively. Android's plugin cannot be forking (see
+/// `tunnel_adapter.dart`), and Apple is the Network Extension.
 ///
 /// An obfuscated region's node runs the AmneziaWG device, so a stock datagram
-/// is illegible to it: off Linux the region is unservable, and both the ladder
+/// is illegible to it: off those two the region is unservable, and both the ladder
 /// (see `conn_obfuscation.dart`) and region selection (see `region_policy.dart`)
 /// refuse it rather than start native. The data-plane work is what closes that
 /// gap; this predicate is the single place it is decided. Parameters injectable
 /// for tests.
+///
+/// The two platforms differ only in plumbing — the adapter, the address and route
+/// installation, and the resolver — and share the device, wire format, and config
+/// translation, so they can serve an obfuscated region equally.
 bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;
-  return p == TargetPlatform.linux;
+  return p == TargetPlatform.linux || p == TargetPlatform.windows;
 }
 
 /// True where the stream transport is available: the `boltmeshd` helper runs the

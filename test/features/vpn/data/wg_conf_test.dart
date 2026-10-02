@@ -467,13 +467,13 @@ void main() {
   });
 
   group('awgDataPlaneSupported', () {
-    test('linux helper only', () {
+    test('linux and windows helpers', () {
       expect(awgDataPlaneSupported(platform: TargetPlatform.linux), isTrue);
-      // Windows drives the kernel WireGuard tunnel service, which has no
-      // concept of the obfuscation directives, so an obfuscated region stays
-      // unservable there. The stream transport works on Windows, but only with
-      // a stock inner format.
-      expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isFalse);
+      // Windows runs the device in-process over a Wintun adapter rather than through
+      // the kernel WireGuard service, which has no concept of the obfuscation
+      // directives. Same device and wire format as Linux; only the adapter and the
+      // address/route/resolver plumbing differ.
+      expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isTrue);
       expect(awgDataPlaneSupported(platform: TargetPlatform.android), isFalse);
       expect(awgDataPlaneSupported(platform: TargetPlatform.macOS), isFalse);
       expect(
@@ -501,16 +501,23 @@ void main() {
       );
     });
 
-    test('is independent of the obfuscated data plane', () {
-      // The transport carries whatever the tunnel produces. The two gates are
-      // deliberately separate so a Windows build can offer the stream rung on
-      // a stock region without also claiming it can run an obfuscated one:
-      // the ladder requires both for an obfuscated region.
-      expect(
-        streamTransportSupported(platform: TargetPlatform.windows),
-        isTrue,
-      );
-      expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isFalse);
+    test('a stream-carried obfuscated region needs both capabilities', () {
+      // The transport carries whatever the tunnel produces, so for an obfuscated
+      // region the obfuscated data plane is a precondition for the stream rung:
+      // offering the transport without it would start a tunnel whose inner format
+      // the node cannot read. The two stay separate predicates because they are two
+      // capabilities -- how the datagrams travel versus what they say -- so this
+      // pins the relationship rather than the two platform tables.
+      for (final platform in TargetPlatform.values) {
+        if (streamTransportSupported(platform: platform) &&
+            !awgDataPlaneSupported(platform: platform)) {
+          fail(
+            '$platform offers the stream transport without the obfuscated data '
+            'plane, so an obfuscated region could be started on a rung that cannot '
+            'carry it',
+          );
+        }
+      }
     });
   });
 }

@@ -1,7 +1,6 @@
 //go:build windows
 
-// The Windows route primitives the stream transport's bypass route is built
-// from.
+// The Windows route primitives both tunnel backends are built from.
 //
 // Three IP Helper entry points are needed and `golang.org/x/sys/windows` binds
 // only some of them: `GetIpForwardEntry2` and `GetIpForwardTable2` come from
@@ -10,14 +9,22 @@
 // library, so a lazy system-DLL load is the right scope — there is no
 // caller-influenceable search path here the way there is for a bare tool name.
 //
-// Everything sits behind [windowsRoutes] so the transport's sequencing is
-// testable without touching this machine's routing table. The real
-// implementation reads and writes the live table; tests substitute a recorder.
+// Everything sits behind [windowsRoutes] so a backend's sequencing is testable
+// without touching this machine's routing table. The real implementation reads
+// and writes the live table; tests substitute a recorder.
+//
+// Two callers share it, and they want different shapes of the same entry point.
+// The stream transport installs a /32 for one destination through a gateway it
+// asked the table for; the obfuscated data plane installs one route per AllowedIPs
+// prefix, on-link, on an interface it just created. So [windowsRoutes] carries both
+// a host-route form and a prefix form, over a shared [installRoute] core.
 //
 // Unlike the Linux backend, there is no fwmark policy-rule complication. The
 // tunnel's own route for AllowedIPs = 0.0.0.0/0 is a default route, and
 // Windows matches the longest prefix first, so a /32 host route through the
-// physical interface wins on specificity alone — no metric race to lose.
+// physical interface wins on specificity alone — no metric race to lose. The
+// reverse does need one: a second /0 competes on metric, which is why the tunnel
+// route's metric is lower than the physical default's rather than absent.
 package tunnel
 
 import (
@@ -85,6 +92,13 @@ type windowsRoutes interface {
 	// deleteHostRoute removes it. An absent route is success: the goal is "no
 	// bypass route left", not one call per installed route.
 	deleteHostRoute(dst net.IP) error
+	// addPrefixRoute installs a route for an arbitrary prefix on one interface. A
+	// nil nextHop means on-link, which is what a route into the tunnel wants: the
+	// next hop is the tunnel adapter the prefix already names.
+	addPrefixRoute(prefix net.IP, bits uint8, luid uint64, nextHop net.IP, metric uint32) error
+	// deletePrefixRoute removes it. As with deleteHostRoute, an absent route is
+	// success.
+	deletePrefixRoute(prefix net.IP, bits uint8) error
 }
 
 // liveWindowsRoutes reads and writes this machine's IP forward table.
@@ -120,69 +134,140 @@ func (liveWindowsRoutes) bestRoute(dst net.IP) (physicalRoute, error) {
 	return physicalRoute{luid: row.InterfaceLuid, nextHop: nextHop}, nil
 }
 
-// addHostRoute installs the bypass route. The interface is named by LUID rather
-// than index because that is what the entry point takes, and the index form
-// races an adapter that is being renumbered.
-//
-// A route already present for the destination is replaced rather than reported
-// as a failure: Windows has no atomic "replace" for a forward entry, and a
-// retry legitimately re-pins a destination its predecessor already pinned. The
-// delete-then-create leaves a brief window with no route, which is the safer
-// direction — traffic follows the tunnel for a moment instead of a stale pin
-// outliving the tunnel it was cut for.
+// addHostRoute installs the bypass route: a /32 (or /128) for one destination,
+// pinned through the interface and next hop the table already uses for it.
 func (liveWindowsRoutes) addHostRoute(dst net.IP, route physicalRoute) error {
 	prefix, bits, err := rawInet(dst)
 	if err != nil {
 		return err
 	}
-	nextHop, _, err := rawInet(route.nextHop)
+	return installRoute(
+		fmt.Sprintf("bypass route for %s", dst),
+		prefix, bits, route.luid, route.nextHop, hostRouteMetric,
+	)
+}
+
+// addPrefixRoute installs a route for an arbitrary prefix, which is what the
+// obfuscated data plane needs for each of the peer's AllowedIPs. A nil nextHop
+// means on-link: the destination prefix already names the tunnel adapter, so the
+// table records no gateway rather than one that does not exist.
+func (liveWindowsRoutes) addPrefixRoute(prefix net.IP, bits uint8, luid uint64, nextHop net.IP, metric uint32) error {
+	sa, _, err := rawInet(prefix)
+	if err != nil {
+		return err
+	}
+	if nextHop == nil {
+		nextHop = onLinkNextHop(sa)
+	}
+	return installRoute(
+		fmt.Sprintf("tunnel route for %s/%d", prefix, bits),
+		sa, bits, luid, nextHop, metric,
+	)
+}
+
+// installRoute creates a forward entry, replacing whatever else holds the prefix.
+//
+// The interface is named by LUID rather than index because that is what the entry
+// point takes, and the index form races an adapter that is being renumbered.
+//
+// A route already present for the destination is replaced rather than reported as a
+// failure: Windows has no atomic "replace" for a forward entry, and a retry
+// legitimately re-pins a destination its predecessor already pinned. The
+// delete-then-create leaves a brief window with no route, which is the safer
+// direction — traffic follows the tunnel for a moment instead of a stale pin
+// outliving the tunnel it was cut for.
+func installRoute(desc string, prefix windows.RawSockaddrInet, bits uint8, luid uint64, nextHop net.IP, metric uint32) error {
+	next, _, err := rawInet(nextHop)
 	if err != nil {
 		return err
 	}
 	var existing windows.MibIpForwardRow2
 	existing.DestinationPrefix = windows.IpAddressPrefix{Prefix: prefix, PrefixLength: bits}
 	if err := windows.GetIpForwardEntry2(&existing); err == nil {
-		if existing.InterfaceLuid == route.luid && sameAddr(existing.NextHop, nextHop) {
+		if existing.InterfaceLuid == luid && sameAddr(existing.NextHop, next) {
 			// Already exactly this route; installing it again would fail with
 			// an object collision and change nothing.
 			return nil
 		}
 		ret, _, _ := procDeleteRoute2.Call(uintptr(unsafe.Pointer(&existing)))
 		if ret != 0 && !isMissingNTStatus(windows.NTStatus(ret)) {
-			return fmt.Errorf("replace bypass route for %s: %w", dst, routeError(windows.NTStatus(ret)))
+			return fmt.Errorf("replace %s: %w", desc, routeError(windows.NTStatus(ret)))
 		}
 	} else if !isMissingErrno(err) {
 		// An absent entry is the expected case and means there is nothing to
 		// replace. Any other lookup failure is not something to install on top
 		// of: a route this daemon cannot see is a route it cannot later sweep.
-		return fmt.Errorf("look up existing bypass route for %s: %w", dst, err)
+		return fmt.Errorf("look up existing %s: %w", desc, err)
 	}
-	row := windows.MibIpForwardRow2{
-		InterfaceLuid: route.luid,
-		DestinationPrefix: windows.IpAddressPrefix{
-			Prefix:       prefix,
-			PrefixLength: bits,
-		},
-		NextHop:  nextHop,
-		Metric:   hostRouteMetric,
-		Protocol: windows.MIB_IPPROTO_NETMGMT,
-	}
+	row := forwardRow(prefix, bits, luid, next, metric)
 	ret, _, _ := procCreateRoute2.Call(uintptr(unsafe.Pointer(&row)))
 	if ret != 0 {
-		return fmt.Errorf("install bypass route for %s: %w", dst, routeError(windows.NTStatus(ret)))
+		return fmt.Errorf("install %s: %w", desc, routeError(windows.NTStatus(ret)))
 	}
 	return nil
 }
 
-// deleteHostRoute removes the bypass route. It looks the entry up first
-// because the delete entry point identifies a route by its full row, including
-// the interface it was installed on — a /32 for one destination is not unique
-// on its own. A missing entry is the desired end state.
+// forwardRow builds the MIB_IPFORWARD_ROW2 an install hands to the entry point.
+//
+// Separated from [installRoute] so the row can be inspected in a test without writing to
+// this machine's forward table: the fields below are the difference between a route the
+// stack uses and one it lists and ignores.
+func forwardRow(prefix windows.RawSockaddrInet, bits uint8, luid uint64, next windows.RawSockaddrInet, metric uint32) windows.MibIpForwardRow2 {
+	return windows.MibIpForwardRow2{
+		InterfaceLuid: luid,
+		DestinationPrefix: windows.IpAddressPrefix{
+			Prefix:       prefix,
+			PrefixLength: bits,
+		},
+		NextHop:  next,
+		Metric:   metric,
+		Protocol: windows.MIB_IPPROTO_NETMGMT,
+		// The lifetimes are INFINITE_LIFETIME, and they have to be: zero is not
+		// "no expiry", it is an expiry of now. An entry point created that way lands in
+		// the table and Get-NetRoute reports it as Alive, while the FIB has already
+		// discarded it and the stack keeps routing that destination somewhere else. A
+		// tunnel whose route is installed exactly like a working one, and ignored
+		// exactly like a broken one, is not a failure any log line describes.
+		ValidLifetime:     infiniteLifetime,
+		PreferredLifetime: infiniteLifetime,
+	}
+}
+
+// onLinkNextHop renders the "no gateway" value a forward row carries for an on-link
+// route, in the family the destination prefix belongs to. A nil NextHop is how the
+// table says the destination is directly reachable through the named interface,
+// which is the truth for the tunnel's own routes.
+func onLinkNextHop(prefix windows.RawSockaddrInet) net.IP {
+	if prefix.Family == windows.AF_INET6 {
+		return net.IPv6zero
+	}
+	return net.IPv4zero
+}
+
+// deleteHostRoute removes the bypass route.
 func (liveWindowsRoutes) deleteHostRoute(dst net.IP) error {
 	prefix, bits, err := rawInet(dst)
 	if err != nil {
 		return err
 	}
+	return removeRoute(fmt.Sprintf("bypass route for %s", dst), prefix, bits)
+}
+
+// deletePrefixRoute removes a tunnel route. The tunnel's routes live on the Wintun
+// adapter and go with it, so this exists for the paths that remove them while the
+// adapter is still there.
+func (liveWindowsRoutes) deletePrefixRoute(prefix net.IP, bits uint8) error {
+	sa, _, err := rawInet(prefix)
+	if err != nil {
+		return err
+	}
+	return removeRoute(fmt.Sprintf("tunnel route for %s/%d", prefix, bits), sa, bits)
+}
+
+// removeRoute deletes a forward entry, looking it up first because the delete entry
+// point identifies a route by its full row, including the interface it was installed
+// on — a prefix is not unique on its own. A missing entry is the desired end state.
+func removeRoute(desc string, prefix windows.RawSockaddrInet, bits uint8) error {
 	var row windows.MibIpForwardRow2
 	row.DestinationPrefix = windows.IpAddressPrefix{Prefix: prefix, PrefixLength: bits}
 	if err := windows.GetIpForwardEntry2(&row); err != nil {
@@ -194,7 +279,7 @@ func (liveWindowsRoutes) deleteHostRoute(dst net.IP) error {
 		if isMissingErrno(err) {
 			return nil
 		}
-		return fmt.Errorf("look up bypass route for %s: %w", dst, err)
+		return fmt.Errorf("look up %s: %w", desc, err)
 	}
 	ret, _, _ := procDeleteRoute2.Call(uintptr(unsafe.Pointer(&row)))
 	if ret != 0 {
@@ -202,7 +287,7 @@ func (liveWindowsRoutes) deleteHostRoute(dst net.IP) error {
 		if isMissingNTStatus(status) {
 			return nil
 		}
-		return fmt.Errorf("remove bypass route for %s: %w", dst, routeError(status))
+		return fmt.Errorf("remove %s: %w", desc, routeError(status))
 	}
 	return nil
 }
@@ -215,7 +300,12 @@ func routeError(status windows.NTStatus) error {
 	if status == 0 {
 		return nil
 	}
-	return status.Errno()
+	// The numeric code always rides along. Windows has no message for many of these
+	// codes, and FormatMessage then substitutes a placeholder that names neither the
+	// code nor a remedy — "the system cannot find message text for message number 0x%1"
+	// — so a reader given only that has nothing to act on. Which codes are unnamed is
+	// not something to be discovering during an incident.
+	return fmt.Errorf("NETIO status %#x: %w", uint32(status), status.Errno())
 }
 
 // isMissingNTStatus reports whether a status means "no such route". Windows

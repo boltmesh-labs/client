@@ -113,6 +113,51 @@ func TestBestRoute2CallBindsTheDestinationFourth(t *testing.T) {
 	}
 }
 
+// TestRouteRowCarriesInfiniteLifetimes pins the one field whose absence produces a
+// route that looks installed and is not.
+//
+// MIB_IPFORWARD_ROW2's lifetimes are the route's expiry, and zero is an expiry of now —
+// not the absence of one. Created that way the entry lands in the table, Get-NetRoute
+// reports it as Alive on the right interface, and the FIB has already dropped it, so the
+// stack routes that destination through the physical interface instead. Measured on the
+// box: a tunnel route created with zero lifetimes sent its ICMP out Ethernet0 with the
+// NIC's source address, and the same prefix created by netsh (with INFINITE_LIFETIME)
+// put the same packet into the tunnel with the tunnel's address.
+func TestRouteRowCarriesInfiniteLifetimes(t *testing.T) {
+	seen := captureInstalledRoute(t, net.ParseIP("10.2.0.0"), 16, 77, nil, 1)
+
+	if seen.ValidLifetime != infiniteLifetime {
+		t.Errorf("ValidLifetime = %#x, want INFINITE_LIFETIME (%#x): a zero lifetime "+
+			"expires the route the moment it is created", seen.ValidLifetime, infiniteLifetime)
+	}
+	if seen.PreferredLifetime != infiniteLifetime {
+		t.Errorf("PreferredLifetime = %#x, want INFINITE_LIFETIME (%#x)",
+			seen.PreferredLifetime, infiniteLifetime)
+	}
+}
+
+// captureInstalledRoute runs installRoute's row construction against a stubbed table so a
+// test can inspect the MIB_IPFORWARD_ROW2 the entry point is handed. installRoute itself
+// talks to the live forward table, which a unit test must not touch, so the row-building
+// is separated from the install for exactly this reason.
+func captureInstalledRoute(
+	t *testing.T, prefixIP net.IP, bits uint8, luid uint64, nextHop net.IP, metric uint32,
+) windows.MibIpForwardRow2 {
+	t.Helper()
+	prefix, _, err := rawInet(prefixIP)
+	if err != nil {
+		t.Fatalf("rawInet: %v", err)
+	}
+	if nextHop == nil {
+		nextHop = onLinkNextHop(prefix)
+	}
+	next, _, err := rawInet(nextHop)
+	if err != nil {
+		t.Fatalf("rawInet(nextHop): %v", err)
+	}
+	return forwardRow(prefix, bits, luid, next, metric)
+}
+
 // TestBestRouteReadsTheRowTheEntryPointWrote drives bestRoute end to end over the
 // seam, so the argument list and the row read-back are checked together: a correct
 // list that failed to plumb the row through would produce a tunnel with no

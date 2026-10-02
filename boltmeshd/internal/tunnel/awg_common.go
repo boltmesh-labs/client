@@ -102,7 +102,23 @@ func (d *goAwgDevice) configure(ctx context.Context, body []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return d.inner.IpcSet(string(body))
+	if err := d.inner.IpcSet(string(body)); err != nil {
+		return err
+	}
+	// The device is brought up here, explicitly, and not left to an event.
+	//
+	// A fresh AmneziaWG device starts down, and a peer is only started when the device
+	// is up -- so until this call the device reads its adapter, finds every packet
+	// belongs to a peer that was never started, and drops them. No handshake is ever
+	// attempted, so every counter stays at zero and the tunnel looks configured.
+	//
+	// Linux does not need the call: its adapter reports a link-up event, and the
+	// device's own event reader brings it up in response. Windows' Wintun adapter never
+	// reports one -- its event channel carries MTU updates and nothing else -- so there
+	// the device would stay down for the life of the process with every other step
+	// reporting success. Relying on a platform event one backend does not deliver is
+	// the defect; this is the same end state either way, and Up is idempotent.
+	return d.inner.Up()
 }
 
 func (d *goAwgDevice) dump(ctx context.Context) ([]byte, error) {

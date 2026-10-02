@@ -625,7 +625,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
 - Transport ladder: where it *starts* is the region's data plane, and a path
   the health policy confirmed dead *locally* is rebuilt one rung lower per
   heal, so an unobstructed network pays nothing. `native` (kernel WireGuard) →
-  `awg` (in-process AmneziaWG, Linux only) → `stream` (the tunnel's datagrams
+  `awg` (in-process AmneziaWG, Linux and Windows) → `stream` (the tunnel's datagrams
   inside a TLS session to the node, Linux and Windows). A stock region's node
   runs stock WireGuard, so its floor is `native`; an obfuscated region's node
   runs the AmneziaWG device, so a stock datagram is illegible to it and its
@@ -646,13 +646,23 @@ rest of the pipeline (which files, when, verify) is unchanged.
   select), on Windows ahead of the tunnel service (where the longest-prefix
   match wins outright, so one route is enough). It needs no special data plane,
   so **Windows gets the stream rung on stock regions**. The **AWG** data plane is
-  in-process on Linux only: Windows drives the WireGuard-for-Windows *kernel*
-  service, which has no concept of the obfuscation directives, so a userspace
-  AmneziaWG device (and the `wintun.dll` it would load) is not there yet. The
-  two gates are independent by design and the ladder requires both for an
-  obfuscated region, so **Windows cannot serve one**: region selection skips
-  it, and a pinned or control-plane-returned one is refused at the start rather
-  than sent a native conf its node cannot read. The Regions tab still lists
+  in-process on both: Linux over `/dev/net/tun`, Windows over a Wintun adapter,
+  because the WireGuard-for-Windows *kernel* service has no concept of the
+  obfuscation directives and a stock config never reaches it on such a region. The
+  two are one data plane with the device, wire format and config translation
+  shared; what differs is the adapter, how the address and routes are installed
+  (IP Helper entry points on Windows, `ip route` on Linux), and the resolver. Two
+  platform details are worth knowing because they are invisible from the client:
+  the Wintun DLL is copied to System32 and pinned by content hash before the
+  device loads it (the upstream binding resolves it by bare name, and the daemon
+  runs as LocalSystem), and the tunnel route is installed with `INFINITE_LIFETIME`
+  because a zero lifetime is an expiry of *now* — the route appears installed and
+  the stack routes around it.
+  The two gates are independent by design and the ladder requires both for an
+  obfuscated region, so a platform with neither — macOS, Android — cannot serve
+  one: region selection skips it, and a pinned or control-plane-returned one is
+  refused at the start rather than sent a native conf its node cannot read. The
+  Regions tab still lists
   such a region (the list is discovery, not policy), so choosing one there
   surfaces the refusal instead of hiding it. Demotion rides the existing heal
   (no new budget, timer, or state) and is sticky across connects: no automatic

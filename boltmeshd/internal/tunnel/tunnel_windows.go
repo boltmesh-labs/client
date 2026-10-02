@@ -9,8 +9,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
+	"golang.org/x/sys/windows"
 
 	"boltmeshd/internal/config"
 	"boltmeshd/internal/protocol"
@@ -103,6 +107,25 @@ type Manager struct {
 	routes          windowsRoutes
 	resolveHost     func(ctx context.Context, host string) ([]net.IP, error)
 	streamTransport func(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error)
+
+	// Userspace AmneziaWG data plane (obfuscated configs). mu guards the fields below; a
+	// nil awgDev means no userspace tunnel is live. Unlike the kernel path, this data
+	// plane dies with the daemon process — closing the Wintun handle deletes the adapter,
+	// and with it the address, the routes and the DNS settings — so a stale config file
+	// after a restart is the only state that can linger, plus the underlay host routes,
+	// which live on the physical interface (see teardownObfuscated).
+	mu                sync.Mutex
+	awgDev            awgDevice
+	awgEndpointRoutes []string
+	makeAwgTun        func(name string, mtu int) (awgtun.Device, error)
+	makeAwgDevice     func(awgtun.Device) (awgDevice, error)
+	// loadWintun is the driver pin, behind a seam because the real one writes to
+	// System32 and needs elevation — which is not a property the behaviour suite can be
+	// run under. The pin has its own suite, including the elevated integration tests.
+	loadWintun func() (windows.Handle, error)
+	// netIf is the seam over the address and DNS entry points, replaced by tests so the
+	// obfuscated bring-up can be exercised without reconfiguring this machine.
+	netIf windowsNetIf
 }
 
 // NewManager returns a Manager for iface storing its config in dir.
@@ -121,6 +144,10 @@ func NewManager(dir, iface string) *Manager {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
 		streamTransport: newStreamClient,
+		makeAwgTun:      awgtun.CreateTUN,
+		makeAwgDevice:   newAwgDevice,
+		loadWintun:      loadWintunDLL,
+		netIf:           liveWindowsNetIf{},
 	}
 }
 
@@ -143,6 +170,30 @@ func (m *Manager) Up(ctx context.Context, wgQuickConfig string, transport *proto
 	defer m.gate.release()
 	m.busy.Store(true)
 	defer m.busy.Store(false)
+
+	// An obfuscated config never reaches the WireGuard service: the kernel tunnel
+	// driver has no concept of the AmneziaWG directives, and handing it a config
+	// carrying them would only fail at start time. It runs the userspace AmneziaWG
+	// device over a Wintun adapter instead — see tunnel_windows_awg.go.
+	//
+	// The dispatch has to come before anything the service needs. Locating
+	// wireguard_svc.exe would fail the whole operation on a machine that has no
+	// reason to have it, and a request the obfuscated path can serve is not a request
+	// that depends on it.
+	if awgObfuscated(parseWgQuick(wgQuickConfig)) {
+		return m.upObfuscated(ctx, wgQuickConfig, transport)
+	}
+
+	// An obfuscated tunnel that is already up must be torn down before a native one
+	// takes the interface name. Its Wintun adapter is a device of its own, separate from
+	// the WireGuard service's, so neither would notice the other and both would go on
+	// answering for the same interface. A lingering obfuscated config counts even with
+	// no live device, for the reason Down's own dispatch gives.
+	if m.awgLive() || m.staleObfuscatedConfig() {
+		if err := m.teardownObfuscated(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	exePath, err := m.serviceExePath()
 	if err != nil {
@@ -233,6 +284,18 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 	// Deliberately no `busy` here: `busy` means "an up is in flight" and only
 	// makes Status report `connecting`. During a down the service's own
 	// presence is the right answer.
+	//
+	// The userspace data plane is torn down by its own path first. A lingering
+	// obfuscated config counts even with no live device: after a daemon restart
+	// the adapter is gone, but the underlay host routes are not — they live on the
+	// physical interface — and the config is the only record of them.
+	if m.awgLive() || m.staleObfuscatedConfig() {
+		if err := m.teardownObfuscated(ctx); err != nil {
+			return nil, err
+		}
+		return m.readServiceStatus(ctx)
+	}
+
 	if err := m.service.stop(ctx); err != nil {
 		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: fmt.Errorf("stop tunnel service: %w", err)}
 	}
@@ -254,7 +317,15 @@ func (m *Manager) Down(ctx context.Context) (*protocol.Status, error) {
 // and a service marked for deletion may otherwise outlive the helper
 // executable.
 func (m *Manager) Uninstall(ctx context.Context) error {
-	// The transport goes first: its bypass routes point at the physical path,
+	// A live or stale userspace tunnel goes first: its teardown is the only thing that
+	// sweeps the endpoint's underlay host routes, and those live on the physical
+	// interface where they would outlive the client.
+	if m.awgLive() || m.staleObfuscatedConfig() {
+		if err := m.teardownObfuscated(ctx); err != nil {
+			return fmt.Errorf("remove obfuscated tunnel: %w", err)
+		}
+	}
+	// The transport goes next: its bypass routes point at the physical path,
 	// and leaving them installed would keep exempting the node from every
 	// tunnel on a machine that no longer has this client installed.
 	if err := m.downTransport(ctx); err != nil {
@@ -307,6 +378,12 @@ func (m *Manager) Status(ctx context.Context) (*protocol.Status, error) {
 // readServiceStatus bypasses the in-flight marker for Up and Down, whose
 // lifecycle mutation is complete before they obtain their response status.
 func (m *Manager) readServiceStatus(ctx context.Context) (*protocol.Status, error) {
+	// A live userspace device is the whole truth: there is no service behind it, so
+	// asking the Service Control Manager would report a tunnel that is up as one that
+	// is not installed.
+	if dev := m.liveAwgDevice(); dev != nil {
+		return readObfuscatedStatus(ctx, m.iface, dev)
+	}
 	st := &protocol.Status{Interface: m.iface, Stage: protocol.StageDisconnected}
 	stage, err := m.service.stage(ctx)
 	if err != nil {

@@ -16,10 +16,17 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
 
 	"boltmeshd/internal/protocol"
 )
@@ -382,4 +389,122 @@ func TestReadObfuscatedStatusTreatsADumpFailureAsUnknown(t *testing.T) {
 	if !errors.As(err, &opErr) {
 		t.Errorf("error is %T, want an OpError carrying the daemon's own code", err)
 	}
+}
+
+// blockingTun is an adapter double whose reads park until the adapter is closed.
+//
+// The device's TUN reader loops on Read, so a fake that returned immediately would spin a
+// core for the life of the test; parking is also what a real adapter does between
+// packets. Events returns a nil channel, which leaves the device's event reader parked
+// too -- it is not waited on at close.
+type blockingTun struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingTun() *blockingTun { return &blockingTun{closed: make(chan struct{})} }
+
+func (t *blockingTun) File() *os.File                         { return nil }
+func (t *blockingTun) Read([][]byte, []int, int) (int, error) { <-t.closed; return 0, os.ErrClosed }
+func (t *blockingTun) Write([][]byte, int) (int, error)       { return 0, nil }
+func (t *blockingTun) MTU() (int, error)                      { return awgDefaultMTU, nil }
+func (t *blockingTun) Name() (string, error)                  { return DefaultInterface, nil }
+func (t *blockingTun) Events() <-chan awgtun.Event            { return nil }
+func (t *blockingTun) BatchSize() int                         { return 1 }
+func (t *blockingTun) Close() error {
+	t.once.Do(func() { close(t.closed) })
+	return nil
+}
+
+// TestConfigureBringsTheDeviceUp is the assertion for a fault that has no other symptom.
+//
+// A fresh AmneziaWG device starts down, and a peer is only started once the device is
+// up. Left down, the device still reads its adapter and still parses the whole config: it
+// accepts the keys, the endpoint, the AllowedIPs and the obfuscation directives, reports
+// them back from IpcGet, and counts every one of them as configured. It simply never
+// starts a peer, so it never attempts a handshake, so every counter stays at zero and the
+// tunnel looks up while carrying nothing.
+//
+// Linux never saw this because its adapter reports a link-up event that the device's own
+// event reader acts on. Windows' Wintun adapter reports no such event, so the device has
+// to be brought up by hand -- and when it was not, a real bring-up on real hardware came
+// up perfectly, authenticated to nothing, and routed nowhere.
+//
+// A started peer with a persistent keepalive sends a handshake initiation immediately, so
+// pointing its endpoint at a real UDP socket turns "is the device up" into an observable:
+// without the Up call this socket sees nothing.
+func TestConfigureBringsTheDeviceUp(t *testing.T) {
+	// A real socket, so the observation is bytes on a wire rather than an internal flag:
+	// the device exposes no accessor for its own state.
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	tun := newBlockingTun()
+	// The data plane's own diagnostics go to slog.Debug, which the default handler drops,
+	// and they are the only account of why a peer stayed silent. They are written to
+	// stderr rather than through t.Logf on purpose: the device's workers log from their
+	// own goroutines and some of them log a final line after Close returns, which would
+	// race the test's own bookkeeping and be reported as a data race in this file.
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	dev, err := newAwgDevice(tun)
+	if err != nil {
+		t.Fatalf("newAwgDevice: %v", err)
+	}
+	defer func() { _ = dev.close() }()
+
+	// The real translation, pointed at the socket: a short keepalive so the peer's
+	// handshake goes out well inside the test's patience.
+	//
+	// Every substitution is checked. A silent no-op here is not a cosmetic problem: the
+	// first version of this test pointed at nothing, because it searched for one
+	// fixture's strings and edited another's, and the device dutifully sent its
+	// handshakes into the void while the assertion blamed the device for being quiet.
+	text := mustReplace(t, obfuscatedConfig,
+		"Endpoint = 203.0.113.10:51820",
+		fmt.Sprintf("Endpoint = 127.0.0.1:%d\nPersistentKeepalive = 1",
+			listener.LocalAddr().(*net.UDPAddr).Port))
+	body, err := ConfigToUAPIWithObfuscation(text)
+	if err != nil {
+		t.Fatalf("ConfigToUAPIWithObfuscation: %v", err)
+	}
+	if err := dev.configure(context.Background(), body); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+
+	// The device accepted the config either way; that is exactly why the failure was
+	// invisible. So assert on what it did, not on what it holds.
+	if err := listener.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 2048)
+	n, _, err := listener.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("the device sent nothing to its peer's endpoint: %v\n"+
+			"the device is configured but was never brought up, so no peer was started "+
+			"and no handshake was ever attempted", err)
+	}
+	if n == 0 {
+		t.Fatal("the device sent a zero-length datagram")
+	}
+}
+
+// mustReplace substitutes in a fixture and fails when the needle is absent.
+//
+// strings.Replace reports a no-op by returning its input unchanged, which in a test that
+// is quietly building the wrong thing: the assertion then measures whatever the fixture
+// happened to say rather than what the test meant to say.
+func mustReplace(t *testing.T, text, old, new string) string {
+	t.Helper()
+	if !strings.Contains(text, old) {
+		t.Fatalf("fixture does not contain %q, so the substitution would silently do nothing", old)
+	}
+	return strings.Replace(text, old, new, 1)
 }
