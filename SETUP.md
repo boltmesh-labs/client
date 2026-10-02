@@ -70,6 +70,7 @@ The Android CLI installs the SDK components:
 ```bash
 curl.exe -fsSL https://dl.google.com/android/cli/latest/windows_x86_64/install.cmd -o "%TEMP%\i.cmd" && "%TEMP%\i.cmd"
 
+android init
 android sdk install "cmdline-tools;latest"
 android sdk install "platforms;android-36"
 android sdk install "build-tools;36.0.0"
