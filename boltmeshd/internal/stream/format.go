@@ -311,10 +311,6 @@ func parseFrame(b []byte) (typ uint16, payload []byte, err error) {
 	return typ, b[headerSize:], nil
 }
 
-// FrameLen is the total wire size of a payload, so a reader can frame a byte
-// stream without buffering the whole datagram twice.
-func FrameLen(payloadLen int) int { return headerSize + payloadLen }
-
 // ReadFrame reads exactly one frame from r's buffered contents. It is a
 // helper for the two connection loops; the framing itself is in this file.
 func ReadFrame(buf []byte) (typ uint16, payload []byte, rest []byte, err error) {
