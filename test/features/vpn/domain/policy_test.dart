@@ -1,6 +1,7 @@
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/domain/region_policy.dart';
 import 'package:boltmesh/features/vpn/domain/tunnel_policy.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
@@ -155,9 +156,10 @@ void main() {
   });
 
   test('autoPickRegion skips a region this build cannot serve', () {
-    // flutter test runs as Android, where there is no obfuscated data plane, so
-    // an obfuscated region is not a candidate however light its load — dialing
-    // it could only end in a start that refuses.
+    // Fuchsia has no AWG backend, so an obfuscated region is not a candidate
+    // however light its load — dialing it could only end in a refused start.
+    debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final obfuscated = Region(
       id: 'obf',
       name: 'Obfuscated',
@@ -175,6 +177,8 @@ void main() {
   });
 
   test('regionServable needs a data plane this build can run', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     expect(regionServable(Region(id: 'a', servers: [srv('s1', 0)])), isTrue);
     expect(
       regionServable(

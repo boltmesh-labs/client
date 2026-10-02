@@ -395,9 +395,9 @@ void main() {
     expect(state.message, 'Connected');
   });
 
-  // The obfuscated rung is a *response* to a confirmed local stall, so these
-  // pin the platform to the one data plane that can run it: flutter test
-  // defaults to Android, where the descriptor is (correctly) ignored.
+  // The obfuscated rung is a *response* to a confirmed local stall. These
+  // cases explicitly choose the backend they exercise so host-platform test
+  // defaults cannot silently change which rung is available.
   group('obfuscation ladder', () {
     void useLinuxDataPlane() {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
@@ -427,6 +427,19 @@ void main() {
       // format is the floor, so the very first conf carries it.
       expect(tunnel.configs.first, contains('Jc = 3'));
       expect(tunnel.configs.first, contains('H1 = 115-120'));
+      expect(
+        container.read(connectionProvider.notifier).obfuscationRung,
+        ObfuscationRung.awg,
+      );
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+    });
+
+    test('Android starts an obfuscated region on the AWG rung', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final (container, tunnel) = await seedObfuscated();
+
+      expect(tunnel.configs.first, contains('Jc = 3'));
       expect(
         container.read(connectionProvider.notifier).obfuscationRung,
         ObfuscationRung.awg,
@@ -487,11 +500,13 @@ void main() {
     });
 
     test('a platform without the data plane refuses the region', () async {
-      // No platform override: the test runs as Android, whose plugin data plane
-      // has no obfuscated path. The region's node runs the AmneziaWG device, so
+      // Fuchsia has no obfuscated data plane. The region's node runs the
+      // AmneziaWG device, so
       // no conf this build could send it would be legible: the start is refused
       // rather than sending the native one, which cannot connect and leaks the
       // plaintext handshake doing it.
+      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
         if (o.path.endsWith('/config')) return obfDial();
@@ -645,6 +660,23 @@ void main() {
         },
       );
 
+      test(
+        'Android keeps AWG as the floor even when the region offers stream',
+        () async {
+          debugDefaultTargetPlatformOverride = TargetPlatform.android;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          final (container, socket) = await seedStream();
+
+          expect(socket.lastConfig, contains('Jc = 3'));
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastTransport, isNull);
+          expect(
+            container.read(connectionProvider.notifier).obfuscationRung,
+            ObfuscationRung.awg,
+          );
+        },
+      );
+
       test('the first stall walks from AWG onto the stream rung', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream();
@@ -745,10 +777,10 @@ void main() {
       });
 
       test('a platform without the data plane refuses the region', () async {
-        // No platform override: the suite runs as Android, where the daemon
-        // rejects a transport spec rather than ignoring it. AWG is Linux-only
-        // too, so the region has no rung at all and the start is refused rather
-        // than falling back to a native conf the node cannot read.
+        // Fuchsia has neither an AWG data plane nor the stream bridge, so there
+        // is no rung capable of carrying this region's format.
+        debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
         final (container, socket) = await seedStream(expectConnected: false);
 
         expect(container.read(connectionProvider).phase, ConnPhase.error);

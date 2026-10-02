@@ -13,6 +13,7 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart
 class HangingTunnel implements WireGuardFlutterInterface {
   HangingTunnel(this.script);
   final List<bool> script;
+  final List<String> configs = [];
   int stops = 0;
 
   @override
@@ -45,7 +46,10 @@ class HangingTunnel implements WireGuardFlutterInterface {
     required String providerBundleIdentifier,
     List<String>? excludedApps,
     List<String>? includedApps,
-  }) async {}
+  }) async {
+    configs.add(wgQuickConfig);
+  }
+
   @override
   Future<void> stopVpn() async {
     stops++;
@@ -391,5 +395,97 @@ void main() {
       expect(tunnel.interfaceName, 'boltmesh0');
       expect(adapter.isReady, isTrue);
     });
+  });
+
+  group('AndroidTunnelAdapter', () {
+    const awgConfig = '[Interface]\nPrivateKey = test\nJc = 4\n';
+    const stockConfig = '[Interface]\nPrivateKey = test\n';
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+    tearDown(() {
+      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, null);
+    });
+
+    test(
+      'routes obfuscated configs to AWG after releasing stock TUN',
+      () async {
+        final tunnel = HangingTunnel([]);
+        final adapter = AndroidTunnelAdapter(
+          stock: WireGuardTunnelAdapter.test(tunnel),
+        );
+        final calls = <String>[];
+        messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+          call,
+        ) async {
+          calls.add(call.method);
+          return <String, Object?>{'up': call.method == 'startAwg'};
+        });
+
+        await adapter.start(
+          serverAddress: '198.51.100.1',
+          wgQuickConfig: awgConfig,
+          providerBundleId: '',
+        );
+
+        expect(calls, ['stopAwg', 'startAwg']);
+        expect(tunnel.stops, 1);
+        expect(tunnel.configs, isEmpty);
+      },
+    );
+
+    test('keeps stock configs on wireguard_flutter_plus', () async {
+      final tunnel = HangingTunnel([]);
+      final adapter = AndroidTunnelAdapter(
+        stock: WireGuardTunnelAdapter.test(tunnel),
+      );
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        return <String, Object?>{'up': false};
+      });
+
+      await adapter.start(
+        serverAddress: '198.51.100.1',
+        wgQuickConfig: stockConfig,
+        providerBundleId: '',
+      );
+
+      expect(calls, ['stopAwg']);
+      expect(tunnel.configs, [stockConfig]);
+    });
+
+    test(
+      'reads liveness and the handshake from the active AWG backend',
+      () async {
+        final adapter = AndroidTunnelAdapter(
+          stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
+        );
+        messenger.setMockMethodCallHandler(
+          AndroidTunnelAdapter.awgChannel,
+          (call) async => <String, Object?>{
+            'up': true,
+            'stage': 'connected',
+            'lastHandshake': 1_800_000_000,
+            'rxBytes': 17,
+            'txBytes': 23,
+            'publicKey': 'server-key',
+            'endpoint': '127.0.0.1:51820',
+          },
+        );
+
+        expect(await adapter.readStage(), VpnStage.connected);
+        expect(await adapter.readTraffic(), {'rxBytes': 17, 'txBytes': 23});
+        expect(
+          await adapter.readHandshake(),
+          DateTime.fromMillisecondsSinceEpoch(1_800_000_000_000, isUtc: true),
+        );
+        final peer = await adapter.getActivePeer();
+        expect(peer?.publicKey, 'server-key');
+        expect(peer?.endpoint, '127.0.0.1:51820');
+      },
+    );
   });
 }

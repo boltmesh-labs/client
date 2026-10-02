@@ -467,14 +467,16 @@ void main() {
   });
 
   group('awgDataPlaneSupported', () {
-    test('linux and windows helpers', () {
+    test('linux, windows, and Android AWG backends', () {
       expect(awgDataPlaneSupported(platform: TargetPlatform.linux), isTrue);
       // Windows runs the device in-process over a Wintun adapter rather than through
       // the kernel WireGuard service, which has no concept of the obfuscation
       // directives. Same device and wire format as Linux; only the adapter and the
       // address/route/resolver plumbing differ.
       expect(awgDataPlaneSupported(platform: TargetPlatform.windows), isTrue);
-      expect(awgDataPlaneSupported(platform: TargetPlatform.android), isFalse);
+      // Android uses the AmneziaWG Go engine over the app's VpnService TUN;
+      // it does not require the privileged desktop helper.
+      expect(awgDataPlaneSupported(platform: TargetPlatform.android), isTrue);
       expect(awgDataPlaneSupported(platform: TargetPlatform.macOS), isFalse);
       expect(
         awgDataPlaneSupported(platform: TargetPlatform.linux, web: true),

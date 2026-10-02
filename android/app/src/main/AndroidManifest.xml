@@ -61,6 +61,14 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+        <service
+            android:name="org.amnezia.awg.backend.GoBackend$VpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
         <!-- Keep-alive for the wireguard_flutter_plus tunnel: the plugin
              starts this foreground service on connect. Must be declared or
              the start is a no-op and a swipe-kill leaves a backend that no

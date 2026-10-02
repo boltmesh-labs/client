@@ -32,6 +32,13 @@
 # the runner needs, so R8 must not shrink them out.
 -keep class kotlin.LazyKt { *; }
 
+# AmneziaWG's native JNI shim resolves these names directly. Keep the bridge
+# class and native method symbols stable in minified release APKs. Keep the
+# parser model as well: the Android release smoke test invokes its userspace
+# serializer independently of the production backend call.
+-keep class org.amnezia.awg.GoBackend { *; }
+-keep class org.amnezia.awg.config.** { *; }
+
 # WireGuardConnectSmokeTest parses a config through the shipped release APK.
 # Production only reaches Config.parse() on the cold-start path, so R8 inlines
 # it into TunnelHost and the test's call into the WireGuard model then dies with

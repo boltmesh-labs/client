@@ -18,13 +18,18 @@ class VpnForegroundService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var vpnDisplayName = "WireGuard VPN"
     private var foreground = false
+    private var awgTunnel = false
 
     private val updateRunnable = object : Runnable {
         override fun run() {
             if (!foreground) return
 
-            val contentText = "↑ ${VpnTrafficStats.uploadSpeed} | " +
-                "↓ ${VpnTrafficStats.downloadSpeed} | ${VpnTrafficStats.duration}"
+            val contentText = if (awgTunnel) {
+                "AmneziaWG tunnel is running"
+            } else {
+                "↑ ${VpnTrafficStats.uploadSpeed} | " +
+                    "↓ ${VpnTrafficStats.downloadSpeed} | ${VpnTrafficStats.duration}"
+            }
             updateNotification(contentText)
             handler.postDelayed(this, UPDATE_INTERVAL_MS)
         }
@@ -43,6 +48,7 @@ class VpnForegroundService : Service() {
         if (intent?.action == ACTION_START) {
             vpnDisplayName = intent.getStringExtra(EXTRA_VPN_DISPLAY_NAME)
                 ?: "WireGuard VPN"
+            awgTunnel = intent.getBooleanExtra("awgTunnel", false)
             startInForeground(buildNotification("VPN is running"))
             handler.removeCallbacks(updateRunnable)
             handler.post(updateRunnable)

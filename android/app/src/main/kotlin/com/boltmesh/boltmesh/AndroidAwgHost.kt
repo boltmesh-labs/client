@@ -1,0 +1,122 @@
+package com.boltmesh.boltmesh
+
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import org.amnezia.awg.backend.GoBackend
+import org.amnezia.awg.backend.Tunnel
+import org.amnezia.awg.config.Config
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
+
+/// Process-lifetime owner for Android's in-process AmneziaWG backend.
+///
+/// Stock regions continue to use wireguard_flutter_plus. This host is used only
+/// when the selected region's wg-quick config carries the AWG directives. The
+/// upstream backend builds Android's VpnService TUN, starts the pinned
+/// amneziawg-go device over that descriptor, and protects its UDP sockets from
+/// being routed back into the VPN.
+internal object AndroidAwgHost {
+  private const val tunnelName = "boltmesh0"
+  private const val foregroundServiceClass =
+    "orban.group.wireguard_flutter.VpnForegroundService"
+
+  private val lock = Any()
+  private val tunnel = object : Tunnel {
+    override fun getName(): String = tunnelName
+
+    override fun onStateChange(newState: Tunnel.State) = Unit
+  }
+
+  @Volatile private var backend: GoBackend? = null
+  @Volatile private var liveConfig: Config? = null
+
+  fun start(context: Context, wgQuickConfig: String): Map<String, Any> = synchronized(lock) {
+    val parsed = Config.parse(
+      ByteArrayInputStream(wgQuickConfig.toByteArray(StandardCharsets.UTF_8)),
+    )
+    require(parsed.peers.size == 1) { "BoltMesh Android AWG requires one peer" }
+
+    val owner = backend ?: GoBackend(context.applicationContext).also { backend = it }
+    try {
+      val state = owner.setState(tunnel, Tunnel.State.UP, parsed)
+      check(state == Tunnel.State.UP) { "AmneziaWG backend did not bring the tunnel up" }
+      liveConfig = parsed
+      startForegroundNotification(context.applicationContext)
+      statusLocked(owner)
+    } catch (failure: Throwable) {
+      // Do not leave a live TUN behind if its keep-alive notification could not
+      // be started or the backend only partially accepted the config.
+      runCatching { owner.setState(tunnel, Tunnel.State.DOWN, null) }
+      liveConfig = null
+      stopForegroundNotification(context.applicationContext)
+      throw failure
+    }
+  }
+
+  fun stop(context: Context): Map<String, Any> = synchronized(lock) {
+    val owner = backend
+    if (owner != null && owner.getState(tunnel) == Tunnel.State.UP) {
+      owner.setState(tunnel, Tunnel.State.DOWN, null)
+    }
+    liveConfig = null
+    stopForegroundNotification(context.applicationContext)
+    disconnectedStatus()
+  }
+
+  fun status(): Map<String, Any> = synchronized(lock) {
+    val owner = backend ?: return@synchronized disconnectedStatus()
+    if (owner.getState(tunnel) != Tunnel.State.UP) {
+      return@synchronized disconnectedStatus()
+    }
+    statusLocked(owner)
+  }
+
+  private fun statusLocked(owner: GoBackend): Map<String, Any> {
+    val config = liveConfig
+    val stats = owner.getStatistics(tunnel)
+    val handshake = owner.getLastHandshake(tunnel).takeIf { it > 0L } ?: 0L
+    val peer = config?.peers?.firstOrNull()
+    val endpoint = peer?.endpoint?.orElse(null)?.let { "${it.host}:${it.port}" }.orEmpty()
+    val values = mutableMapOf<String, Any>(
+      "up" to true,
+      "stage" to if (handshake > 0L) "connected" else "connecting",
+      "lastHandshake" to handshake,
+      "rxBytes" to stats.totalRx(),
+      "txBytes" to stats.totalTx(),
+    )
+    if (peer != null) {
+      values["publicKey"] = peer.publicKey.toBase64()
+      values["endpoint"] = endpoint
+    }
+    return values
+  }
+
+  private fun disconnectedStatus(): Map<String, Any> = mapOf(
+    "up" to false,
+    "stage" to "disconnected",
+    "lastHandshake" to 0L,
+    "rxBytes" to 0L,
+    "txBytes" to 0L,
+  )
+
+  private fun startForegroundNotification(context: Context) {
+    val intent = Intent().setClassName(context, foregroundServiceClass)
+      .setAction("START")
+      .putExtra("vpnDisplayName", "BoltMesh VPN")
+      .putExtra("awgTunnel", true)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      context.startForegroundService(intent)
+    } else {
+      context.startService(intent)
+    }
+  }
+
+  private fun stopForegroundNotification(context: Context) {
+    runCatching {
+      context.startService(
+        Intent().setClassName(context, foregroundServiceClass).setAction("STOP"),
+      )
+    }
+  }
+}

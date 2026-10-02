@@ -29,25 +29,27 @@ String currentPlatformLabel() {
   }
 }
 
-/// True where the obfuscated (AmneziaWG) data plane is available: the Linux and
-/// Windows `boltmeshd` helpers both run the device in-process, over a `/dev/net/tun`
-/// and a Wintun adapter respectively. Android's plugin cannot be forking (see
-/// `tunnel_adapter.dart`), and Apple is the Network Extension.
+/// True where the obfuscated (AmneziaWG) data plane is available: Linux and
+/// Windows run the device in `boltmeshd`, while Android runs it in-process over
+/// the app's `VpnService` TUN. Apple remains on the Network Extension plugin.
 ///
 /// An obfuscated region's node runs the AmneziaWG device, so a stock datagram
-/// is illegible to it: off those two the region is unservable, and both the ladder
-/// (see `conn_obfuscation.dart`) and region selection (see `region_policy.dart`)
+/// is illegible to it: on platforms without this data plane the region is
+/// unservable, and both the ladder (see `conn_obfuscation.dart`) and region
+/// selection (see `region_policy.dart`)
 /// refuse it rather than start native. The data-plane work is what closes that
 /// gap; this predicate is the single place it is decided. Parameters injectable
 /// for tests.
 ///
-/// The two platforms differ only in plumbing — the adapter, the address and route
-/// installation, and the resolver — and share the device, wire format, and config
-/// translation, so they can serve an obfuscated region equally.
+/// Linux and Windows share the device, wire format, and config translation.
+/// Android uses the upstream Android TUN/backend integration with the same
+/// AmneziaWG Go engine and UAPI format; it does not use `boltmeshd`.
 bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;
-  return p == TargetPlatform.linux || p == TargetPlatform.windows;
+  return p == TargetPlatform.linux ||
+      p == TargetPlatform.windows ||
+      p == TargetPlatform.android;
 }
 
 /// True where the stream transport is available: the `boltmeshd` helper runs the

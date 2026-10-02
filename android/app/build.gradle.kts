@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("com.android.application")
@@ -62,6 +63,13 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // AWG uses the same Android TUN descriptor as the stock tunnel, but a
+        // separate userspace Go device. Keep the ABI list aligned with the
+        // architectures for which Gradle builds libawg-go.so below.
+        ndk {
+            abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -87,6 +95,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            testProguardFiles("proguard-rules-test.pro")
             signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
             } else {
@@ -107,6 +116,54 @@ flutter {
     source = "../.."
 }
 
+// Build the AWG JNI library from the pinned Go module instead of relying on a
+// prebuilt .so or mutating the pub cache. The Android emulator and every APK
+// variant therefore contain the same AWG engine, with all ABI outputs tracked
+// as build products rather than checked-in binaries.
+val awgNativeDir = rootProject.file("awg-native")
+val awgJniLibsDir = layout.buildDirectory.dir("generated/awg/jniLibs")
+val awgBuildScript = rootProject.file("../tool/build_awg_android.py")
+val sdkProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        FileInputStream(localPropertiesFile).use { load(it) }
+    }
+}
+val androidSdkPath = sdkProperties.getProperty("sdk.dir")
+    ?: System.getenv("ANDROID_SDK_ROOT")
+    ?: System.getenv("ANDROID_HOME")
+    ?: throw GradleException("Android SDK path is missing; run `flutter build apk` first")
+val awgNdkVersion = android.ndkVersion
+val awgNdkDir = file("$androidSdkPath/ndk/$awgNdkVersion")
+android.sourceSets.getByName("main").jniLibs.srcDir(awgJniLibsDir.get().asFile)
+
+val buildAwgAndroidNative = tasks.register<Exec>("buildAwgAndroidNative") {
+    group = "build"
+    description = "Build AmneziaWG's Android JNI libraries"
+    inputs.dir(awgNativeDir)
+    inputs.file(awgBuildScript)
+    inputs.property("goVersion", "1.26")
+    inputs.property("ndkVersion", awgNdkVersion)
+    outputs.dir(awgJniLibsDir)
+    doFirst {
+        check(awgNdkDir.isDirectory) {
+            "Android NDK $awgNdkVersion is missing at $awgNdkDir"
+        }
+    }
+    workingDir(rootProject.projectDir.parentFile)
+    environment("ANDROID_NDK_HOME", awgNdkDir.absolutePath)
+    commandLine(
+        if (System.getProperty("os.name").lowercase().contains("windows")) "python" else "python3",
+        awgBuildScript.absolutePath,
+        awgNdkDir.absolutePath,
+        awgJniLibsDir.get().asFile.absolutePath,
+    )
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildAwgAndroidNative)
+}
+
 dependencies {
     // MainActivity's handshake reader (CompletableDeferred/await against the
     // wireguard_flutter_plus plugin's backend).
@@ -123,6 +180,11 @@ dependencies {
     // (GoBackend/Tunnel/Config). Must stay on the exact version the plugin
     // bundles so both load the same classes.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // AmneziaWG's Android backend is vendored from the official Apache-2.0
+    // tunnel module; the JNI library is built from our pinned amneziawg-go.
+    implementation("androidx.annotation:annotation:1.7.1")
+    implementation("androidx.collection:collection:1.4.0")
+    compileOnly("com.google.code.findbugs:jsr305:3.0.2")
     androidTestImplementation("androidx.test:core:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")

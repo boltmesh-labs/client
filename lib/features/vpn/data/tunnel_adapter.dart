@@ -426,11 +426,213 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }
 }
 
+/// Android can use two in-process Go backends: the existing plugin for stock
+/// WireGuard and BoltMesh's AWG host for obfuscated regions. This adapter
+/// selects by config shape and keeps status/teardown directed to the backend
+/// that currently owns Android's single VpnService TUN.
+class AndroidTunnelAdapter implements TunnelAdapter {
+  AndroidTunnelAdapter({WireGuardTunnelAdapter? stock})
+    : _stock = stock ?? WireGuardTunnelAdapter();
+
+  final WireGuardTunnelAdapter _stock;
+  bool _awgActive = false;
+
+  @visibleForTesting
+  static const awgChannel = MethodChannel('com.boltmesh/tunnel');
+
+  static final _awgDirective = RegExp(
+    r'^\s*Jc\s*=',
+    caseSensitive: false,
+    multiLine: true,
+  );
+
+  @override
+  bool get isReady => _stock.isReady;
+
+  @override
+  Stream<VpnStage> get stages => const Stream<VpnStage>.empty();
+
+  @override
+  Future<void> ensureInitialized() => _stock.ensureInitialized();
+
+  @override
+  Set<String> get daemonCapabilities => const <String>{};
+
+  @override
+  bool get handshakeReaderSupported => true;
+
+  @override
+  Future<bool> requestConsent() => _stock.requestConsent();
+
+  @override
+  Future<void> start({
+    required String serverAddress,
+    required String wgQuickConfig,
+    required String providerBundleId,
+    TunnelTransport? transport,
+  }) async {
+    if (transport != null) {
+      throw UnsupportedError(
+        'Android does not have a stream transport backend yet.',
+      );
+    }
+
+    if (_awgDirective.hasMatch(wgQuickConfig)) {
+      // Android allows one owning VPN TUN. Tear down either previous engine
+      // before transferring ownership to the other one.
+      await _stopAwg('restart Android AWG tunnel');
+      await _stock.stop('switch Android VPN owner to AWG');
+      await awgChannel
+          .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
+            'wgQuickConfig': wgQuickConfig,
+          })
+          .timeout(TunnelTuning.opTimeout);
+      _awgActive = true;
+      return;
+    }
+
+    await _stopAwg('switch Android VPN owner to stock WireGuard');
+    await _stock.start(
+      serverAddress: serverAddress,
+      wgQuickConfig: wgQuickConfig,
+      providerBundleId: providerBundleId,
+    );
+    _awgActive = false;
+  }
+
+  @override
+  Future<void> stop(String reason) async {
+    await _stopAwg(reason);
+    await _stock.stop(reason);
+    _awgActive = false;
+  }
+
+  Future<void> _stopAwg(String reason) async {
+    try {
+      await awgChannel
+          .invokeMapMethod<String, Object?>('stopAwg')
+          .timeout(TunnelTuning.stopTimeout);
+      AppLog.info('Android AWG tunnel stopped ($reason)');
+    } catch (e) {
+      // The AWG backend may never have been initialized. It is safe to proceed
+      // to the stock backend, but retain unknown rather than claiming success.
+      AppLog.info('Android AWG stop unavailable ($reason): $e');
+    }
+  }
+
+  Future<Map<String, Object?>?> _readAwgStatus() async {
+    try {
+      return await awgChannel
+          .invokeMapMethod<String, Object?>('statusAwg')
+          .timeout(TunnelTuning.healthTimeout);
+    } catch (e) {
+      AppLog.info('Android AWG status unavailable (unknown, ignoring): $e');
+      return null;
+    }
+  }
+
+  bool _isUp(Map<String, Object?> status) => status['up'] == true;
+
+  VpnStage _stage(Map<String, Object?> status) => switch (status['stage']) {
+    'connected' => VpnStage.connected,
+    'connecting' => VpnStage.connecting,
+    _ => VpnStage.disconnected,
+  };
+
+  @override
+  Future<VpnStage?> readStage() async {
+    final status = await _readAwgStatus();
+    if (status != null && _isUp(status)) {
+      _awgActive = true;
+      return _stage(status);
+    }
+    if (_awgActive) {
+      _awgActive = false;
+      return VpnStage.disconnected;
+    }
+    return _stock.readStage();
+  }
+
+  @override
+  Future<Map<String, dynamic>?> readTraffic() async {
+    final status = await _readAwgStatus();
+    if (status != null && _isUp(status)) {
+      _awgActive = true;
+      return <String, dynamic>{
+        'rxBytes': status['rxBytes'] ?? 0,
+        'txBytes': status['txBytes'] ?? 0,
+      };
+    }
+    if (_awgActive) {
+      _awgActive = false;
+      return null;
+    }
+    return _stock.readTraffic();
+  }
+
+  @override
+  Future<DateTime?> readHandshake() async {
+    final status = await _readAwgStatus();
+    if (status != null && _isUp(status)) {
+      _awgActive = true;
+      final seconds = status['lastHandshake'];
+      if (seconds is! num || seconds <= 0) return null;
+      return DateTime.fromMillisecondsSinceEpoch(
+        (seconds * 1000).toInt(),
+        isUtc: true,
+      );
+    }
+    if (_awgActive) {
+      _awgActive = false;
+      return null;
+    }
+    return _stock.readHandshake();
+  }
+
+  @override
+  Future<ActivePeer?> getActivePeer() async {
+    final status = await _readAwgStatus();
+    if (status != null && _isUp(status)) {
+      _awgActive = true;
+      final publicKey = (status['publicKey'] as String?)?.trim() ?? '';
+      if (publicKey.isEmpty) return null;
+      return ActivePeer(
+        publicKey: publicKey,
+        endpoint: (status['endpoint'] as String?)?.trim() ?? '',
+      );
+    }
+    if (_awgActive) {
+      _awgActive = false;
+      return null;
+    }
+    return _stock.getActivePeer();
+  }
+
+  @override
+  Future<bool> killGhost() async {
+    var awgKilled = false;
+    try {
+      awgKilled =
+          await awgChannel
+              .invokeMethod<bool>('killAwgGhost')
+              .timeout(TunnelTuning.opTimeout) ??
+          false;
+    } catch (e) {
+      AppLog.info('Android AWG ghost kill unavailable (ignoring): $e');
+    }
+    _awgActive = false;
+    final stockKilled = await _stock.killGhost();
+    return awgKilled && stockKilled;
+  }
+}
+
 /// Selects the tunnel backend for the current platform. Linux and Windows use
 /// the privileged `boltmeshd` helper so the app process never holds
 /// privilege; every other platform keeps the `wireguard_flutter_plus` plugin.
-final tunnelAdapterProvider = Provider<TunnelAdapter>(
-  (_) => helper_platform.isHelperPlatformSupported
-      ? HelperTunnelAdapter()
-      : WireGuardTunnelAdapter(),
-);
+final tunnelAdapterProvider = Provider<TunnelAdapter>((_) {
+  if (helper_platform.isHelperPlatformSupported) return HelperTunnelAdapter();
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    return AndroidTunnelAdapter();
+  }
+  return WireGuardTunnelAdapter();
+});

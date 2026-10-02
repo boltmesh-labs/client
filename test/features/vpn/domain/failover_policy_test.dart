@@ -1,5 +1,6 @@
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/domain/failover_policy.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../support/vpn_harness.dart';
@@ -309,10 +310,11 @@ void main() {
     });
 
     test('skips a region this build cannot serve', () {
-      // flutter test runs as Android, where there is no obfuscated data plane.
-      // The obfuscated region is the emptier one, so it would win on load — but
-      // a move there could only reach a start that refuses, so it is not a
-      // candidate and the failover moves to a server that works instead.
+      // Fuchsia has no AWG backend. The obfuscated region is the
+      // emptier one, so it would win on load — but a move there could only reach
+      // a start that refuses, so it is not a candidate.
+      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final regions = [
         region('us', [server('dead')]),
         region('eu', [server('obf', peers: 1, obfuscation: awgObfuscation())]),
@@ -329,6 +331,8 @@ void main() {
     });
 
     test('null when the only other capacity is unservable', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final regions = [
         region('us', [server('dead')]),
         region('eu', [server('obf', obfuscation: awgObfuscation())]),

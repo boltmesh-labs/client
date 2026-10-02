@@ -182,6 +182,64 @@ internal object TunnelHost {
         "requestVpnConsent" -> {
           requestVpnConsent(result)
         }
+        "startAwg" -> {
+          val wgQuickConfig = call.argument<String>("wgQuickConfig")
+          if (wgQuickConfig.isNullOrEmpty()) {
+            result.error("BAD_CONFIG", "AWG config is missing", null)
+            return@setMethodCallHandler
+          }
+          val app = appContext ?: context.applicationContext
+          ioScope.launch {
+            val reply = try {
+              AndroidAwgHost.start(app, wgQuickConfig)
+            } catch (t: Throwable) {
+              Log.w(LOG_TAG, "AWG tunnel start failed (${t.javaClass.simpleName})")
+              main.post {
+                result.error("AWG_START_FAILED", "AmneziaWG tunnel could not start", null)
+              }
+              return@launch
+            }
+            main.post { result.success(reply) }
+          }
+        }
+        "stopAwg" -> {
+          val app = appContext ?: context.applicationContext
+          ioScope.launch {
+            val reply = try {
+              AndroidAwgHost.stop(app)
+            } catch (t: Throwable) {
+              Log.w(LOG_TAG, "AWG tunnel stop failed (${t.javaClass.simpleName})")
+              main.post {
+                result.error("AWG_STOP_FAILED", "AmneziaWG tunnel could not stop", null)
+              }
+              return@launch
+            }
+            main.post { result.success(reply) }
+          }
+        }
+        "statusAwg" -> {
+          ioScope.launch {
+            val reply = try {
+              AndroidAwgHost.status()
+            } catch (t: Throwable) {
+              Log.i(LOG_TAG, "AWG status unavailable (${t.javaClass.simpleName})")
+              null
+            }
+            main.post { result.success(reply) }
+          }
+        }
+        "killAwgGhost" -> {
+          val app = appContext ?: context.applicationContext
+          ioScope.launch {
+            val killed = try {
+              AndroidAwgHost.stop(app)["up"] != true
+            } catch (t: Throwable) {
+              Log.w(LOG_TAG, "AWG ghost cleanup failed (${t.javaClass.simpleName})")
+              false
+            }
+            main.post { result.success(killed) }
+          }
+        }
         else -> result.notImplemented()
       }
     }

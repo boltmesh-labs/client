@@ -129,9 +129,9 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | in-process (`VpnService`) | not needed | build, lint, minified-bridge + API 30/35 instrumentation | **shipping** |
+| **Android** | stock plugin + in-process AWG (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG emulator proof passed; final overlay retest pending** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
-| **Windows** | WireGuard-for-Windows service | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (stream rung on stock regions; no AWG data plane — see [Flows](README.md#flows)) |
+| **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
 | **iOS** | Network Extension only | not possible (sandbox) | none | **blocked on Apple hardware** |
 
@@ -624,8 +624,8 @@ rest of the pipeline (which files, when, verify) is unchanged.
   by a server move or a manual reconnect.
 - Transport ladder: where it *starts* is the region's data plane, and a path
   the health policy confirmed dead *locally* is rebuilt one rung lower per
-  heal, so an unobstructed network pays nothing. `native` (kernel WireGuard) →
-  `awg` (in-process AmneziaWG, Linux and Windows) → `stream` (the tunnel's datagrams
+  heal, so an unobstructed network pays nothing. `native` (platform WireGuard) →
+  `awg` (in-process AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams
   inside a TLS session to the node, Linux and Windows). A stock region's node
   runs stock WireGuard, so its floor is `native`; an obfuscated region's node
   runs the AmneziaWG device, so a stock datagram is illegible to it and its
@@ -638,20 +638,20 @@ rest of the pipeline (which files, when, verify) is unchanged.
   `stream-transport` — the daemon advertises that token only on builds whose
   `up` would honour the spec, so an older helper or a macOS one keeps the rung
   off the ladder instead of selecting a rung guaranteed to be refused.
-- The two rungs have different platform reach, and the gap is not the same on
-  each. The **stream** transport is a bridge plus a bypass route: the bridge is
-  platform-independent, and the route is a `/32` through the physical interface
-  installed *before* the tunnel's own routes exist — on Linux ahead of
-  `wg-quick` (and repeated in each table `wg-quick`'s fwmark policy rules
-  select), on Windows ahead of the tunnel service (where the longest-prefix
-  match wins outright, so one route is enough). It needs no special data plane,
-  so **Windows gets the stream rung on stock regions**. The **AWG** data plane is
-  in-process on both: Linux over `/dev/net/tun`, Windows over a Wintun adapter,
-  because the WireGuard-for-Windows *kernel* service has no concept of the
-  obfuscation directives and a stock config never reaches it on such a region. The
-  two are one data plane with the device, wire format and config translation
-  shared; what differs is the adapter, how the address and routes are installed
-  (IP Helper entry points on Windows, `ip route` on Linux), and the resolver. Two
+  - The two lower rungs have different platform reach. The **stream** transport
+  is a bridge plus a bypass route: the bridge is platform-independent, and the
+  route is a `/32` through the physical interface installed *before* the
+  tunnel's own routes exist — on Linux ahead of `wg-quick` (and repeated in
+  each table `wg-quick`'s fwmark policy rules select), on Windows ahead of the
+  tunnel service (where the longest-prefix match wins outright, so one route
+  is enough). **Windows gets the stream rung on stock regions**; Android does
+  not yet have the stream lifecycle/bypass implementation. The **AWG** data
+  plane runs in-process on Linux and Windows, and through Android's VpnService
+  TUN. Windows cannot use its stock kernel service for AWG because that service
+  has no concept of the obfuscation directives. The desktop adapters are Linux
+  `/dev/net/tun` and Windows Wintun; Android uses the official AWG Android
+  backend with the same pinned AmneziaWG Go engine. The wire format is shared;
+  platform adapters and route/resolver setup differ. Two
   platform details are worth knowing because they are invisible from the client:
   the Wintun DLL is copied to System32 and pinned by content hash before the
   device loads it (the upstream binding resolves it by bare name, and the daemon
@@ -659,7 +659,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   because a zero lifetime is an expiry of *now* — the route appears installed and
   the stack routes around it.
   The two gates are independent by design and the ladder requires both for an
-  obfuscated region, so a platform with neither — macOS, Android — cannot serve
+  obfuscated region, so a platform with neither — macOS — cannot serve
   one: region selection skips it, and a pinned or control-plane-returned one is
   refused at the start rather than sent a native conf its node cannot read. The
   Regions tab still lists
