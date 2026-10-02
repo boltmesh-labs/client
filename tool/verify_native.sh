@@ -531,6 +531,44 @@ else
   bad "Windows helper transport can send a request to a pre-created pipe"
 fi
 
+# The obfuscated (AmneziaWG) data plane needs the Wintun L3 TUN driver, which
+# nothing embeds: golang.zx2c4.com/wintun resolves "wintun.dll" by bare name at
+# load time. The helper does not trust the file beside it -- it checks a hash pin
+# and copies the driver into System32 first (wintun_windows.go) -- but it reads
+# the reviewed binary from the helper's own directory, so the pre-packing hook is
+# the only thing that can put it in an installed bundle.
+#
+# No existing gate sees that bundle. The Go suite redirects the vendored path at
+# a temp directory, and TestWintunVendoredBinaryMatchesThePin skips unless the
+# driver is already beside the test binary, which it never is in CI. A bundle
+# without the driver still passes every Windows test and then fails each
+# obfuscated connect at runtime, so assert both halves here: the vendored file
+# still matches the pin constant, and the hook still stages it.
+wintun_source=boltmeshd/internal/tunnel/third_party/wintun/wintun.dll
+wintun_pin="$(sed -n 's/^const wintunSHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' \
+  boltmeshd/internal/tunnel/wintun_windows.go)"
+if [[ -f $wintun_source && -n $wintun_pin ]]; then
+  wintun_sum="$(sha256sum "$wintun_source" | cut -d' ' -f1)"
+  if [[ $wintun_sum == "$wintun_pin" ]]; then
+    ok 'vendored Wintun driver matches the hash pin the helper trusts'
+  else
+    bad "vendored Wintun driver hashes to $wintun_sum, want $wintun_pin (see third_party/wintun/README.md)"
+  fi
+else
+  bad "vendored Wintun driver ($wintun_source) or its pin constant is missing"
+fi
+
+# shellcheck disable=SC2016  # literal matches against the PowerShell source
+if grep -qF 'third_party/wintun/' windows/packaging/stage_boltmeshd.ps1 &&
+  grep -qF '$wintunOutput = Join-Path $buildPath $wintunName' \
+    windows/packaging/stage_boltmeshd.ps1 &&
+  grep -qF 'Source: "{{SOURCE_DIR}}\*"; DestDir: "{app}"' \
+    windows/packaging/exe/boltmesh.iss; then
+  ok 'Windows bundle stages the vendored Wintun driver and the installer ships it'
+else
+  bad 'the Windows installer would ship no Wintun driver, so every obfuscated connect would fail at runtime. stage_boltmeshd.ps1 must stage boltmeshd/internal/tunnel/third_party/wintun/wintun.dll into the bundle; if the Inno template ever stops shipping the whole bundle, list it in [Files] instead'
+fi
+
 # --- Windows: cross-compile the C++ transport test -------------------------
 # The named-pipe transport is Windows-only C++ that only the Flutter-gated
 # validate-windows job otherwise compiles. Cross-compile the standalone,

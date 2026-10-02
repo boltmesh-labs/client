@@ -10,7 +10,7 @@ Flutter app over a local transport. The app therefore never runs `sudo`, `wg`,
 | Platform | Transport | Data plane | State |
 | --- | --- | --- | --- |
 | Linux | Unix socket, systemd socket-activation | kernel `wireguard` via `wg-quick` + `wgctrl`; in-process **AmneziaWG** over a tun for configs carrying the obfuscation directives | shipping |
-| Windows | named pipe `\\.\pipe\boltmesh\boltmeshd` | WireGuard-for-Windows tunnel service + `wireguard.dll` | shipping |
+| Windows | named pipe `\\.\pipe\boltmesh\boltmeshd` | WireGuard-for-Windows tunnel service + `wireguard.dll`; in-process **AmneziaWG** over a Wintun adapter for configs carrying the obfuscation directives | shipping |
 | macOS | Unix socket, launchd LaunchDaemon | **userspace `wireguard-go` over `utun`** | **build-tagged, untested on hardware** |
 
 ## Stream transport (Linux, opt-in per `up`)
@@ -95,10 +95,11 @@ Two routing facts make or break the egress, both handled in
   `not fwmark … table N` rule selects, parsed from `ip rule show` after
   `wg-quick up` rather than predicted from the interface name.
 
-Stream transport is Linux-only for now; Windows and macOS reject the spec
-(`bad_config`) rather than silently ignoring it, since a silently ignored spec
-would leave the tunnel on a dead loopback endpoint. It is not combined with
-the AmneziaWG directives — one rung at a time.
+Stream transport runs on Linux and Windows, over the same shared
+`boltmesh/stream` package; macOS rejects the spec (`bad_config`) rather than
+silently ignoring it, since a silently ignored spec would leave the tunnel on a
+dead loopback endpoint. It is not combined with the AmneziaWG directives — one
+rung at a time.
 
 ## macOS design
 

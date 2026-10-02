@@ -443,7 +443,14 @@ the script the `validate-windows` CI job runs.
 The Windows package is an Inno Setup `.exe`, not MSIX. The pre-packing hook
 `windows/packaging/stage_boltmeshd.ps1` builds `boltmeshd.exe` into the
 bundle, so the installer ships the helper next to `boltmesh.exe` (and the
-plugin-bundled `wireguard_svc.exe`/`wireguard.dll`), then
+plugin-bundled `wireguard_svc.exe`/`wireguard.dll`). It also stages the
+vendored `wintun.dll` the obfuscated AmneziaWG data plane needs: nothing
+embeds that driver, and the helper reads a hash-verified copy from beside
+itself and pins it into System32 before loading it, so a bundle without it
+fails every obfuscated connect at runtime while stock regions keep working.
+`bash tool/verify_native.sh` asserts both that the vendored file still matches
+the Go hash pin and that the hook still stages it, because no test sees an
+installed bundle. Then
 `windows/packaging/exe/boltmesh.iss` installs and starts the helper service;
 uninstall quiesces the daemon, removes the tunnel service and private-key
 config, and then removes the helper service. The Flutter-free
