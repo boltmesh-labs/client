@@ -700,30 +700,21 @@ void main() {
       });
 
       test(
-        'a second dead echo escalates past the ladder instead of demoting',
+        'a confirmed dead path steps the ladder before spending a move',
         () async {
-          // KNOWN GAP, asserted as-is. This pins the current behaviour, which
-          // is not what README.md:625-627 describes ("a path the health policy
-          // confirmed dead *locally* is rebuilt one rung lower per heal").
+          // The production-timing case, and the one that used to fail. A
+          // confirmed dead echo (`echoShortens` latched at 2 strikes) plus a
+          // stale handshake fast-tracked straight to failover, because Layer 1
+          // cannot tell a blocked transport from a dead node. The heal now
+          // takes the rung step first; only a stall that survives it escalates
+          // to a server move.
           //
-          // `the first stall walks from AWG onto the stream rung` above
-          // demotes, but only because it runs ONE tick: strikes reach 1, below
-          // `echoStallStrikes` = 2, so `echoShortens` stays false and
-          // `localEchoStalled` never fires. It also pins the handshake to 160s
-          // (via `staleHandshake`), i.e. inside the 150s..180s window where
-          // `standardStalled` holds but `hardStalled` does not.
-          //
-          // Production timing never lands there. `echoProbeAfter` = 30s starts
-          // probing long before the 150s staleness window opens, so on the 10s
-          // tick the second strike lands at ~40-50s — roughly 100s BEFORE
-          // demotion becomes eligible. `localEchoStalled` is then true, which
-          // feeds `confirmedLocalPathDeath` into `classifyFailure`, returns
-          // `tunnelPathDead`, and fast-tracks straight to failover at
-          // conn_health.dart:335-347. `_autoHeal` — the ladder's only writer —
-          // is never reached.
-          //
-          // Two ticks reproduce it: the first banks a strike without acting,
-          // the second supplies the staleness the first could not.
+          // Two ticks are required, and the first must be the one that banks a
+          // strike: `echoProbeAfter` = 30s opens the probe window long before
+          // `handshakeStaleAfter` = 150s makes a heal eligible, so in
+          // production `echoStallStrikes` = 2 is always already satisfied by
+          // the time the ladder becomes reachable. A single-tick test cannot
+          // cover that, which is why the first-stall test above does not.
           useLinuxDataPlane();
           final (container, socket) = await seedStream();
           final ctl = container.read(connectionProvider.notifier);
@@ -735,56 +726,134 @@ void main() {
           await ctl.checkHealthOnce();
           expect(ctl.obfuscationRung, ObfuscationRung.awg);
 
-          // Tick 2: same as `staleHandshake`, now with strikes at 2. This is
-          // the state a real stall is in when it becomes eligible to demote.
+          // Tick 2: same as `staleHandshake`, now with strikes at 2.
           ctl.debugHandshakeReader = () async => DateTime.now().subtract(
             ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
           );
           await ctl.checkHealthOnce();
 
-          // The rung does NOT move, and the heal budget is untouched because
-          // the move budget was spent instead. Asserted on the rung and the
-          // built conf rather than on which server it moved to: seedStream's
-          // handler answers `/switch` but throws elsewhere, so discovery may
-          // or may not yield a target. Both outcomes leave these true.
-          expect(ctl.obfuscationRung, ObfuscationRung.awg);
-          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
-          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
-          expect(socket.lastConfig, isNot(contains('ListenPort = ')));
-          expect(socket.lastTransport, isNull);
-          expect(container.read(connectionProvider).autoHealAttempts, 0);
-          expect(container.read(connectionProvider).autoFailoverAttempts, 1);
+          // The rung steps and the tunnel is rebuilt on it, on the same server
+          // and with the move budget untouched.
+          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          expect(socket.lastConfig, contains('ListenPort = '));
+          expect(socket.lastTransport, isNotNull);
+          // The region's inner format is unchanged: the stream carries AWG
+          // datagrams inside TLS, because the node still runs the AWG device.
+          expect(socket.lastConfig, contains('Jc = 3'));
+
+          final state = container.read(connectionProvider);
+          expect(state.phase, ConnPhase.connected);
+          expect(state.dial?.serverId, 'srv-1');
+          expect(state.autoHealAttempts, 1);
+          expect(state.autoFailoverAttempts, 0);
         },
       );
 
       test(
-        'an unprobeable echo reaches the ladder (the one production path)',
+        'the rung step is bounded by the heal budget, then moves servers',
         () async {
-          // The complement to the case above, and the only way `_autoHeal` is
-          // reachable at all: a null echo resets `_deadEchoStrikes` every tick
-          // (conn_health.dart:168-172), so `echoShortens` never latches and
-          // nothing fast-tracks to failover. The demotion is then reachable —
-          // but only for an echo that cannot be sent, never for one that came
-          // back dead, which is what a broken data path actually produces.
+          // The other half of the contract: the ladder buys exactly one step,
+          // spent from the heal budget that already existed. Once that budget
+          // is spent, a confirmed dead path moves servers instead — so the
+          // ladder trades a move budget for a rung rather than granting an
+          // unbounded retry on the bottom rung.
+          //
+          // The budget is spent in-session rather than by healing first: a
+          // reconnect resets it by design, so waiting for a real heal to spend
+          // it would test the reset instead of the bound.
           useLinuxDataPlane();
           final (container, socket) = await seedStream();
           final ctl = container.read(connectionProvider.notifier);
+          ctl.snap = ctl.snap.copyWith(autoHealAttempts: 1);
 
-          (container.read(
-            gatewayProbeProvider,
-          ) as support.FakeGatewayProbe).alive = null;
+          // Bank strike 1 on a handshake too fresh to act on.
+          ctl.debugHandshakeReader = () async =>
+              DateTime.now().subtract(const Duration(seconds: 40));
+          await ctl.checkHealthOnce();
 
-          // Two ticks, so this cannot pass merely by being the first one.
-          for (var i = 0; i < 2; i++) {
-            staleHandshake(ctl);
-            await ctl.checkHealthOnce();
-          }
+          // Strike 2 makes the path confirmed-dead. `canHeal` is now false, so
+          // `ladderStepAvailable` is false too and the evidence fast-tracks.
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
 
-          expect(ctl.obfuscationRung, ObfuscationRung.stream);
-          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-          expect(socket.lastTransport, isNotNull);
+          // No rung step: the budget was spent, so the evidence moved servers
+          // instead. `autoHealAttempts` is not asserted — the fallback restart
+          // re-asserts it to 0 by design (conn_recovery.dart:753).
+          final state = container.read(connectionProvider);
+          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+          expect(socket.lastTransport, isNull);
+          expect(state.autoFailoverAttempts, 1);
         },
       );
+
+      test(
+        'a region with no lower rung keeps the old move-first escalation',
+        () async {
+          // The fix is scoped by whether a rung actually exists below. A stock
+          // region serves nothing but native, so there is nowhere to step and
+          // a confirmed dead path must still go straight to failover: a heal
+          // would rebuild the same config on the same rung, so spending the
+          // heal budget in place of the move would only delay recovery.
+          final events = <String>[];
+          final (container, _) = await seedConnected(
+            events,
+            (o) {
+              if (o.path.endsWith('/config')) return dialJson();
+              if (o.path.endsWith('/status')) throw networkTimeout(o);
+              if (o.path.endsWith('/vpn-regions')) {
+                return regionsList(twoServers());
+              }
+              if (o.path.endsWith('/switch')) return dialJsonSrv2();
+              throw StateError('unexpected ${o.path}');
+            },
+            // A switch binds a fresh peer, so the move needs a keypair to
+            // generate; without one it falls back to bouncing the same dial.
+            keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+          );
+          final ctl = container.read(connectionProvider.notifier);
+
+          // Bank strike 1 on a handshake too fresh to act on, so the budget is
+          // still whole when the path becomes confirmed-dead on the next tick.
+          ctl.debugHandshakeReader = () async =>
+              DateTime.now().subtract(const Duration(seconds: 40));
+          await ctl.checkHealthOnce();
+          expect(container.read(connectionProvider).autoHealAttempts, 0);
+
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+
+          final state = container.read(connectionProvider);
+          expect(state.phase, ConnPhase.connected);
+          expect(state.autoHealAttempts, 0);
+          expect(state.autoFailoverAttempts, 1);
+          expect(state.dial?.serverId, 'srv-2');
+        },
+      );
+
+      test('an unprobeable echo reaches the ladder too', () async {
+        // The other route in: a null echo never latches `echoShortens`, so
+        // nothing fast-tracks and the heal runs. Kept because it needs no rung
+        // ordering to hold, and a future refactor must not lose it.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+        final ctl = container.read(connectionProvider.notifier);
+
+        (container.read(
+          gatewayProbeProvider,
+        ) as support.FakeGatewayProbe).alive = null;
+
+        // Two ticks, so this cannot pass merely by being the first one.
+        for (var i = 0; i < 2; i++) {
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+        }
+
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastTransport, isNotNull);
+      });
 
       test(
         'the bridge receives the transport spec on the stream rung',

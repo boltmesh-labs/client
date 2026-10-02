@@ -690,11 +690,21 @@ rest of the pipeline (which files, when, verify) is unchanged.
   One rung at a time — a start runs on a single rung, and the transport carries
   the region's own inner format: an obfuscated region's stream is the AmneziaWG
   conf inside the TLS session, never a stock one.
-  The heal budget is one restart per session, so a region offering both AWG
-  and stream reaches stream *across* a server move or reconnect rather than
-  within one outage: the rung is sticky while the budget resets. A heal that
-  the new rung does not fix falls through to the existing escalation (move,
-  then the surfaced recovery error), never a new failure mode.
+  The rung step comes *before* the server move, because Layer 1 cannot tell a
+  blocked transport from a dead node: a middlebox dropping this rung's traffic
+  is indistinguishable from a powered-off server at the echo and the handshake.
+  `serverDown` is the backend-attributed verdict that the node itself is gone,
+  so that skips the ladder and moves straight on; anything else takes the
+  cheap local retry first. Where the region serves no lower rung there is
+  nothing to step to, so a heal would only rebuild the same config on the same
+  rung and the old move-first escalation is kept unchanged.
+  The heal budget is one restart per incident, so the ladder buys exactly one
+  step: once that is spent, the same confirmed-dead evidence escalates to the
+  server move, and a stall the new rung does not fix falls through to the
+  existing escalation (move, then the surfaced recovery error), never a new
+  failure mode. The rung is sticky across the reconnects that reset the budget,
+  so a region offering both AWG and stream stays on stream once it has stepped
+  down — a reconnect preserves a demotion but never causes one.
   - Bypass-route lifetime. The pinned routes outlive the daemon that installed
     them, so the set is recorded beside the config and written *before* each
     install — a crash in between would otherwise leak a `/32` nothing accounts

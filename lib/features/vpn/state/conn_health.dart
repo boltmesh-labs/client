@@ -324,6 +324,26 @@ extension ConnectionHealth on ConnectionController {
     // tunnel first, then let failover discovery/switch use the direct network.
     // `_autoFailover` is bounded and restarts the old dial if direct discovery
     // also fails. Unknown echo evidence still follows the probe/heal ladder.
+    final canHeal = canAttemptAutoHeal(
+      autoHealAttempts: snap.autoHealAttempts,
+      autoFailoverAttempts: snap.autoFailoverAttempts,
+      maxFailovers: ConnectionTuning.maxAutoFailovers,
+      maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
+    );
+    // A locally-confirmed dead path is not the same fact as a dead node, and
+    // Layer 1 cannot tell them apart: a middlebox dropping this rung's
+    // transport looks exactly like a powered-off server from in here — dead
+    // echo, stale handshake. The ladder exists for the first, so before
+    // spending a move budget on a server change, take the rung step the heal
+    // already carries. `serverDown` is the backend-attributed verdict that
+    // this *is* the node being gone, so it skips the ladder and moves
+    // straight on; with no attributed verdict the cheap local retry runs
+    // first and a stall that survives it still escalates below.
+    //
+    // Gated on a lower rung actually existing: with nowhere to step, a heal
+    // would rebuild the same config on the same rung, so it must not consume
+    // the heal budget in place of the move.
+    final ladderStepAvailable = !serverDown && _hasLowerRung(dial) && canHeal;
     final localCause = classifyFailure(
       hasNetwork: true,
       gatewayAlive: gateway,
@@ -333,7 +353,8 @@ extension ConnectionHealth on ConnectionController {
       confirmedLocalPathDeath: localEchoStalled,
     );
     if (localCause == ConnectionFailureCause.tunnelPathDead &&
-        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
+        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers &&
+        !ladderStepAvailable) {
       AppLog.info('health fast-track ($why) path dead -> direct failover');
       await _autoFailover(
         why,
@@ -355,8 +376,13 @@ extension ConnectionHealth on ConnectionController {
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
     );
+    // Same rung-before-move rule as the gate above, and it matters more here:
+    // this one is reached with a *live* control-plane answer, which is the
+    // signature of a blocked transport rather than a dead node — the backend
+    // is up while the tunnel's own path is not.
     if (cause == ConnectionFailureCause.tunnelPathDead &&
-        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
+        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers &&
+        !ladderStepAvailable) {
       AppLog.info('health fast-track ($why) path dead, api up -> failover');
       await _autoFailover(
         why,
@@ -368,12 +394,6 @@ extension ConnectionHealth on ConnectionController {
       );
       return;
     }
-    final canHeal = canAttemptAutoHeal(
-      autoHealAttempts: snap.autoHealAttempts,
-      autoFailoverAttempts: snap.autoFailoverAttempts,
-      maxFailovers: ConnectionTuning.maxAutoFailovers,
-      maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
-    );
     // Without positive local path-dead evidence, a move still requires a
     // positive control-plane result. A failed/unknown probe alone is not a
     // reason to stop a tunnel or consume a move budget.

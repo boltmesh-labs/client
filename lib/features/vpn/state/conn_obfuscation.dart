@@ -108,14 +108,7 @@ extension ConnectionObfuscation on ConnectionController {
   /// [why] is the health reason that triggered the heal, so the log names the
   /// evidence the demotion acted on.
   bool _demoteRung(DialParams dial, String why) {
-    final next = switch (_obfuscationRung) {
-      ObfuscationRung.native => _firstAvailableRung(dial),
-      ObfuscationRung.awg =>
-        _streamRungAvailable(dial) ? ObfuscationRung.stream : null,
-      // Nothing below stream: a heal here escalates through the existing
-      // failover instead of retrying a rung that does not exist.
-      ObfuscationRung.stream => null,
-    };
+    final next = _nextRungFor(dial);
     if (next == null) return false;
     AppLog.info(
       'transport demoted ($why) ${_obfuscationRung.name} -> ${next.name}',
@@ -123,6 +116,26 @@ extension ConnectionObfuscation on ConnectionController {
     _obfuscationRung = next;
     return true;
   }
+
+  /// The rung one step below the current one that [dial] can actually serve,
+  /// or null when there is nothing below to walk onto.
+  ///
+  /// Split out of [_demoteRung] so the health tick can ask whether a heal
+  /// would lower the rung *before* spending one, without mutating it: the
+  /// ladder is only worth a restart when there is a rung underneath it.
+  ObfuscationRung? _nextRungFor(DialParams dial) => switch (_obfuscationRung) {
+    ObfuscationRung.native => _firstAvailableRung(dial),
+    ObfuscationRung.awg =>
+      _streamRungAvailable(dial) ? ObfuscationRung.stream : null,
+    // Nothing below stream: a heal here escalates through the existing
+    // failover instead of retrying a rung that does not exist.
+    ObfuscationRung.stream => null,
+  };
+
+  /// Whether a heal against [dial] would leave the rung lower. Pure: it reads
+  /// the ladder without moving it, so a caller can gate on it and leave the
+  /// ladder alone when the answer is no.
+  bool _hasLowerRung(DialParams dial) => _nextRungFor(dial) != null;
 
   /// The first rung below native that [dial]'s region and this platform can
   /// actually run, preferring AWG because it is the cheaper one.
