@@ -246,7 +246,7 @@ jobs:
       matrix:
         # Exercise the API 30 connect path and retain the minified bridge
         # coverage on a current API.
-        api-level: [30, 35]
+        api-level: [30, 36]
     steps:
       - uses: actions/checkout@v7
         with:
