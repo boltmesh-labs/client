@@ -105,11 +105,7 @@ func (liveWindowsRoutes) bestRoute(dst net.IP) (physicalRoute, error) {
 		return physicalRoute{}, err
 	}
 	var row windows.MibIpForwardRow2
-	ret, _, _ := procGetBestRoute2.Call(
-		uintptr(unsafe.Pointer(&sa)),
-		unsafe.Sizeof(sa),
-		uintptr(unsafe.Pointer(&row)),
-	)
+	ret, _ := callGetBestRoute2(newBestRoute2Call(&sa, &row, &bestSourceForLookup))
 	if ret != 0 {
 		return physicalRoute{}, fmt.Errorf("GetBestRoute2(%s): %w", dst, routeError(windows.NTStatus(ret)))
 	}
@@ -260,6 +256,92 @@ func rawInetBytes(sa windows.RawSockaddrInet) string {
 		return ""
 	}
 	return ip.String()
+}
+
+// bestSourceForLookup is the out-parameter buffer GetBestRoute2 writes the chosen
+// source address through. It is passed a scratch buffer rather than NULL because
+// the entry point rejects a null pointer there, and the value itself is of no
+// interest: only the route row is read back.
+var bestSourceForLookup windows.RawSockaddrInet
+
+// callGetBestRoute2 is the seam over the bound entry point's variadic call, so
+// the *argument list* can be asserted in a test without loading iphlpapi.
+//
+// The seam deliberately sits at the variadic Call rather than wrapping the call
+// in a typed helper. A typed helper is where the bug hid: with the arguments
+// behind a signature the type checker vouched for, a test could stub the helper
+// and assert only that the helper was called with the right pointers -- which
+// stayed green while the argument list *inside* it was still wrong. Keeping the
+// list here means the test sees the same thing the kernel sees.
+var callGetBestRoute2 = func(call bestRoute2Call) (uintptr, error) {
+	ret, _, err := procGetBestRoute2.Call(call.args...)
+	return ret, err
+}
+
+// bestRoute2Args builds GetBestRoute2's seven arguments, in the order the entry
+// point declares them:
+//
+//	NET_LUID*, NET_IFINDEX, SOCKADDR_INET* (source), SOCKADDR_INET* (destination),
+//	ULONG sortOptions, MIB_IPFORWARD_ROW2*, SOCKADDR_INET* (best source)
+//
+// The destination is the FOURTH parameter. It was bound first, which made the
+// kernel read the address as a NET_LUID and fail with a status no message table
+// could name -- and because the call is variadic, nothing but this list's own
+// comments could have caught it.
+//
+// A null LUID and a zero index together mean "consult the routing table", which
+// is what a caller asking "where does this go today" wants: the interface is an
+// output here, not an input. Zero for the optional source address asks the same,
+// and zero for the unused sort options is what the documentation specifies.
+// bestRoute2Call is one GetBestRoute2 invocation: the variadic argument list as
+// the kernel sees it, plus the typed buffers those slots point at.
+//
+// Carrying both is what lets a test assert the argument *order* and still write
+// through the out-parameters. Reading a typed pointer back out of the []uintptr
+// would mean converting a uintptr to a pointer, which govet rejects (a uintptr
+// carries no provenance), so the pointers travel alongside instead of being
+// recovered from the list.
+type bestRoute2Call struct {
+	args       []uintptr
+	dst        *windows.RawSockaddrInet
+	row        *windows.MibIpForwardRow2
+	bestSource *windows.RawSockaddrInet
+}
+
+// newBestRoute2Call builds the argument list in the order the entry point
+// declares its parameters:
+//
+//	NET_LUID*, NET_IFINDEX, SOCKADDR_INET* (source), SOCKADDR_INET* (destination),
+//	ULONG sortOptions, MIB_IPFORWARD_ROW2*, SOCKADDR_INET* (best source)
+//
+// The destination is the FOURTH parameter. It was bound first, which made the
+// kernel read the address as a NET_LUID and fail with a status no message table
+// could name -- and because the call is variadic, nothing but this list's own
+// comments could have caught it.
+//
+// A null LUID and a zero index together mean "consult the routing table", which
+// is what a caller asking "where does this go today" wants: the interface is an
+// output here, not an input. Zero for the optional source address asks the same,
+// and zero for the unused sort options is what the documentation specifies.
+func newBestRoute2Call(
+	dst *windows.RawSockaddrInet,
+	row *windows.MibIpForwardRow2,
+	bestSource *windows.RawSockaddrInet,
+) bestRoute2Call {
+	return bestRoute2Call{
+		args: []uintptr{
+			0, // InterfaceLuid -- absent, so the table decides
+			0, // InterfaceIndex -- absent, so the table decides
+			0, // SourceAddress -- optional, absent
+			uintptr(unsafe.Pointer(dst)),
+			0, // AddressSortOptions -- not currently used
+			uintptr(unsafe.Pointer(row)),
+			uintptr(unsafe.Pointer(bestSource)),
+		},
+		dst:        dst,
+		row:        row,
+		bestSource: bestSource,
+	}
 }
 
 // rawInet renders ip as the SOCKADDR_INET the route entry points take, plus the
