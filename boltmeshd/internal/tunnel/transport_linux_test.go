@@ -1,7 +1,7 @@
 //go:build linux
 
 // Behavior suite for the stream transport rung. The transport itself is a
-// fake — its lifecycle is two calls, and internal/stream has its own suite —
+// fake — its lifecycle is two calls, and the shared stream package has its own suite —
 // while the privileged work (pinning and removing routes, ordering against
 // wg-quick) goes through the same recorded run seam the wg-quick suite uses.
 package tunnel

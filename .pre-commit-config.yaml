@@ -99,6 +99,41 @@ repos:
         files: ^boltmeshd/
         pass_filenames: false
 
+      # --- Go fmt / lint / tests (stream) ---
+      # The shared stream module is consumed by boltmeshd and the Android
+      # native build, so a change here has to be verified on its own: the
+      # boltmeshd hooks above only fire for files under `boltmeshd/`.
+      - id: go-fmt-stream
+        name: go fmt (stream)
+        entry: make -C stream format
+        language: system
+        types: [go]
+        files: ^stream/
+        pass_filenames: false
+
+      - id: golangci-lint-stream
+        name: golangci-lint (stream)
+        entry: make -C stream lint
+        language: system
+        types: [go]
+        files: ^stream/
+        pass_filenames: false
+
+      - id: go-test-stream
+        name: go test (stream)
+        entry: make -C stream test
+        language: system
+        types: [go]
+        files: ^stream/
+        pass_filenames: false
+
+      - id: go-mod-tidy-stream
+        name: go mod tidy check (stream)
+        entry: make -C stream mod-tidy-check
+        language: system
+        files: ^stream/
+        pass_filenames: false
+
       # --- Generated code (l10n + build_runner) ---
       - id: check-generated
         name: check generated code

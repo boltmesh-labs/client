@@ -3,12 +3,17 @@ module boltmeshd
 go 1.26.0
 
 require (
+	boltmesh/stream v0.0.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	golang.org/x/sys v0.48.0
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )
+
+// The stream bridge is shared with android/awg-native. A local replace keeps the
+// two on one implementation; there is no published module.
+replace boltmesh/stream => ../stream
 
 require (
 	github.com/google/go-cmp v0.7.0 // indirect

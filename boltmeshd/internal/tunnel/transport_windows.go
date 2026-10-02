@@ -1,11 +1,11 @@
 //go:build windows
 
 // The stream transport rung on Windows: the tunnel's WireGuard endpoint points
-// at a loopback address, and an in-process bridge (internal/stream) carries
+// at a loopback address, and an in-process bridge (the shared stream package) carries
 // those datagrams to the real node inside a TLS session that middleboxes treat
 // as ordinary HTTPS.
 //
-// The bridge itself is platform-independent — internal/stream has no build tags
+// The bridge itself is platform-independent — the shared stream package has no build tags
 // and compiles here unchanged. What this file owns is everything around it:
 //
 //  1. The bypass route. The bridge dials from the daemon like any other socket,
@@ -31,13 +31,13 @@ import (
 	"log/slog"
 	"net"
 
+	"boltmesh/stream"
 	"boltmeshd/internal/protocol"
-	"boltmeshd/internal/stream"
 )
 
 // streamClient is the part of the in-process transport the Manager drives: its
 // lifetime, and nothing else. The datagram path, the TLS session, and every
-// credential decision belong to internal/stream; keeping the seam to the
+// credential decision belong to the shared stream package; keeping the seam to the
 // lifecycle is what lets the privileged route work be tested without a node.
 type streamClient interface {
 	Start()
@@ -45,7 +45,7 @@ type streamClient interface {
 }
 
 // liveTransport is a running stream transport and the destinations pinned for
-// it. The bridge itself belongs to internal/stream; this is only the daemon's
+// it. The bridge itself belongs to the shared stream package; this is only the daemon's
 // record of it and of the state teardown has to undo.
 type liveTransport struct {
 	spec   protocol.TransportSpec

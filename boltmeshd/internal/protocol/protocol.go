@@ -55,7 +55,7 @@ const (
 const TransportModeStream = "stream"
 
 // TransportSpec is the optional `up` transport the daemon must run for the
-// tunnel: everything `internal/stream` needs to carry the tunnel's datagrams
+// tunnel: everything the shared stream package needs to carry the tunnel's datagrams
 // to the node, and the two local addresses it needs to do so.
 //
 // It is a credential set, not a program. The daemon runs the transport

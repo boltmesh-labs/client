@@ -16,7 +16,7 @@ import (
 
 // stubNode is the node half, reduced to what the client bridge needs: a TLS
 // listener that verifies the key proof and echoes datagrams. The real server
-// half lives in the agent repo (internal/stream) and is proven against the
+// half lives in the agent repo (its internal/stream) and is proven against the
 // same golden vectors; this stub exists so the client's datagram path,
 // pinning, and auth failure modes are testable here.
 type stubNode struct {

@@ -476,6 +476,34 @@ jobs:
       - name: Run Go Unit Tests
         run: go test -v ./...
 
+      # `boltmesh/stream` is a separate module (so the Android native build can
+      # import it), and the steps above all target `boltmeshd`. A change there
+      # fires the boltmeshd suite through the wire-format tests, but the module
+      # itself still needs formatting, tidiness, lint and its own tests checked
+      # here or it can rot between the two consumers.
+      - name: Check stream formatting (gofmt)
+        working-directory: stream
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted properly according to gofmt:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Check stream go.mod/go.sum are tidy
+        working-directory: stream
+        run: go mod tidy -diff
+
+      - name: Run golangci-lint (stream)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: stream
+
+      - name: Run stream Go unit tests
+        working-directory: stream
+        run: go test -v ./...
+
   security:
     name: "Security Scan"
     runs-on: ubuntu-latest

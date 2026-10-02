@@ -1,7 +1,7 @@
 //go:build linux
 
 // The stream transport rung: the tunnel's WireGuard endpoint points at a
-// loopback address, and an in-process bridge (internal/stream) carries those
+// loopback address, and an in-process bridge (the shared stream package) carries those
 // datagrams to the real server inside a TLS session that middleboxes treat as
 // ordinary HTTPS. It is the rung for networks that block or fingerprint
 // WireGuard's own UDP.
@@ -29,13 +29,13 @@ import (
 	"strconv"
 	"strings"
 
+	"boltmesh/stream"
 	"boltmeshd/internal/protocol"
-	"boltmeshd/internal/stream"
 )
 
 // streamClient is the part of the in-process transport the Manager drives:
 // its lifetime, and nothing else. The datagram path, the TLS session, and
-// every credential decision belong to internal/stream; keeping the seam to
+// every credential decision belong to the shared stream package; keeping the seam to
 // the lifecycle is what lets the privileged route work be tested without a
 // node.
 type streamClient interface {
@@ -44,7 +44,7 @@ type streamClient interface {
 }
 
 // liveTransport is a running stream transport and the routes pinned for it.
-// The bridge itself belongs to internal/stream; this is only the daemon's
+// The bridge itself belongs to the shared stream package; this is only the daemon's
 // record of it and of the state teardown has to undo.
 type liveTransport struct {
 	spec   protocol.TransportSpec

@@ -23,7 +23,7 @@ address and the daemon runs the bridge in-process for the tunnel's lifetime:
 
 ```text
 client ──unix socket──> boltmeshd (root)
-                         ├── internal/stream  (in-process, binds loopback only)
+                         ├── boltmesh/stream  (in-process, binds loopback only)
                          │     127.0.0.1:51821 ◀──datagrams── wg-quick
                          │             └──TLS 1.3──> vpn.example.net:443
                          └── wg-quick: Endpoint = 127.0.0.1:51821
@@ -37,8 +37,9 @@ guess — so the client pins the local port when it selects this rung.
 
 ### What authenticates the two ends
 
-`internal/stream` owns the wire format, and it is deliberately the whole
-protocol surface: length-prefixed frames over TLS, nothing else.
+`boltmesh/stream` (a module shared with the Android native build) owns the wire
+format, and it is deliberately the whole protocol surface: length-prefixed
+frames over TLS, nothing else.
 
 - The **node** is authenticated by a certificate **pin** (SHA-256 of the leaf
   SPKI, several allowed so a node can rotate its key). There is no CA chain to

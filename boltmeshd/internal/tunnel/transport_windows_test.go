@@ -1,7 +1,7 @@
 //go:build windows
 
 // Behavior suite for the stream transport rung on Windows. The transport is a
-// fake — its lifecycle is two calls, and internal/stream has its own suite — and
+// fake — its lifecycle is two calls, and the shared stream package has its own suite — and
 // the routing table is faked too, so the privileged work (pinning and removing
 // host routes, ordering against the tunnel service) is checked without touching
 // this machine's routes.
