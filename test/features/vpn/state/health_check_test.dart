@@ -700,6 +700,93 @@ void main() {
       });
 
       test(
+        'a second dead echo escalates past the ladder instead of demoting',
+        () async {
+          // KNOWN GAP, asserted as-is. This pins the current behaviour, which
+          // is not what README.md:625-627 describes ("a path the health policy
+          // confirmed dead *locally* is rebuilt one rung lower per heal").
+          //
+          // `the first stall walks from AWG onto the stream rung` above
+          // demotes, but only because it runs ONE tick: strikes reach 1, below
+          // `echoStallStrikes` = 2, so `echoShortens` stays false and
+          // `localEchoStalled` never fires. It also pins the handshake to 160s
+          // (via `staleHandshake`), i.e. inside the 150s..180s window where
+          // `standardStalled` holds but `hardStalled` does not.
+          //
+          // Production timing never lands there. `echoProbeAfter` = 30s starts
+          // probing long before the 150s staleness window opens, so on the 10s
+          // tick the second strike lands at ~40-50s — roughly 100s BEFORE
+          // demotion becomes eligible. `localEchoStalled` is then true, which
+          // feeds `confirmedLocalPathDeath` into `classifyFailure`, returns
+          // `tunnelPathDead`, and fast-tracks straight to failover at
+          // conn_health.dart:335-347. `_autoHeal` — the ladder's only writer —
+          // is never reached.
+          //
+          // Two ticks reproduce it: the first banks a strike without acting,
+          // the second supplies the staleness the first could not.
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream();
+          final ctl = container.read(connectionProvider.notifier);
+
+          // Tick 1: old enough to probe (>= 30s) but not stale enough to act.
+          // Banks strike 1 and returns without healing, so nothing resets it.
+          ctl.debugHandshakeReader = () async =>
+              DateTime.now().subtract(const Duration(seconds: 40));
+          await ctl.checkHealthOnce();
+          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+
+          // Tick 2: same as `staleHandshake`, now with strikes at 2. This is
+          // the state a real stall is in when it becomes eligible to demote.
+          ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+            ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
+          );
+          await ctl.checkHealthOnce();
+
+          // The rung does NOT move, and the heal budget is untouched because
+          // the move budget was spent instead. Asserted on the rung and the
+          // built conf rather than on which server it moved to: seedStream's
+          // handler answers `/switch` but throws elsewhere, so discovery may
+          // or may not yield a target. Both outcomes leave these true.
+          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+          expect(socket.lastConfig, isNot(contains('ListenPort = ')));
+          expect(socket.lastTransport, isNull);
+          expect(container.read(connectionProvider).autoHealAttempts, 0);
+          expect(container.read(connectionProvider).autoFailoverAttempts, 1);
+        },
+      );
+
+      test(
+        'an unprobeable echo reaches the ladder (the one production path)',
+        () async {
+          // The complement to the case above, and the only way `_autoHeal` is
+          // reachable at all: a null echo resets `_deadEchoStrikes` every tick
+          // (conn_health.dart:168-172), so `echoShortens` never latches and
+          // nothing fast-tracks to failover. The demotion is then reachable —
+          // but only for an echo that cannot be sent, never for one that came
+          // back dead, which is what a broken data path actually produces.
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream();
+          final ctl = container.read(connectionProvider.notifier);
+
+          (container.read(
+            gatewayProbeProvider,
+          ) as support.FakeGatewayProbe).alive = null;
+
+          // Two ticks, so this cannot pass merely by being the first one.
+          for (var i = 0; i < 2; i++) {
+            staleHandshake(ctl);
+            await ctl.checkHealthOnce();
+          }
+
+          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          expect(socket.lastTransport, isNotNull);
+        },
+      );
+
+      test(
         'the bridge receives the transport spec on the stream rung',
         () async {
           useLinuxDataPlane();
