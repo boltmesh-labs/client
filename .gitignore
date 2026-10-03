@@ -39,5 +39,8 @@ __pycache__/
 
 # ---> Local build configuration
 # Compile-time defines read by `flutter --dart-define-from-file=.env`;
-# commit .env.example instead.
-.env
+# commit .env.example instead. The wildcard also covers credential-bearing
+# variants (.env.e2e holds staging API user/password for device runs), so
+# none of them can be committed by an `add -A`.
+.env*
+!.env.example

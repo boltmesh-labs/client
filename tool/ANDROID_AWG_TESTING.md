@@ -129,6 +129,21 @@ response`, and `Connected · test2`; `tun0` came up on test2's overlay
 `boltmesh.mooo.com` resolved through the tunnel. So the stream carries a stock
 *and* an obfuscated inner config.
 
+Re-verified on the post-ladder-fix tree (Android 16 x86_64 emulator, rung
+pinned, staging API). Auto-provision picked test1: the bridge logged
+`stream: session established with 192.168.1.115:443`, the inner `Received
+handshake response` arrived, `tun0` came up `10.1.97.0/32` with DNS
+`10.1.0.1`, ping was 3/3, and `boltmesh.mooo.com` resolved to `93.177.140.197`.
+Switching to test2 logged `UAPI: Updating h1 padding` … `header protection key`
+then `stream: session established with 192.168.1.116:443` and an inner
+`Received handshake response`, with `tun0` on `10.2.84.210/32` / DNS
+`10.2.0.1`, ping 3/3, and the UI at `Connected · test2`. Note the bridge dialed
+the node's *literal* address (resolved in Dart before the TUN exists) while SNI
+stayed the hostname, as intended. The pin was reverted after the run; the tree
+was clean apart from the `.gitignore` change. Note the emulator here was a
+`user` build, so the demotion itself still could not be induced — this run
+proves the bridge and both inner formats, not the ladder.
+
 The node host is resolved in Dart before the native start and before the TUN
 exists (`lib/features/vpn/data/stream_server_resolver_io.dart`), and the bridge
 is handed a literal `address:port`; `server_name` stays the hostname for TLS
