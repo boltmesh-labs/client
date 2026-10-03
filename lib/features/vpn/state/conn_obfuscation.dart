@@ -40,17 +40,17 @@ enum ObfuscationRung {
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
 /// should be retried on a lower rung — but only when the control plane is
-/// reachable, so a general blackout does not demote the transport. The ladder
-/// adds no budget, timer, or state of its own. A heal that the next rung does
-/// not fix falls through to the *existing* escalation (failover, then
-/// [_surfaceRecoveryExhausted]) rather than a new failure mode.
+/// reachable, so a general blackout does not demote the transport. This adds
+/// no recovery budget or polling timer. After a long healthy period, the health
+/// tick may probe one cheaper rung; the last known-working rung remains the
+/// rollback target until the candidate proves live.
 extension ConnectionObfuscation on ConnectionController {
-  /// The rung this process is on. Sticky across connects: there is no automatic
-  /// promotion back up the ladder, because every promotion would re-pay for a
-  /// probe that already failed, and a network that blocked the fast path once
-  /// will do it again on the next connect. The one thing that moves it is the
-  /// region: [_applyRung] raises it to a new region's floor and drops it to what
-  /// that region can serve.
+  /// The rung this process is on. Demotions stay sticky across connects to
+  /// avoid re-paying for a failed path. The health tick may probe one cheaper
+  /// rung after [ConnectionTuning.rungPromotionHealthyFor]; it returns to the
+  /// known-working rung if liveness is not confirmed within
+  /// [ConnectionTuning.rungPromotionProbeTimeout]. Region changes also move the
+  /// rung to the new floor or the highest rung that region can serve.
   ObfuscationRung get obfuscationRung => _obfuscationRung;
 
   /// The obfuscation parameters to build a conf for [dial] with, or null when
@@ -117,6 +117,172 @@ extension ConnectionObfuscation on ConnectionController {
     );
     _obfuscationRung = next;
     return true;
+  }
+
+  /// The next cheaper rung this region can run, or null at its floor.
+  ObfuscationRung? _cheaperRungFor(DialParams dial) {
+    final obf = dial.obfuscation;
+    final floor = obf != null && obf.isAwg
+        ? ObfuscationRung.awg
+        : ObfuscationRung.native;
+    for (
+      var index = _obfuscationRung.index - 1;
+      index >= floor.index;
+      index--
+    ) {
+      final candidate = ObfuscationRung.values[index];
+      if (candidate == ObfuscationRung.native ||
+          (candidate == ObfuscationRung.awg && _awgRungAvailable(dial))) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /// Probe one cheaper rung after a long, positively healthy session. The
+  /// previous rung stays armed until a fresh handshake or live gateway echo
+  /// confirms the candidate; a failed start rolls back immediately, while a
+  /// silent/dead candidate rolls back through the normal heal path.
+  Future<void> _maybeProbeCheaperRung(
+    DialParams dial, {
+    required bool pathHealthy,
+  }) async {
+    if (!pathHealthy ||
+        _promotionFallbackRung != null ||
+        snap.phase != ConnPhase.connected ||
+        !identical(snap.dial, dial) ||
+        !canAttemptAutoHeal(
+          autoHealAttempts: snap.autoHealAttempts,
+          autoFailoverAttempts: snap.autoFailoverAttempts,
+          maxFailovers: ConnectionTuning.maxAutoFailovers,
+          maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
+        )) {
+      return;
+    }
+    final connectedAt = _connectedAt;
+    if (connectedAt == null ||
+        _clock.now().difference(connectedAt) <
+            ConnectionTuning.rungPromotionHealthyFor) {
+      return;
+    }
+    final candidate = _cheaperRungFor(dial);
+    if (candidate == null) return;
+
+    final release = await _mutex.acquire('transport-promotion');
+    try {
+      final currentConnectedAt = _connectedAt;
+      if (snap.phase != ConnPhase.connected ||
+          !identical(snap.dial, dial) ||
+          _promotionFallbackRung != null ||
+          !canAttemptAutoHeal(
+            autoHealAttempts: snap.autoHealAttempts,
+            autoFailoverAttempts: snap.autoFailoverAttempts,
+            maxFailovers: ConnectionTuning.maxAutoFailovers,
+            maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
+          ) ||
+          currentConnectedAt == null ||
+          _clock.now().difference(currentConnectedAt) <
+              ConnectionTuning.rungPromotionHealthyFor ||
+          _cheaperRungFor(dial) != candidate) {
+        return;
+      }
+
+      final sessionEpoch = _sessionEpoch;
+      final previousRung = _obfuscationRung;
+      final previousHealAttempts = snap.autoHealAttempts;
+      final previousFailoverAttempts = snap.autoFailoverAttempts;
+      final previousPollFailures = snap.pollFailures;
+      _promotionFallbackRung = previousRung;
+      _promotionFallbackDial = dial;
+      _obfuscationRung = candidate;
+      AppLog.info(
+        'transport promotion probe ${previousRung.name} -> ${candidate.name} '
+        'server=${dial.serverName}',
+      );
+      snap = snap.copyWith(phase: ConnPhase.working, message: 'Reconnecting…');
+      await _stopTunnel('transport-promotion');
+      if (sessionEpoch != _sessionEpoch) {
+        _promotionFallbackRung = null;
+        _promotionFallbackDial = null;
+        return;
+      }
+      try {
+        await _startWith(
+          dial,
+          preservePollFailures: true,
+          sessionEpoch: sessionEpoch,
+        );
+        if (sessionEpoch != _sessionEpoch) {
+          _promotionFallbackRung = null;
+          _promotionFallbackDial = null;
+          return;
+        }
+        snap = snap.copyWith(
+          autoHealAttempts: previousHealAttempts,
+          autoFailoverAttempts: previousFailoverAttempts,
+          pollFailures: previousPollFailures,
+        );
+      } catch (e) {
+        if (sessionEpoch != _sessionEpoch) return;
+        AppLog.error('cheaper transport probe failed to start', e);
+        _obfuscationRung = previousRung;
+        _promotionFallbackRung = null;
+        _promotionFallbackDial = null;
+        snap = snap.copyWith(
+          phase: ConnPhase.working,
+          message: 'Reconnecting…',
+        );
+        try {
+          await _startWith(
+            dial,
+            preservePollFailures: true,
+            sessionEpoch: sessionEpoch,
+          );
+          if (sessionEpoch != _sessionEpoch) {
+            _promotionFallbackRung = null;
+            _promotionFallbackDial = null;
+            return;
+          }
+          snap = snap.copyWith(
+            autoHealAttempts: previousHealAttempts,
+            autoFailoverAttempts: previousFailoverAttempts,
+            pollFailures: previousPollFailures,
+          );
+          AppLog.info(
+            'transport promotion rolled back to ${previousRung.name}',
+          );
+        } catch (fallbackError) {
+          if (sessionEpoch != _sessionEpoch) return;
+          final vpnErr = asVpnError(fallbackError);
+          AppLog.error(
+            'known-good transport restart failed',
+            vpnErr ?? fallbackError,
+          );
+          _stopPolling();
+          _resetLocalHealth();
+          snap = snap.copyWith(
+            phase: ConnPhase.error,
+            message:
+                'VPN reconnect failed (${failureReason(vpnErr, fallbackError)}). Tap Connect.',
+            lastStage: null,
+            healthNote: null,
+            backendIssue: null,
+          );
+        }
+      }
+    } finally {
+      release();
+    }
+  }
+
+  void _confirmTransportPromotion() {
+    final previous = _promotionFallbackRung;
+    if (previous == null) return;
+    AppLog.info(
+      'transport promotion confirmed ${previous.name} -> ${_obfuscationRung.name}',
+    );
+    _promotionFallbackRung = null;
+    _promotionFallbackDial = null;
   }
 
   /// The rung one step below the current one that [dial] can actually serve,
@@ -223,6 +389,11 @@ extension ConnectionObfuscation on ConnectionController {
   /// automatic paths, so reaching this names a target the user chose or the
   /// control plane returned.
   void _applyRung(DialParams dial) {
+    if (_promotionFallbackRung != null &&
+        !identical(dial, _promotionFallbackDial)) {
+      _promotionFallbackRung = null;
+      _promotionFallbackDial = null;
+    }
     final next = _rungFor(dial);
     if (next == null) {
       throw UnsupportedError(

@@ -602,6 +602,7 @@ void main() {
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
         ControlPlaneProbe? controlProbe,
+        Clock? clock,
         bool expectConnected = true,
       }) async {
         final events = <String>[];
@@ -621,6 +622,7 @@ void main() {
           // generate; the connect path reuses the stored identity.
           keys: FakeKeys(),
           api: api,
+          clock: clock,
           controlProbe: controlProbe,
           tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
         );
@@ -745,6 +747,78 @@ void main() {
           expect(state.dial?.serverId, 'srv-1');
           expect(state.autoHealAttempts, 1);
           expect(state.autoFailoverAttempts, 0);
+        },
+      );
+
+      test('a long-healthy stream session probes one cheaper rung', () async {
+        useLinuxDataPlane();
+        final clock = support.FakeClock();
+        final controlProbe = support.FakeControlProbe(true);
+        final (container, socket) = await seedStream(
+          clock: clock,
+          controlProbe: controlProbe,
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        ctl.debugHandshakeReader = () async => clock.now().subtract(
+          ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
+        );
+        await ctl.checkHealthOnce();
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
+
+        ctl.debugHandshakeReader = () async => clock.now();
+
+        clock.advance(ConnectionTuning.rungPromotionHealthyFor);
+        await ctl.checkHealthOnce();
+
+        // The probe is one step only: stream -> AWG, with no stream bridge.
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastTransport, isNull);
+
+        // A fresh handshake on the candidate confirms it. A later outage must
+        // not revert to stream as though this probe had failed.
+        ctl.debugHandshakeReader = () async => clock.now();
+        await ctl.checkHealthOnce();
+        ctl.debugHandshakeReader = () async => null;
+        controlProbe.reachable = false;
+        clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
+        await ctl.checkHealthOnce();
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+      });
+
+      test(
+        'a cheaper-rung probe without liveness rolls back quickly',
+        () async {
+          useLinuxDataPlane();
+          final clock = support.FakeClock();
+          final controlProbe = support.FakeControlProbe(true);
+          final (container, socket) = await seedStream(
+            clock: clock,
+            controlProbe: controlProbe,
+          );
+          final ctl = container.read(connectionProvider.notifier);
+          ctl.debugHandshakeReader = () async => clock.now().subtract(
+            ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
+          );
+          await ctl.checkHealthOnce();
+          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
+
+          ctl.debugHandshakeReader = () async => clock.now();
+
+          clock.advance(ConnectionTuning.rungPromotionHealthyFor);
+          await ctl.checkHealthOnce();
+          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+
+          ctl.debugHandshakeReader = () async => null;
+          controlProbe.reachable = false;
+          clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
+          await ctl.checkHealthOnce();
+
+          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          expect(socket.lastTransport, isNotNull);
         },
       );
 

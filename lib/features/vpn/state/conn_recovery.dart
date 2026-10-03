@@ -38,7 +38,13 @@ extension ConnectionRecovery on ConnectionController {
       }
       final dial = snap.dial;
       if (dial == null || snap.phase != ConnPhase.connected) return;
-      if (!hardStalled && !localConfirmed && _lastStatusAnswered) return;
+      final promotionFallback = _promotionFallbackRung;
+      if (promotionFallback == null &&
+          !hardStalled &&
+          !localConfirmed &&
+          _lastStatusAnswered) {
+        return;
+      }
       // A status poll may have proven the backend reachable after the tick
       // scheduled this heal: stopping the tunnel then would flap a path the
       // backend just vouched for. Keep the tunnel up in that case without
@@ -47,7 +53,10 @@ extension ConnectionRecovery on ConnectionController {
       // is still dead. Checked before the first write below so a suppressed
       // heal does not publish `working` and then walk it back, which cost
       // the UI two rebuilds and a visible "Reconnecting…" flicker.
-      if (_backendLooksReachable() && !hardStalled && !localConfirmed) {
+      if (promotionFallback == null &&
+          _backendLooksReachable() &&
+          !hardStalled &&
+          !localConfirmed) {
         AppLog.info('auto-heal suppressed ($why) backend reachable');
         snap = snap.copyWith(healthNote: null, backendIssue: null);
         return;
@@ -64,7 +73,17 @@ extension ConnectionRecovery on ConnectionController {
       // while the control plane is reachable. A blackout can still justify
       // restarting the cached config, but it is not evidence that this
       // transport specifically is blocked.
-      if (transportFailureConfirmed) _demoteRung(dial, why);
+      if (promotionFallback != null) {
+        _obfuscationRung = promotionFallback;
+        _promotionFallbackRung = null;
+        _promotionFallbackDial = null;
+        AppLog.info(
+          'transport promotion failed ($why), reverting to '
+          '${promotionFallback.name}',
+        );
+      } else if (transportFailureConfirmed) {
+        _demoteRung(dial, why);
+      }
       AppLog.info('auto-heal start ($why) attempt=$attempt ${_healBudgets()}');
       snap = snap.copyWith(
         phase: ConnPhase.working,

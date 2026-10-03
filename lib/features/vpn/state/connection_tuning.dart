@@ -117,6 +117,14 @@ abstract final class ConnectionTuning {
   /// [ConnectionRecovery._surfaceRecoveryExhausted]).
   static const maxHealsAfterMoveBudget = 1;
 
+  /// Stable connected time before probing one cheaper transport rung. The
+  /// probe is a controlled restart; a missing liveness confirmation within
+  /// [rungPromotionProbeTimeout] rolls back to the previously working rung.
+  static const rungPromotionHealthyFor = Duration(hours: 24);
+
+  /// Maximum time to wait for liveness after probing a cheaper transport.
+  static const rungPromotionProbeTimeout = Duration(seconds: 45);
+
   /// Attempt-1 budget for an in-tunnel switch/rotate POST: shorter than
   /// Dio's 15s receive timeout so the direct-network fallback stays snappy.
   static const throughTunnelAttempt = Duration(seconds: 10);

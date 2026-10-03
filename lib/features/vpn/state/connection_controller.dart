@@ -166,11 +166,19 @@ class ConnectionController extends Notifier<ConnState> {
   ///
   /// Demotion is sticky: once the control plane answers while the tunnel path
   /// is dead, every later connect stays on the lower rung rather than re-paying
-  /// the failed-probe cycle. A restart re-probes the region's floor.
+  /// the failed-probe cycle. After 24 hours of healthy operation, the client
+  /// probes one cheaper rung; absent liveness within the probe window, it
+  /// returns to the rung that was working. A restart re-probes the region's
+  /// floor.
   ///
   /// Walked one rung per qualifying heal by [_demoteRung]; see
   /// [ObfuscationRung] for the order and why the stream rung is last.
   ObfuscationRung _obfuscationRung = ObfuscationRung.native;
+
+  /// Previous known-working rung while a controlled cheaper-rung probe is in
+  /// flight. Cleared on positive liveness or restored on probe failure.
+  ObfuscationRung? _promotionFallbackRung;
+  DialParams? _promotionFallbackDial;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was
   /// *performed-dead* (`false`, never null). Reaching
