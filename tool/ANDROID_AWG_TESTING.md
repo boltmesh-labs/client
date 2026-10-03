@@ -61,6 +61,22 @@ notification.
   chosen, and unsupported platforms refuse the region rather than falling back
   to stock.
 
+## Inducing a stall
+
+Reaching the demotion on a device needs the AWG handshake to stall while the
+tunnel's own path stays up, which means breaking the emulator's UDP to the node.
+The `google_apis` image is not capable of it: `ro.build.type` is `user`, `adb root`
+is refused (`adbd cannot run as root in production builds`), there is no `su`, and
+`iptables` reports `Permission denied (you must be root)`. The `tc` binary exists
+at `/system/bin/tc` but is gated the same way, and `cmd netpolicy` only restricts
+background UIDs — it cannot target UDP. Two ways out:
+
+- Recreate the AVD on an `eng`/`userdebug` image, which gives root and netfilter.
+- Block the node's WireGuard UDP port server-side while leaving TCP 443 up. That
+  is a *more* faithful middlebox than emulator netfilter, since a real DPI blocks
+  one protocol rather than the whole interface — but it affects every peer on that
+  node, so it wants a dedicated test node.
+
 ## Stream rung
 
 The stream rung runs the same `boltmesh/stream` bridge `boltmeshd` runs, inside
@@ -100,7 +116,10 @@ response, and `[BoltMesh] tunnel connected ... server=test1`. Ping to the
 region's gateway `10.1.0.1` was 3/3; `boltmesh.mooo.com` resolved through the
 tunnel to `93.177.140.197` and replied. The bridge booked one fail-closed dial
 before the VpnService registered, then connected. The pin was reverted after the
-run; restoring the rung to a stream start still requires a demotion.
+run. A stream start no longer requires pinning: a confirmed local stall now steps
+AWG → stream before it spends a server move. Reaching that on a device still
+means inducing the stall, which needs a network break the emulator image can
+make, so pinning remains the way to exercise the bridge without one.
 
 Both inner formats are now proven. On the AWG region `test2`, with the rung
 pinned the same way, logcat showed `UAPI: Updating h1 padding` … `Updating
