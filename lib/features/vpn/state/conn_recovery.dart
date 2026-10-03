@@ -20,11 +20,17 @@ extension ConnectionRecovery on ConnectionController {
   /// [ConnectionTuning.hardHandshakeStaleAfter]) bypasses the
   /// "backend reachable" suppression below: a status response does not prove
   /// the data path healthy when the handshake is hard-dead.
+  ///
+  /// [demoteTransport] is the ladder policy's verdict, not a re-derivation
+  /// here: it is true only when the path looked dead while the control plane
+  /// answered, which is the only evidence that this transport is blocked rather
+  /// than the network being gone. Keeping it a parameter means this method
+  /// cannot decide on its own to change rungs.
   Future<void> _autoHeal(
     String why, {
     bool hardStalled = false,
     bool localConfirmed = false,
-    bool transportFailureConfirmed = false,
+    bool demoteTransport = false,
     RecoveryReason? recoveryReason,
     int? expectedSession,
     int? expectedEpoch,
@@ -91,7 +97,7 @@ extension ConnectionRecovery on ConnectionController {
           'transport promotion failed ($why), reverting to '
           '${promotionFallback.name}',
         );
-      } else if (transportFailureConfirmed) {
+      } else if (demoteTransport) {
         _demoteRung(dial, why);
       }
       final action = _obfuscationRung == previousRung

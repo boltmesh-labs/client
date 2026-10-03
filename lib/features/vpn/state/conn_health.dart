@@ -341,162 +341,89 @@ extension ConnectionHealth on ConnectionController {
       recoveryReason: recoveryReason,
       recoveryDetail: why,
     );
-    // 4-layer diagnostic pipeline (see `domain/diagnosis_policy.dart`):
-    // Layer 2 (physical link) → Layer 1 (in-tunnel gateway echo) →
-    // Layer 3 (control-plane probe) → Layer 4 (escalation). Confirmed local
-    // path death skips Layer 3 and moves directly; the probe shares OS routes
-    // with normal API traffic and can fail through the dead tunnel.
-    // Probes are read-only: none of them consumes heal/refresh/failover
-    // budgets or touches `pollFailures` — only the terminal action below
-    // does, under the existing caps.
-    if (!await _hasLink()) {
-      AppLog.info('health paused ($why) no local network');
-      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-      snap = snap.copyWith(
-        healthNote: _noNetworkNote,
-        recoveryAction: RecoveryAction.waiting,
-        recoveryReason: RecoveryReason.noNetwork,
-        recoveryDetail: why,
-      );
-      return;
-    }
-    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-    // Reuse this tick's echo read (already computed above); a live echo
-    // proves the data path, so the stall is a transient flap. The
-    // backend-confirmed-dead node is the exception: that report could not
-    // have travelled over a dead tunnel, so a live echo is a second opinion
-    // about a node already known gone rather than proof the path recovered.
-    if (gateway == true && !serverDown) {
-      AppLog.info('health suppressed ($why) gateway echo alive');
-      _confirmTransportPromotion();
-      // Nothing will run, so the recovery banner would outlive the tick on a
-      // proven-alive tunnel. Only this tick's own note is dropped: a note from
-      // elsewhere (an outside-stop verification) still owns the snapshot.
-      if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-      if (snap.healthNote == _checkingRecoveryNote) {
-        snap = snap.copyWith(healthNote: null);
-      }
-      snap = snap.copyWith(
-        recoveryAction: null,
-        recoveryReason: null,
-        recoveryDetail: null,
-      );
-      return;
-    }
-    // Positive evidence that the current tunnel path is dead must not be
-    // gated on an API probe made while that tunnel is still routing traffic.
-    // The probe can fail precisely because this path is broken. Stop the
-    // tunnel first, then let failover discovery/switch use the direct network.
-    // `_autoFailover` is bounded and restarts the old dial if direct discovery
-    // also fails. Unknown echo evidence still follows the probe/heal ladder.
+    // 4-layer diagnostic pipeline (see `domain/diagnosis_policy.dart`): the
+    // ordering is `domain/ladder_policy.dart` — Layers 2 and 1 decide first,
+    // because the control-plane probe is real I/O that a healthy-ish tick must
+    // not pay for. Probes are read-only: none of them consumes
+    // heal/refresh/failover budgets or touches `pollFailures` — only the
+    // terminal step below does, under the existing caps.
     final canHeal = canAttemptAutoHeal(
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
       maxFailovers: ConnectionTuning.maxAutoFailovers,
       maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
     );
-    // A locally-confirmed dead path is not the same fact as a dead node, and
-    // Layer 1 cannot tell them apart: a middlebox dropping this rung's
-    // transport looks exactly like a powered-off server from in here — dead
-    // echo, stale handshake. Prefer the same-server heal before spending a
-    // move budget; once the control-plane probe answers, that combination is
-    // sufficient evidence to demote the transport. `serverDown` is the
-    // backend-attributed verdict that this *is* the node being gone, so it
-    // skips the ladder and moves straight on.
-    //
-    // Gated on a lower rung actually existing: with nowhere to step, a heal
-    // would rebuild the same config on the same rung, so it must not consume
-    // the heal budget in place of the move. The probe below still decides
-    // whether this heal is entitled to demote onto that lower rung.
-    final ladderStepAvailable = !serverDown && _hasLowerRung(dial) && canHeal;
-    final localCause = classifyFailure(
-      hasNetwork: true,
+    final moveBudgetLeft =
+        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers;
+    // Pure capability question ("would a heal lower the rung?"), kept separate
+    // from the budget-aware one the policy applies, so the tick can ask it
+    // without mutating the ladder.
+    final lowerRungAvailable = _hasLowerRung(dial);
+    // Fresh read rather than the one above: it also catches a link that dropped
+    // while the echo probe was in flight.
+    final hasNetwork = await _hasLink();
+    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+    switch (decideLocalRecovery(
+      hasNetwork: hasNetwork,
       gatewayAlive: gateway,
-      apiReachable: null,
-      hardStalled: hardStalled,
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
-    );
-    if (localCause == ConnectionFailureCause.tunnelPathDead &&
-        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers &&
-        !ladderStepAvailable) {
-      AppLog.info('health fast-track ($why) path dead -> direct failover');
-      await _autoFailover(
-        why,
-        tunnelPathDead: true,
-        hardStalled: hardStalled || serverDown,
-        expectedSession: sessionEpoch,
-        expectedEpoch: epoch,
-        expectedDial: dial,
-      );
-      return;
+      hardStalled: hardStalled,
+      lowerRungAvailable: lowerRungAvailable,
+      canHeal: canHeal,
+      moveBudgetLeft: moveBudgetLeft,
+    )) {
+      case RecoveryStep.pauseNoNetwork:
+        AppLog.info('health paused ($why) no local network');
+        if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+        snap = snap.copyWith(
+          healthNote: _noNetworkNote,
+          recoveryAction: RecoveryAction.waiting,
+          recoveryReason: RecoveryReason.noNetwork,
+          recoveryDetail: why,
+        );
+        return;
+      case RecoveryStep.suppressLiveEcho:
+        AppLog.info('health suppressed ($why) gateway echo alive');
+        _confirmTransportPromotion();
+        // Nothing will run, so the recovery banner would outlive the tick on a
+        // proven-alive tunnel. Only this tick's own note is dropped: a note from
+        // elsewhere (an outside-stop verification) still owns the snapshot.
+        if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+        if (snap.healthNote == _checkingRecoveryNote) {
+          snap = snap.copyWith(healthNote: null);
+        }
+        snap = snap.copyWith(
+          recoveryAction: null,
+          recoveryReason: null,
+          recoveryDetail: null,
+        );
+        return;
+      // Positive evidence that the current tunnel path is dead must not be
+      // gated on an API probe made while that tunnel is still routing traffic.
+      // The probe can fail precisely because this path is broken, so this moves
+      // servers before it: `_autoFailover` stops the tunnel first and its
+      // discovery/switch then travel the direct network.
+      case RecoveryStep.moveServer:
+        AppLog.info('health fast-track ($why) path dead -> direct failover');
+        await _autoFailover(
+          why,
+          tunnelPathDead: true,
+          hardStalled: hardStalled || serverDown,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
+        return;
+      case RecoveryStep.probeControlPlane:
+        break;
+      // The policy returns nothing else from local evidence alone.
+      default:
+        throw StateError('unreachable local recovery step');
     }
     final apiReachable = await _apiReachable();
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-    final cause = classifyFailure(
-      hasNetwork: true,
-      gatewayAlive: gateway,
-      apiReachable: apiReachable,
-      hardStalled: hardStalled,
-      serverConfirmedDown: serverDown,
-      confirmedLocalPathDeath: localEchoStalled,
-    );
-    // Only step down transports when the tunnel path looks dead while the
-    // control plane is positively reachable. A blackout or an unknown probe
-    // can justify an offline restart, but does not distinguish a blocked
-    // transport from a broader outage.
-    final transportFailureConfirmed =
-        apiReachable == true &&
-        cause == ConnectionFailureCause.tunnelPathDead &&
-        !serverDown;
-    // Same rung-before-move rule as the gate above, and it matters more here:
-    // this one is reached with a *live* control-plane answer, which is the
-    // signature of a blocked transport rather than a dead node — the backend
-    // is up while the tunnel's own path is not.
-    if (cause == ConnectionFailureCause.tunnelPathDead &&
-        snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers &&
-        !ladderStepAvailable) {
-      AppLog.info('health fast-track ($why) path dead, api up -> failover');
-      await _autoFailover(
-        why,
-        tunnelPathDead: true,
-        hardStalled: hardStalled || serverDown,
-        expectedSession: sessionEpoch,
-        expectedEpoch: epoch,
-        expectedDial: dial,
-      );
-      return;
-    }
-    // Without positive local path-dead evidence, a move still requires a
-    // positive control-plane result. A failed/unknown probe alone is not a
-    // reason to stop a tunnel or consume a move budget.
-    if (apiReachable != true && !canHeal) {
-      snap = snap.copyWith(
-        healthNote: _recoveryWaitingNote,
-        recoveryAction: RecoveryAction.waiting,
-        recoveryReason: RecoveryReason.controlPlaneUnavailable,
-        recoveryDetail: why,
-      );
-      return;
-    }
-    // Nothing left to try: the move budget is spent and the bounded local
-    // restart did not restore the tunnel. Surface an actionable error only
-    // when the control plane is available and a terminal decision can be made.
-    if (apiReachable == true &&
-        snap.autoFailoverAttempts >= ConnectionTuning.maxAutoFailovers &&
-        snap.autoHealAttempts >= ConnectionTuning.maxHealsAfterMoveBudget) {
-      await _surfaceRecoveryExhausted(
-        why,
-        hardStalled: hardStalled,
-        localConfirmed: localEvidence,
-        expectedSession: sessionEpoch,
-        expectedEpoch: epoch,
-        expectedDial: dial,
-      );
-      return;
-    }
-    if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-    if (shouldEscalateToFailover(
+    final escalateToMove = shouldEscalateToFailover(
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
       pollFailures: snap.pollFailures,
@@ -506,41 +433,102 @@ extension ConnectionHealth on ConnectionController {
       lastStatusAt: snap.lastStatusAt,
       now: now,
       quietFor: ConnectionTuning.backendQuietFor,
-    )) {
-      await _autoFailover(
-        why,
-        expectedSession: sessionEpoch,
-        expectedEpoch: epoch,
-        expectedDial: dial,
-      );
-    } else if (canHeal) {
-      // `localConfirmed` lets the remaining same-server heal run on local
-      // evidence; this branch is only reachable when there is not yet enough
-      // evidence for direct failover.
-      await _autoHeal(
-        why,
-        hardStalled: hardStalled,
-        localConfirmed: localEvidence,
-        transportFailureConfirmed: transportFailureConfirmed,
-        recoveryReason: recoveryReason,
-        expectedSession: sessionEpoch,
-        expectedEpoch: epoch,
-        expectedDial: dial,
-      );
-    } else {
+    );
+    final step = decideRecoveryStep(
+      gatewayAlive: gateway,
+      apiReachable: apiReachable,
+      serverConfirmedDown: serverDown,
+      confirmedLocalPathDeath: localEchoStalled,
+      hardStalled: hardStalled,
+      lowerRungAvailable: lowerRungAvailable,
+      canHeal: canHeal,
+      moveBudgetLeft: moveBudgetLeft,
+      escalateToMove: escalateToMove,
+    );
+    switch (step) {
+      // Same rung-before-move rule as the gate above, and it matters more here:
+      // this one is reached with a *live* control-plane answer, which is the
+      // signature of a blocked transport rather than a dead node — the backend
+      // is up while the tunnel's own path is not.
+      case RecoveryStep.moveServer:
+        AppLog.info('health fast-track ($why) path dead, api up -> failover');
+        await _autoFailover(
+          why,
+          tunnelPathDead: true,
+          hardStalled: hardStalled || serverDown,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
+        return;
+      // Without positive local path-dead evidence, a move still requires a
+      // positive control-plane result. A failed/unknown probe alone is not a
+      // reason to stop a tunnel or consume a move budget.
+      case RecoveryStep.waitForControlPlane:
+        snap = snap.copyWith(
+          healthNote: _recoveryWaitingNote,
+          recoveryAction: RecoveryAction.waiting,
+          recoveryReason: RecoveryReason.controlPlaneUnavailable,
+          recoveryDetail: why,
+        );
+        return;
+      // Nothing left to try: the move budget is spent and the bounded local
+      // restart did not restore the tunnel. Surface an actionable error only
+      // when the control plane is available and a terminal decision can be made.
+      case RecoveryStep.surfaceExhausted:
+        await _surfaceRecoveryExhausted(
+          why,
+          hardStalled: hardStalled,
+          localConfirmed: localEvidence,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
+        return;
       // The local restart was already spent, but the current evidence is not
       // strong enough for a move. Keep the tunnel and wait for fresh positive
       // liveness/control-plane evidence instead of flapping it again.
-      snap = snap.copyWith(
-        healthNote: apiReachable == true
-            ? 'Recovery pending. Verifying the current tunnel…'
-            : _recoveryWaitingNote,
-        recoveryAction: RecoveryAction.waiting,
-        recoveryReason: apiReachable == true
-            ? RecoveryReason.unknown
-            : RecoveryReason.controlPlaneUnavailable,
-        recoveryDetail: why,
-      );
+      case RecoveryStep.verifyTunnel:
+        snap = snap.copyWith(
+          healthNote: apiReachable == true
+              ? 'Recovery pending. Verifying the current tunnel…'
+              : _recoveryWaitingNote,
+          recoveryAction: RecoveryAction.waiting,
+          recoveryReason: apiReachable == true
+              ? RecoveryReason.unknown
+              : RecoveryReason.controlPlaneUnavailable,
+          recoveryDetail: why,
+        );
+        return;
+      case RecoveryStep.escalateToServer:
+        await _autoFailover(
+          why,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
+        return;
+      // `localConfirmed` lets the heal run on local evidence; this branch is only
+      // reachable when there is not yet enough evidence for a direct move.
+      case RecoveryStep.stepTransportRung:
+      case RecoveryStep.restartTunnel:
+        await _autoHeal(
+          why,
+          hardStalled: hardStalled,
+          localConfirmed: localEvidence,
+          // The demotion is the policy's output, not a flag recomputed here:
+          // one branch decides both the step and whether it may change rungs.
+          demoteTransport: step == RecoveryStep.stepTransportRung,
+          recoveryReason: recoveryReason,
+          expectedSession: sessionEpoch,
+          expectedEpoch: epoch,
+          expectedDial: dial,
+        );
+        return;
+      case RecoveryStep.pauseNoNetwork:
+      case RecoveryStep.suppressLiveEcho:
+      case RecoveryStep.probeControlPlane:
+        throw StateError('unreachable recovery step ${step.name}');
     }
   }
 

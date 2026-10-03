@@ -582,7 +582,16 @@ void main() {
       // The stream rung sits below AWG, so these start from a region that
       // offers both and walk all the way down — which is the only way to
       // prove the walk visits stream at all rather than skipping it.
-      Map<String, dynamic> streamDial() => dialJson(
+      Map<String, dynamic> streamDial({
+        String serverId = 'srv-1',
+        String serverName = 'one',
+        String endpoint = '203.0.113.10',
+        String wgPublicKey = 'SRV',
+      }) => dialJson(
+        serverId: serverId,
+        serverName: serverName,
+        endpoint: endpoint,
+        wgPublicKey: wgPublicKey,
         obfuscation: awgObfuscationJson(),
         stream: streamTransportJson(),
       );
@@ -601,6 +610,7 @@ void main() {
         Set<String>? caps,
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
+        List<Map<String, dynamic>> Function()? onRegions,
         ControlPlaneProbe? controlProbe,
         Clock? clock,
         bool expectConnected = true,
@@ -612,6 +622,9 @@ void main() {
           recordingDio(events, (o) {
             if (o.path.endsWith('/config')) return (dial ?? streamDial)();
             if (o.path.endsWith('/switch')) return (onSwitch ?? streamDial)();
+            if (o.path.endsWith('/vpn-regions')) {
+              if (onRegions != null) return onRegions();
+            }
             if (o.path.endsWith('/status')) throw networkTimeout(o);
             throw StateError('unexpected ${o.path}');
           }),
@@ -752,6 +765,47 @@ void main() {
           expect(state.recoveryDetail, contains('echo dead'));
         },
       );
+
+      test('a backend-confirmed dead node moves servers without stepping a rung', () async {
+        // The rungs exist for a transport the network blocks; a node the
+        // backend has given up on is not that. So the ladder is skipped even
+        // though this region serves one below — the `!serverDown` half of the
+        // rung-step gate, which no stock-region suite can reach.
+        //
+        // `serverConfirmedDown` is normally the status poll's verdict (see the
+        // poll suite); seeding it keeps this row about the ladder decision.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+          onRegions: () => regionsList(twoServers()),
+          onSwitch: () => streamDial(
+            serverId: 'srv-2',
+            serverName: 'two',
+            endpoint: '203.0.113.11',
+            wgPublicKey: 'SRV2',
+          ),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        ctl.snap = ctl.snap.copyWith(serverConfirmedDown: true);
+        ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+          ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
+        );
+
+        await ctl.checkHealthOnce();
+
+        final state = container.read(connectionProvider);
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        // No heal is spent and no rebuild happens: the heal budget is not
+        // what this stall needs.
+        expect(state.autoHealAttempts, 0);
+        expect(state.autoFailoverAttempts, 1);
+        expect(state.dial?.serverId, 'srv-2');
+        expect(state.recoveryAction, RecoveryAction.switchingServer);
+        expect(state.recoveryReason, RecoveryReason.serverOffline);
+        // The move kept the region's format on the rung it was already on.
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastTransport, isNull);
+      });
 
       test('a long-healthy stream session probes one cheaper rung', () async {
         useLinuxDataPlane();
@@ -1629,6 +1683,53 @@ void main() {
     // The replacement tunnel starts with a fresh echo-strike run.
     expect(ctl.debugDeadEchoStrikes, 0);
   });
+
+  test(
+    'a dead path with the control plane up still moves instead of healing',
+    () async {
+      // The sibling of the row above, and the branch it cannot reach: there the
+      // control plane was down, so the move came from local evidence alone
+      // before any probe. Here the API answers, so the decision is made with a
+      // live control plane — and it is still a move, because a stock region has
+      // no rung below native to step onto and a heal would rebuild the same
+      // config on the same rung.
+      final events = <String>[];
+      final gateway = support.FakeGatewayProbe(false);
+      final (container, _) = await seedConnected(
+        events,
+        (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/status')) return activeStatusJson();
+          if (o.path.endsWith('/server-status')) {
+            return onlineServerStatusJson();
+          }
+          if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+          if (o.path.endsWith('/switch')) return dialJsonSrv2();
+          throw StateError('unexpected ${o.path}');
+        },
+        gatewayProbe: gateway,
+        controlProbe: support.FakeControlProbe(true),
+        keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      staleHandshake(ctl);
+
+      await ctl.checkHealthOnce();
+
+      // Exactly one performed-dead echo: local evidence alone cannot read as a
+      // dead path, so this move could only have been decided after the control
+      // plane answered — the branch the pre-probe fast-track cannot reach.
+      expect(gateway.calls, 1);
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.autoHealAttempts, 0);
+      expect(state.autoFailoverAttempts, 1);
+      expect(state.dial?.serverId, 'srv-2');
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      // The heal budget is untouched: nothing was rebuilt.
+      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    },
+  );
 
   test('a fresh handshake skips the echo probe entirely', () async {
     final events = <String>[];
