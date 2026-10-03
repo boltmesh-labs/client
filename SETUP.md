@@ -43,7 +43,8 @@ secrets and the test suite, see [README.md](README.md).
     flutter build windows --debug
 
     $bundle = 'build/windows/x64/runner/Debug'
-    go build -trimpath -o "$bundle/boltmeshd.exe" ./boltmeshd/cmd/boltmeshd
+    cd boltmeshd
+    go build -trimpath -o "../$bundle/boltmeshd.exe" ./cmd/boltmeshd
 
     # Elevated prompt, from the bundle directory: the helper locates
     # wireguard_svc.exe and wireguard.dll beside its own image, so it must
