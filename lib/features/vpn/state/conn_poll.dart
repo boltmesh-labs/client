@@ -246,6 +246,9 @@ extension ConnectionPoll on ConnectionController {
             lastStage: null,
             healthNote: null,
             backendIssue: null,
+            recoveryAction: null,
+            recoveryReason: null,
+            recoveryDetail: null,
           ),
         );
       } finally {

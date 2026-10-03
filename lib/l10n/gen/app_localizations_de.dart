@@ -100,6 +100,87 @@ class AppLocalizationsDe extends AppLocalizations {
       'Server offline. Wechsel zu einem anderen Server …';
 
   @override
+  String homeRecoveryChecking(String reason) {
+    return 'VPN-Pfad wird geprüft: $reason';
+  }
+
+  @override
+  String homeRecoveryRestarting(String reason) {
+    return 'Aktueller Tunnel wird neu gestartet: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingNative(String reason) {
+    return 'Native WireGuard wird versucht: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingAwg(String reason) {
+    return 'AmneziaWG wird versucht: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingStream(String reason) {
+    return 'TLS-Stream wird versucht: $reason';
+  }
+
+  @override
+  String homeRecoverySwitchingServer(String reason) {
+    return 'Wechsel zu einem anderen Server: $reason';
+  }
+
+  @override
+  String homeRecoveryWaiting(String reason) {
+    return 'Wiederherstellung pausiert: $reason';
+  }
+
+  @override
+  String get homeRecoveryReasonHandshake => 'der Peer-Handshake ist veraltet';
+
+  @override
+  String get homeRecoveryReasonGateway => 'das Tunnel-Gateway antwortet nicht';
+
+  @override
+  String get homeRecoveryReasonServerOffline =>
+      'das Backend meldet diesen Server als offline';
+
+  @override
+  String get homeRecoveryReasonDegraded =>
+      'der Tunnel meldet einen beeinträchtigten Zustand';
+
+  @override
+  String get homeRecoveryReasonNoNetwork =>
+      'keine Netzwerkverbindung verfügbar';
+
+  @override
+  String get homeRecoveryReasonControlPlane =>
+      'die Steuerungsebene ist nicht erreichbar';
+
+  @override
+  String get homeRecoveryReasonDeviceIdentity =>
+      'die lokale Geräteidentität ist nicht verfügbar';
+
+  @override
+  String get homeRecoveryReasonRateLimited =>
+      'die API verlangt eine Wartezeit vor dem nächsten Versuch';
+
+  @override
+  String get homeRecoveryReasonNoAlternative =>
+      'kein anderer Server hatte freie Kapazität';
+
+  @override
+  String get homeRecoveryReasonTransportProbe =>
+      'der Transport wurde nicht rechtzeitig erreichbar';
+
+  @override
+  String get homeRecoveryReasonStableProbe =>
+      'die Verbindung war einen Tag lang stabil';
+
+  @override
+  String get homeRecoveryReasonUnknown =>
+      'der Tunnelzustand konnte nicht bestätigt werden';
+
+  @override
   String get homeTrafficTitle => 'Sitzungsdaten';
 
   @override
@@ -332,6 +413,15 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String settingsDiagnosticsBackend(String issue) {
     return 'Backend-Problem: $issue';
+  }
+
+  @override
+  String settingsDiagnosticsRecovery(
+    String action,
+    String reason,
+    String detail,
+  ) {
+    return 'Wiederherstellung: $action · $reason · $detail';
   }
 
   @override

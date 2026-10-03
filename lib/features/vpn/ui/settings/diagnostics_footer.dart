@@ -34,6 +34,9 @@ class DiagnosticsFooter extends ConsumerWidget {
           c.txBytes,
           c.healthNote,
           c.backendIssue,
+          c.recoveryAction,
+          c.recoveryReason,
+          c.recoveryDetail,
         ),
       ),
     );
@@ -71,6 +74,15 @@ class DiagnosticsFooter extends ConsumerWidget {
             Text(traffic, style: Theme.of(context).textTheme.bodySmall),
           if (note != null && note.isNotEmpty)
             Text(note, style: Theme.of(context).textTheme.bodySmall),
+          if (conn.$8 != null)
+            Text(
+              l10n.settingsDiagnosticsRecovery(
+                conn.$8!.name,
+                conn.$9?.name ?? RecoveryReason.unknown.name,
+                conn.$10 ?? '-',
+              ),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           // The structured backend cause, distinct from the free-text note:
           // separates "auth expired" from "unreachable" even when a
           // stage-driven note owns the banner.

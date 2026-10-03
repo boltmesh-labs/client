@@ -60,6 +60,9 @@ extension ConnectionStage on ConnectionController {
             lastStage: stage,
             healthNote: null,
             backendIssue: null,
+            recoveryAction: null,
+            recoveryReason: null,
+            recoveryDetail: null,
           ),
         );
         return;
@@ -128,6 +131,9 @@ extension ConnectionStage on ConnectionController {
         lastStage: stage,
         autoHealAttempts: 0,
         autoFailoverAttempts: 0,
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
       );
       return;
     }
@@ -140,6 +146,9 @@ extension ConnectionStage on ConnectionController {
       snap = snap.copyWith(
         lastStage: stage,
         healthNote: 'VPN network issue (${stage.name}). Watching for recovery…',
+        recoveryAction: RecoveryAction.checking,
+        recoveryReason: RecoveryReason.degradedTunnel,
+        recoveryDetail: 'stage=${stage.name}',
       );
       // The OS just confirmed the data path is unhealthy: kick a health tick
       // now instead of waiting out the 10s cadence, so the stall is

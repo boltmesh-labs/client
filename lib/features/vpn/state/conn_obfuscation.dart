@@ -195,11 +195,22 @@ extension ConnectionObfuscation on ConnectionController {
       _promotionFallbackRung = previousRung;
       _promotionFallbackDial = dial;
       _obfuscationRung = candidate;
+      final recoveryAction = switch (candidate) {
+        ObfuscationRung.native => RecoveryAction.tryingNative,
+        ObfuscationRung.awg => RecoveryAction.tryingAwg,
+        ObfuscationRung.stream => RecoveryAction.tryingStream,
+      };
       AppLog.info(
         'transport promotion probe ${previousRung.name} -> ${candidate.name} '
         'server=${dial.serverName}',
       );
-      snap = snap.copyWith(phase: ConnPhase.working, message: 'Reconnecting…');
+      snap = snap.copyWith(
+        phase: ConnPhase.working,
+        message: 'Reconnecting…',
+        recoveryAction: recoveryAction,
+        recoveryReason: RecoveryReason.stableSessionProbe,
+        recoveryDetail: '${previousRung.name} -> ${candidate.name}',
+      );
       await _stopTunnel('transport-promotion');
       if (sessionEpoch != _sessionEpoch) {
         _promotionFallbackRung = null;
@@ -231,6 +242,9 @@ extension ConnectionObfuscation on ConnectionController {
         snap = snap.copyWith(
           phase: ConnPhase.working,
           message: 'Reconnecting…',
+          recoveryAction: RecoveryAction.restarting,
+          recoveryReason: RecoveryReason.cheaperTransportUnresponsive,
+          recoveryDetail: e.toString(),
         );
         try {
           await _startWith(

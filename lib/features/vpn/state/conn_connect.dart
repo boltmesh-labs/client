@@ -36,11 +36,23 @@ extension ConnectionConnect on ConnectionController {
       if (id == null || provisioned == null) {
         throw StateError('Provisioning did not return a device.');
       }
-      snap = snap.copyWith(phase: ConnPhase.working, message: 'Connecting…');
+      snap = snap.copyWith(
+        phase: ConnPhase.working,
+        message: 'Connecting…',
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
       await _startWith(provisioned, sessionEpoch: expectedSession);
       return;
     }
-    snap = snap.copyWith(phase: ConnPhase.working, message: 'Connecting…');
+    snap = snap.copyWith(
+      phase: ConnPhase.working,
+      message: 'Connecting…',
+      recoveryAction: null,
+      recoveryReason: null,
+      recoveryDetail: null,
+    );
     if (knownDial != null) {
       // Caller already probed server truth (Auto Quick Connect): start the
       // live peer directly instead of re-reading `config`.

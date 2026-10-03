@@ -254,6 +254,120 @@ abstract class AppLocalizations {
   /// **'Server offline. Switching to another server…'**
   String get homeServerOffline;
 
+  /// Home banner while the client diagnoses a connected tunnel before choosing a recovery action.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking the VPN path: {reason}'**
+  String homeRecoveryChecking(String reason);
+
+  /// Home banner while restarting the tunnel on its current transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Restarting the current tunnel: {reason}'**
+  String homeRecoveryRestarting(String reason);
+
+  /// Home banner while recovery probes the native WireGuard transport rung.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying native WireGuard: {reason}'**
+  String homeRecoveryTryingNative(String reason);
+
+  /// Home banner while recovery restarts the tunnel on the AWG transport rung.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying AmneziaWG: {reason}'**
+  String homeRecoveryTryingAwg(String reason);
+
+  /// Home banner while recovery restarts the tunnel on the TLS stream transport rung.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying the TLS stream: {reason}'**
+  String homeRecoveryTryingStream(String reason);
+
+  /// Home banner while automatic failover moves the tunnel to another server.
+  ///
+  /// In en, this message translates to:
+  /// **'Switching to another server: {reason}'**
+  String homeRecoverySwitchingServer(String reason);
+
+  /// Home banner when recovery is waiting for network or control-plane evidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery paused: {reason}'**
+  String homeRecoveryWaiting(String reason);
+
+  /// Recovery reason: the tunnel peer has not handshaken recently.
+  ///
+  /// In en, this message translates to:
+  /// **'the peer handshake is stale'**
+  String get homeRecoveryReasonHandshake;
+
+  /// Recovery reason: the in-tunnel gateway probe failed.
+  ///
+  /// In en, this message translates to:
+  /// **'the tunnel gateway did not respond'**
+  String get homeRecoveryReasonGateway;
+
+  /// Recovery reason: the backend confirmed the serving server is offline.
+  ///
+  /// In en, this message translates to:
+  /// **'the backend reports this server offline'**
+  String get homeRecoveryReasonServerOffline;
+
+  /// Recovery reason: the operating system reported a degraded tunnel stage.
+  ///
+  /// In en, this message translates to:
+  /// **'the tunnel reported a degraded state'**
+  String get homeRecoveryReasonDegraded;
+
+  /// Recovery reason: the operating system reports no network link.
+  ///
+  /// In en, this message translates to:
+  /// **'no network connection is available'**
+  String get homeRecoveryReasonNoNetwork;
+
+  /// Recovery reason: the API/control plane probe did not succeed.
+  ///
+  /// In en, this message translates to:
+  /// **'the control plane could not be reached'**
+  String get homeRecoveryReasonControlPlane;
+
+  /// Recovery reason: the stored device identity could not be read.
+  ///
+  /// In en, this message translates to:
+  /// **'the local device identity is unavailable'**
+  String get homeRecoveryReasonDeviceIdentity;
+
+  /// Recovery reason: a rate-limit cooldown is active.
+  ///
+  /// In en, this message translates to:
+  /// **'the API asked the client to wait before retrying'**
+  String get homeRecoveryReasonRateLimited;
+
+  /// Recovery reason: failover discovery returned no other available server.
+  ///
+  /// In en, this message translates to:
+  /// **'no alternative server had capacity'**
+  String get homeRecoveryReasonNoAlternative;
+
+  /// Recovery reason: the cheaper transport probe did not show liveness in time.
+  ///
+  /// In en, this message translates to:
+  /// **'the transport did not become responsive'**
+  String get homeRecoveryReasonTransportProbe;
+
+  /// Recovery reason: the client is checking whether it can return to a cheaper transport.
+  ///
+  /// In en, this message translates to:
+  /// **'the connection has been healthy for a day'**
+  String get homeRecoveryReasonStableProbe;
+
+  /// Fallback recovery reason when no more specific signal was classified.
+  ///
+  /// In en, this message translates to:
+  /// **'tunnel health could not be confirmed'**
+  String get homeRecoveryReasonUnknown;
+
   /// Title above the download/upload counters.
   ///
   /// In en, this message translates to:
@@ -607,6 +721,16 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Backend issue: {issue}'**
   String settingsDiagnosticsBackend(String issue);
+
+  /// Debug footer recovery status, stable enum names, and raw diagnostic evidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery: {action} · {reason} · {detail}'**
+  String settingsDiagnosticsRecovery(
+    String action,
+    String reason,
+    String detail,
+  );
 
   /// Tray menu row that restores the hidden window.
   ///

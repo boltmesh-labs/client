@@ -98,6 +98,87 @@ class AppLocalizationsEn extends AppLocalizations {
       'Server offline. Switching to another server…';
 
   @override
+  String homeRecoveryChecking(String reason) {
+    return 'Checking the VPN path: $reason';
+  }
+
+  @override
+  String homeRecoveryRestarting(String reason) {
+    return 'Restarting the current tunnel: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingNative(String reason) {
+    return 'Trying native WireGuard: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingAwg(String reason) {
+    return 'Trying AmneziaWG: $reason';
+  }
+
+  @override
+  String homeRecoveryTryingStream(String reason) {
+    return 'Trying the TLS stream: $reason';
+  }
+
+  @override
+  String homeRecoverySwitchingServer(String reason) {
+    return 'Switching to another server: $reason';
+  }
+
+  @override
+  String homeRecoveryWaiting(String reason) {
+    return 'Recovery paused: $reason';
+  }
+
+  @override
+  String get homeRecoveryReasonHandshake => 'the peer handshake is stale';
+
+  @override
+  String get homeRecoveryReasonGateway => 'the tunnel gateway did not respond';
+
+  @override
+  String get homeRecoveryReasonServerOffline =>
+      'the backend reports this server offline';
+
+  @override
+  String get homeRecoveryReasonDegraded =>
+      'the tunnel reported a degraded state';
+
+  @override
+  String get homeRecoveryReasonNoNetwork =>
+      'no network connection is available';
+
+  @override
+  String get homeRecoveryReasonControlPlane =>
+      'the control plane could not be reached';
+
+  @override
+  String get homeRecoveryReasonDeviceIdentity =>
+      'the local device identity is unavailable';
+
+  @override
+  String get homeRecoveryReasonRateLimited =>
+      'the API asked the client to wait before retrying';
+
+  @override
+  String get homeRecoveryReasonNoAlternative =>
+      'no alternative server had capacity';
+
+  @override
+  String get homeRecoveryReasonTransportProbe =>
+      'the transport did not become responsive';
+
+  @override
+  String get homeRecoveryReasonStableProbe =>
+      'the connection has been healthy for a day';
+
+  @override
+  String get homeRecoveryReasonUnknown =>
+      'tunnel health could not be confirmed';
+
+  @override
   String get homeTrafficTitle => 'Session traffic';
 
   @override
@@ -328,6 +409,15 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String settingsDiagnosticsBackend(String issue) {
     return 'Backend issue: $issue';
+  }
+
+  @override
+  String settingsDiagnosticsRecovery(
+    String action,
+    String reason,
+    String detail,
+  ) {
+    return 'Recovery: $action · $reason · $detail';
   }
 
   @override

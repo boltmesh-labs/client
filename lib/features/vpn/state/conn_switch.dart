@@ -119,7 +119,13 @@ extension ConnectionSwitch on ConnectionController {
         }
         return;
       }
-      snap = snap.copyWith(phase: ConnPhase.working, message: 'Switching…');
+      snap = snap.copyWith(
+        phase: ConnPhase.working,
+        message: 'Switching…',
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
       final deviceId = id;
       if (_peerReleasedLocally) {
         // This session released the device's peer (see
@@ -433,6 +439,9 @@ extension ConnectionSwitch on ConnectionController {
         snap = snap.copyWith(
           phase: ConnPhase.working,
           message: 'Rotating key…',
+          recoveryAction: null,
+          recoveryReason: null,
+          recoveryDetail: null,
         );
       }
       final kp = await _keys.generate();

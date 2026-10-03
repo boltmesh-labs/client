@@ -271,6 +271,7 @@ extension ConnectionHealth on ConnectionController {
         await _autoHeal(
           'cheaper transport probe timed out',
           localConfirmed: true,
+          recoveryReason: RecoveryReason.cheaperTransportUnresponsive,
           expectedSession: sessionEpoch,
           expectedEpoch: epoch,
           expectedDial: dial,
@@ -293,6 +294,11 @@ extension ConnectionHealth on ConnectionController {
         snap = snap.copyWith(healthNote: null);
       }
       if (handshakeFresh) _confirmTransportPromotion();
+      snap = snap.copyWith(
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
       await _maybeProbeCheaperRung(
         dial,
         pathHealthy: gateway == true || handshakeFresh,
@@ -321,6 +327,20 @@ extension ConnectionHealth on ConnectionController {
     } else {
       why = 'stage=${snap.lastStage?.name ?? 'unknown'}';
     }
+    final recoveryReason = serverDown
+        ? RecoveryReason.serverOffline
+        : echoShortens
+        ? RecoveryReason.gatewayUnreachable
+        : stageStalled
+        ? RecoveryReason.degradedTunnel
+        : handshakeStalled
+        ? RecoveryReason.staleHandshake
+        : RecoveryReason.unknown;
+    snap = snap.copyWith(
+      recoveryAction: RecoveryAction.checking,
+      recoveryReason: recoveryReason,
+      recoveryDetail: why,
+    );
     // 4-layer diagnostic pipeline (see `domain/diagnosis_policy.dart`):
     // Layer 2 (physical link) → Layer 1 (in-tunnel gateway echo) →
     // Layer 3 (control-plane probe) → Layer 4 (escalation). Confirmed local
@@ -332,7 +352,12 @@ extension ConnectionHealth on ConnectionController {
     if (!await _hasLink()) {
       AppLog.info('health paused ($why) no local network');
       if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-      snap = snap.copyWith(healthNote: _noNetworkNote);
+      snap = snap.copyWith(
+        healthNote: _noNetworkNote,
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: RecoveryReason.noNetwork,
+        recoveryDetail: why,
+      );
       return;
     }
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
@@ -351,6 +376,11 @@ extension ConnectionHealth on ConnectionController {
       if (snap.healthNote == _checkingRecoveryNote) {
         snap = snap.copyWith(healthNote: null);
       }
+      snap = snap.copyWith(
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
       return;
     }
     // Positive evidence that the current tunnel path is dead must not be
@@ -441,7 +471,12 @@ extension ConnectionHealth on ConnectionController {
     // positive control-plane result. A failed/unknown probe alone is not a
     // reason to stop a tunnel or consume a move budget.
     if (apiReachable != true && !canHeal) {
-      snap = snap.copyWith(healthNote: _recoveryWaitingNote);
+      snap = snap.copyWith(
+        healthNote: _recoveryWaitingNote,
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: RecoveryReason.controlPlaneUnavailable,
+        recoveryDetail: why,
+      );
       return;
     }
     // Nothing left to try: the move budget is spent and the bounded local
@@ -487,6 +522,7 @@ extension ConnectionHealth on ConnectionController {
         hardStalled: hardStalled,
         localConfirmed: localEvidence,
         transportFailureConfirmed: transportFailureConfirmed,
+        recoveryReason: recoveryReason,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,
@@ -499,6 +535,11 @@ extension ConnectionHealth on ConnectionController {
         healthNote: apiReachable == true
             ? 'Recovery pending. Verifying the current tunnel…'
             : _recoveryWaitingNote,
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: apiReachable == true
+            ? RecoveryReason.unknown
+            : RecoveryReason.controlPlaneUnavailable,
+        recoveryDetail: why,
       );
     }
   }
@@ -514,11 +555,22 @@ extension ConnectionHealth on ConnectionController {
   void _onLinkChanged(bool hasLink) {
     if (snap.phase != ConnPhase.connected) return;
     if (!hasLink) {
-      snap = snap.copyWith(healthNote: _noNetworkNote);
+      snap = snap.copyWith(
+        healthNote: _noNetworkNote,
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: RecoveryReason.noNetwork,
+        recoveryDetail: 'network link lost',
+      );
       return;
     }
-    if (snap.healthNote == _noNetworkNote) {
-      snap = snap.copyWith(healthNote: null);
+    if (snap.healthNote == _noNetworkNote ||
+        snap.recoveryReason == RecoveryReason.noNetwork) {
+      snap = snap.copyWith(
+        healthNote: null,
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
     }
     unawaited(_catchUpOnResumeOp());
   }

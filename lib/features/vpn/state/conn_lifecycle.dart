@@ -144,6 +144,9 @@ extension ConnectionLifecycle on ConnectionController {
         lastStage: lastStage,
         healthNote: null,
         backendIssue: null,
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
       ),
     );
   }
@@ -157,6 +160,9 @@ extension ConnectionLifecycle on ConnectionController {
       message: 'Connected',
       healthNote: null,
       backendIssue: null,
+      recoveryAction: null,
+      recoveryReason: null,
+      recoveryDetail: null,
     );
   }
 
@@ -176,6 +182,9 @@ extension ConnectionLifecycle on ConnectionController {
         lastStage: null,
         healthNote: null,
         backendIssue: null,
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
       ),
     );
   }
@@ -218,6 +227,9 @@ extension ConnectionLifecycle on ConnectionController {
       snap = snap.copyWith(
         phase: ConnPhase.working,
         message: 'Applying network setting…',
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
       );
       // Explicit stop first: [_startWith] only stops a `connected` tunnel,
       // and the phase above is already `working` (same pattern as

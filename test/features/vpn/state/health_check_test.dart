@@ -747,6 +747,9 @@ void main() {
           expect(state.dial?.serverId, 'srv-1');
           expect(state.autoHealAttempts, 1);
           expect(state.autoFailoverAttempts, 0);
+          expect(state.recoveryAction, RecoveryAction.tryingStream);
+          expect(state.recoveryReason, RecoveryReason.gatewayUnreachable);
+          expect(state.recoveryDetail, contains('echo dead'));
         },
       );
 
@@ -773,6 +776,10 @@ void main() {
 
         // The probe is one step only: stream -> AWG, with no stream bridge.
         expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(
+          container.read(connectionProvider).recoveryAction,
+          RecoveryAction.tryingAwg,
+        );
         expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
         expect(socket.lastTransport, isNull);
 
@@ -817,6 +824,10 @@ void main() {
           await ctl.checkHealthOnce();
 
           expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(
+            container.read(connectionProvider).recoveryAction,
+            RecoveryAction.tryingStream,
+          );
           expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
           expect(socket.lastTransport, isNotNull);
         },
@@ -2094,6 +2105,8 @@ void main() {
     expect(state.serverId, isNull);
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);
+    expect(state.recoveryAction, RecoveryAction.switchingServer);
+    expect(state.recoveryReason, RecoveryReason.staleHandshake);
     expect(events, contains('GET:/vpn-regions'));
     expect(events, contains('POST:/vpn-devices/dev-1/switch'));
     // The failover stopped the old tunnel before discovery (direct
@@ -2138,6 +2151,8 @@ void main() {
     expect(state.dial?.serverId, 'srv-1');
     expect(state.autoHealAttempts, 1);
     expect(state.autoFailoverAttempts, 0);
+    expect(state.recoveryAction, RecoveryAction.waiting);
+    expect(state.recoveryReason, RecoveryReason.controlPlaneUnavailable);
     expect(state.healthNote, contains('Waiting for the control plane'));
     expect(events, isNot(contains('GET:/vpn-regions')));
   });
@@ -2169,6 +2184,8 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-1');
     expect(state.autoFailoverAttempts, 1);
+    expect(state.recoveryAction, RecoveryAction.restarting);
+    expect(state.recoveryReason, RecoveryReason.noAlternativeServer);
     expect(state.healthNote, contains('No other server'));
     expect(events, contains('GET:/vpn-regions'));
     expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));

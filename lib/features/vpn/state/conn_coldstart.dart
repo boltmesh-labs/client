@@ -347,6 +347,9 @@ extension ConnectionColdStart on ConnectionController {
               lastStage: VpnStage.disconnected,
               healthNote: null,
               backendIssue: null,
+              recoveryAction: null,
+              recoveryReason: null,
+              recoveryDetail: null,
             ),
           );
           return;
@@ -405,6 +408,9 @@ extension ConnectionColdStart on ConnectionController {
         lastStage: VpnStage.connected,
         healthNote: null,
         backendIssue: null,
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
       ),
     );
     _coldRestore.armed = false;

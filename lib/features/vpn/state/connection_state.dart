@@ -8,6 +8,33 @@ part 'connection_state.freezed.dart';
 
 enum ConnPhase { idle, working, connected, error }
 
+/// User-visible step in an active automatic recovery attempt.
+enum RecoveryAction {
+  checking,
+  restarting,
+  tryingNative,
+  tryingAwg,
+  tryingStream,
+  switchingServer,
+  waiting,
+}
+
+/// Short, stable cause codes for recovery UI and support diagnostics.
+enum RecoveryReason {
+  staleHandshake,
+  gatewayUnreachable,
+  serverOffline,
+  degradedTunnel,
+  noNetwork,
+  controlPlaneUnavailable,
+  deviceIdentityUnavailable,
+  rateLimited,
+  noAlternativeServer,
+  cheaperTransportUnresponsive,
+  stableSessionProbe,
+  unknown,
+}
+
 @freezed
 abstract class ConnState with _$ConnState {
   const factory ConnState({
@@ -43,6 +70,15 @@ abstract class ConnState with _$ConnState {
     /// Degraded-tunnel banner (backend unreachable or stage anomaly).
     /// Null when healthy.
     String? healthNote,
+
+    /// Structured recovery progress; unlike [healthNote], these fields are
+    /// localized by the UI and can be reported as stable diagnostic codes.
+    RecoveryAction? recoveryAction,
+    RecoveryReason? recoveryReason,
+
+    /// Raw health evidence for debug/support diagnostics; never shown as UI
+    /// copy when a structured recovery action is available.
+    String? recoveryDetail,
 
     /// Structured cause of the last backend interaction failure while
     /// connected, if any (null when healthy). [healthNote] carries the

@@ -25,6 +25,7 @@ extension ConnectionRecovery on ConnectionController {
     bool hardStalled = false,
     bool localConfirmed = false,
     bool transportFailureConfirmed = false,
+    RecoveryReason? recoveryReason,
     int? expectedSession,
     int? expectedEpoch,
     DialParams? expectedDial,
@@ -58,7 +59,13 @@ extension ConnectionRecovery on ConnectionController {
           !hardStalled &&
           !localConfirmed) {
         AppLog.info('auto-heal suppressed ($why) backend reachable');
-        snap = snap.copyWith(healthNote: null, backendIssue: null);
+        snap = snap.copyWith(
+          healthNote: null,
+          backendIssue: null,
+          recoveryAction: null,
+          recoveryReason: null,
+          recoveryDetail: null,
+        );
         return;
       }
       final sessionEpoch = _sessionEpoch;
@@ -69,6 +76,9 @@ extension ConnectionRecovery on ConnectionController {
       // every heal before the stall can escalate.
       final prevFailovers = snap.autoFailoverAttempts;
       final prevPollFailures = snap.pollFailures;
+      final previousRung = _obfuscationRung;
+      final reason =
+          recoveryReason ?? snap.recoveryReason ?? RecoveryReason.unknown;
       // A lower transport is warranted only when the data path looks dead
       // while the control plane is reachable. A blackout can still justify
       // restarting the cached config, but it is not evidence that this
@@ -84,12 +94,22 @@ extension ConnectionRecovery on ConnectionController {
       } else if (transportFailureConfirmed) {
         _demoteRung(dial, why);
       }
+      final action = _obfuscationRung == previousRung
+          ? RecoveryAction.restarting
+          : switch (_obfuscationRung) {
+              ObfuscationRung.native => RecoveryAction.restarting,
+              ObfuscationRung.awg => RecoveryAction.tryingAwg,
+              ObfuscationRung.stream => RecoveryAction.tryingStream,
+            };
       AppLog.info('auto-heal start ($why) attempt=$attempt ${_healBudgets()}');
       snap = snap.copyWith(
         phase: ConnPhase.working,
         message: 'Reconnecting…',
         autoHealAttempts: attempt,
         healthNote: 'VPN stalled ($why). Reconnecting…',
+        recoveryAction: action,
+        recoveryReason: reason,
+        recoveryDetail: why,
       );
       await _stopTunnel('auto-heal');
       if (sessionEpoch != _sessionEpoch) return;
@@ -131,6 +151,9 @@ extension ConnectionRecovery on ConnectionController {
         // during the post-restart handshake deadline. A successful handshake
         // clears this note through the normal fresh-tunnel path.
         healthNote: _recoveryInProgressNote,
+        recoveryAction: action,
+        recoveryReason: reason,
+        recoveryDetail: why,
       );
       AppLog.info('auto-heal ok ($why) attempt=$attempt');
     } finally {
@@ -300,6 +323,9 @@ extension ConnectionRecovery on ConnectionController {
         healthNote:
             'Automatic recovery paused ($why). '
             'Device identity is temporarily unavailable.',
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: RecoveryReason.deviceIdentityUnavailable,
+        recoveryDetail: why,
       );
       return;
     }
@@ -308,6 +334,11 @@ extension ConnectionRecovery on ConnectionController {
     // health tick retries once the window reopens.
     if (_rateLimitRemaining != null) {
       AppLog.info('failover skipped (rate limited)');
+      snap = snap.copyWith(
+        recoveryAction: RecoveryAction.waiting,
+        recoveryReason: RecoveryReason.rateLimited,
+        recoveryDetail: why,
+      );
       return;
     }
     final attempt = snap.autoFailoverAttempts + 1;
@@ -319,6 +350,9 @@ extension ConnectionRecovery on ConnectionController {
       phase: ConnPhase.working,
       message: 'Trying another server…',
       healthNote: 'Server unreachable ($why). Trying another server…',
+      recoveryAction: RecoveryAction.switchingServer,
+      recoveryReason: snap.recoveryReason ?? RecoveryReason.unknown,
+      recoveryDetail: snap.recoveryDetail ?? why,
     );
     // The move budget is charged at *commitment*, not on entry. A discovery
     // or switch POST the backend answers (5xx/429/…) proves the control plane
@@ -416,6 +450,7 @@ extension ConnectionRecovery on ConnectionController {
         why,
         tunnelDown: tunnelDown,
         sessionEpoch: sessionEpoch,
+        recoveryReason: RecoveryReason.noAlternativeServer,
       );
       // Say why we stayed put after the restart reconnects.
       if (snap.phase == ConnPhase.connected &&
@@ -734,6 +769,7 @@ extension ConnectionRecovery on ConnectionController {
     String why, {
     bool tunnelDown = true,
     required int sessionEpoch,
+    RecoveryReason? recoveryReason,
   }) async {
     // Every path that reaches here has already charged its attempt (a
     // tunnel stop or a resolved target), but [_startWith] resets the
@@ -742,6 +778,8 @@ extension ConnectionRecovery on ConnectionController {
     // the outage is still ongoing.
     final failovers = snap.autoFailoverAttempts;
     final pollFailures = snap.pollFailures;
+    final reason =
+        recoveryReason ?? snap.recoveryReason ?? RecoveryReason.unknown;
     if (sessionEpoch != _sessionEpoch) return;
     if (!tunnelDown) {
       await _stopTunnel('failover-fallback');
@@ -771,6 +809,9 @@ extension ConnectionRecovery on ConnectionController {
       autoHealAttempts: 0,
       autoFailoverAttempts: failovers,
       pollFailures: pollFailures,
+      recoveryAction: RecoveryAction.restarting,
+      recoveryReason: reason,
+      recoveryDetail: why,
     );
     AppLog.info('failover fallback ok ($why) server=${oldDial.serverName}');
   }

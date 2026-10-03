@@ -55,6 +55,60 @@ void main() {
     );
   });
 
+  testWidgets('a working transport recovery is localized', (tester) async {
+    await pumpBanner(
+      tester,
+      const ConnState(
+        phase: ConnPhase.working,
+        healthNote: 'raw diagnostic detail',
+        recoveryAction: RecoveryAction.tryingStream,
+        recoveryReason: RecoveryReason.staleHandshake,
+      ),
+    );
+    expect(
+      find.text('Trying the TLS stream: the peer handshake is stale'),
+      findsOneWidget,
+    );
+    expect(find.text('raw diagnostic detail'), findsNothing);
+  });
+
+  testWidgets('server movement is distinct from a tunnel restart', (
+    tester,
+  ) async {
+    await pumpBanner(
+      tester,
+      const ConnState(
+        phase: ConnPhase.working,
+        recoveryAction: RecoveryAction.switchingServer,
+        recoveryReason: RecoveryReason.serverOffline,
+      ),
+    );
+    expect(
+      find.text(
+        'Switching to another server: the backend reports this server offline',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('authentication errors remain more important than recovery', (
+    tester,
+  ) async {
+    await pumpBanner(
+      tester,
+      const ConnState(
+        phase: ConnPhase.working,
+        recoveryAction: RecoveryAction.restarting,
+        recoveryReason: RecoveryReason.staleHandshake,
+        backendIssue: BackendIssue.authExpired,
+      ),
+    );
+    expect(
+      find.text('Session expired. Log in again to reconnect.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('authExpired renders the session copy, not a network error', (
     tester,
   ) async {
