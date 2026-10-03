@@ -66,31 +66,41 @@ Row withGateway(Row r, bool? gateway) => (
   escalate: r.escalate,
 );
 
-/// The two stronger local verdicts, kept as arguments rather than columns: they
-/// both mean "this path is dead" and overlap, so a row never needs both.
-RecoveryStep local(Row r, {bool echoRun = false, bool hardStale = false}) =>
-    decideLocalRecovery(
-      hasNetwork: r.hasNetwork,
-      gatewayAlive: r.gateway,
-      serverConfirmedDown: r.serverDown,
-      confirmedLocalPathDeath: echoRun,
-      hardStalled: hardStale,
-      lowerRungAvailable: r.lowerRung,
-      canHeal: r.canHeal,
-      moveBudgetLeft: r.moveBudgetLeft,
-    );
+/// The local verdicts, kept as arguments rather than columns: they all mean
+/// "this path is dead" and overlap, so a row never needs more than one. [hardStale]
+/// is the uncorroborated 45s ceiling, [neverHandshake] the 30s verdict the
+/// classifier honors only once the control plane has answered — the pair is the
+/// cost-of-action distinction, so they get separate names rather than a column.
+RecoveryStep local(
+  Row r, {
+  bool echoRun = false,
+  bool hardStale = false,
+  bool neverHandshake = false,
+}) => decideLocalRecovery(
+  hasNetwork: r.hasNetwork,
+  gatewayAlive: r.gateway,
+  serverConfirmedDown: r.serverDown,
+  confirmedLocalPathDeath: echoRun,
+  hardStalled: hardStale,
+  neverHandshookPastGrace: neverHandshake,
+  lowerRungAvailable: r.lowerRung,
+  canHeal: r.canHeal,
+  moveBudgetLeft: r.moveBudgetLeft,
+);
 
 RecoveryStep decided(
   Row r, {
   bool? api,
   bool echoRun = false,
   bool hardStale = false,
+  bool neverHandshake = false,
 }) => decideRecoveryStep(
   gatewayAlive: r.gateway,
   apiReachable: api,
   serverConfirmedDown: r.serverDown,
   confirmedLocalPathDeath: echoRun,
   hardStalled: hardStale,
+  neverHandshookPastGrace: neverHandshake,
   lowerRungAvailable: r.lowerRung,
   canHeal: r.canHeal,
   moveBudgetLeft: r.moveBudgetLeft,
@@ -243,6 +253,87 @@ void main() {
           isNot(RecoveryStep.suppressLiveEcho),
         );
       }
+    });
+
+    test('a never-handshook verdict buys a rung step, never an uncorroborated move', () {
+      // The cost-of-action rule, in both directions. This verdict is real local
+      // evidence at 30s, but a fast-track move stops the tunnel and spends the
+      // move budget without asking anyone, so that action is held to the later
+      // uncorroborated ceiling ([hardStale]) instead. A rung step is a
+      // same-server restart the control plane's answer licensed, so this
+      // verdict is enough for it — and that is the gap: without it a
+      // never-handshook spent its single heal on a same-rung restart and could
+      // never be diagnosed as a blocked transport at all.
+      // serverDown pinned off: the backend's node verdict is attributed and
+      // fast-tracks on its own, with or without this handshake evidence.
+      // escalate pinned off so the escalation gate does not outrank the rung
+      // step under test.
+      for (final r in allRowsWith(
+        hasNetwork: true,
+        canHeal: true,
+        serverDown: false,
+        escalate: false,
+      ).where((r) => r.gateway != true)) {
+        for (final lowerRung in [true, false]) {
+          final cell = pin(r, lowerRung: lowerRung);
+          expect(
+            local(cell, neverHandshake: true),
+            RecoveryStep.probeControlPlane,
+            reason: 'no control-plane answer yet: row=$cell',
+          );
+          for (final api in [false, null]) {
+            expect(
+              decided(cell, api: api, neverHandshake: true),
+              isNot(RecoveryStep.moveServer),
+              reason: 'api=$api row=$cell',
+            );
+          }
+        }
+      }
+
+      // With the control plane answering, this verdict is a confirmed dead
+      // path, so the cheapest available action wins: a rung step where the
+      // region serves one, the move where it does not. Only the unprobeable-echo
+      // rows are asserted — a *performed-dead* echo already carries the same
+      // information through its own rule, so there this verdict is moot.
+      for (final r in allRowsWith(
+        hasNetwork: true,
+        canHeal: true,
+        serverDown: false,
+        escalate: false,
+      ).where((r) => r.gateway == null)) {
+        for (final lowerRung in [true, false]) {
+          for (final moveBudgetLeft in [true, false]) {
+            final cell = pin(
+              r,
+              lowerRung: lowerRung,
+              moveBudgetLeft: moveBudgetLeft,
+            );
+            expect(
+              decided(cell, api: true, neverHandshake: true),
+              // Cheapest available action: the rung step where the region
+              // serves one, the move where it does not but the budget allows,
+              // and otherwise a plain rebuild — never a wait, since a heal is
+              // affordable here.
+              lowerRung
+                  ? RecoveryStep.stepTransportRung
+                  : moveBudgetLeft
+                  ? RecoveryStep.moveServer
+                  : RecoveryStep.restartTunnel,
+              reason: 'row=$cell',
+            );
+          }
+        }
+      }
+      // The uncorroborated ceiling is what does reach the move on its own.
+      expect(
+        decided(
+          row(gateway: null, lowerRung: false),
+          api: false,
+          hardStale: true,
+        ),
+        RecoveryStep.moveServer,
+      );
     });
 
     test(
@@ -444,7 +535,8 @@ void main() {
 
     test('a hard-stale handshake substitutes for an unprobeable echo', () {
       // The echo could not be performed at all (null), so the handshake ceiling
-      // is the positive evidence — and a blackout still cannot demote on it.
+      // is the positive evidence. A blackout cannot demote on it; a reachable
+      // control plane makes it a rung step.
       final unprobeable = row(gateway: null);
       expect(
         local(unprobeable, hardStale: true),
@@ -453,6 +545,17 @@ void main() {
       expect(
         decided(unprobeable, api: false, hardStale: true),
         RecoveryStep.restartTunnel,
+      );
+      expect(
+        decided(unprobeable, api: true, hardStale: true),
+        RecoveryStep.stepTransportRung,
+      );
+      // A never-completed handshake reaches the same verdict by the same route:
+      // the ceiling it is measured against is the corroboration gate, so the
+      // evidence exists on the tick the stall is first corroborated.
+      expect(
+        decided(unprobeable, api: true, hardStale: true),
+        decided(row(gateway: null), api: true, echoRun: true),
       );
     });
 

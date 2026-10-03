@@ -611,6 +611,7 @@ void main() {
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
         List<Map<String, dynamic>> Function()? onRegions,
+        GatewayProbe? gatewayProbe,
         ControlPlaneProbe? controlProbe,
         Clock? clock,
         bool expectConnected = true,
@@ -636,6 +637,7 @@ void main() {
           keys: FakeKeys(),
           api: api,
           clock: clock,
+          gatewayProbe: gatewayProbe,
           controlProbe: controlProbe,
           tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
         );
@@ -805,6 +807,45 @@ void main() {
         // The move kept the region's format on the rung it was already on.
         expect(socket.lastConfig, contains('Jc = 3'));
         expect(socket.lastTransport, isNull);
+      });
+
+      test('a never-completed handshake with the control plane up steps a rung', () async {
+        // The gap this closes. A first connect whose handshake never completes
+        // is the classic blocked-UDP signature — the API answers while the
+        // tunnel's own path does not — but it used to spend its single heal on
+        // a same-rung restart, and the uncorroborated ceiling arrived after
+        // that budget was gone, so the ladder could only fast-track to another
+        // server: a rung step was unreachable for this case.
+        //
+        // The echo is unprobeable on purpose (`wg_dns` yields no target). A
+        // performed-dead echo would carry the same information through the
+        // echo's own rule and hide whether this verdict is what acted.
+        useLinuxDataPlane();
+        final clock = support.FakeClock();
+        final (container, socket) = await seedStream(
+          clock: clock,
+          gatewayProbe: support.FakeGatewayProbe(null),
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        // A real reader reporting no handshake yet, ever.
+        ctl.debugHandshakeReader = () async => null;
+        clock.advance(ConnectionTuning.firstHandshakeGrace);
+
+        await ctl.checkHealthOnce();
+
+        // The same heal, spent on the rung instead of a pointless rebuild: the
+        // region serves stream below its AWG floor, and no server was touched.
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastTransport, isNotNull);
+        final state = container.read(connectionProvider);
+        expect(state.autoHealAttempts, 1);
+        expect(state.autoFailoverAttempts, 0);
+        expect(state.dial?.serverId, 'srv-1');
+        expect(state.recoveryAction, RecoveryAction.tryingStream);
+        expect(state.recoveryReason, RecoveryReason.staleHandshake);
+        expect(state.recoveryDetail, contains('never completed'));
       });
 
       test('a long-healthy stream session probes one cheaper rung', () async {
@@ -1290,7 +1331,7 @@ void main() {
     // The Android/Linux path: a real reader keeps reporting "no handshake
     // yet" (null). Aged past the grace window with a corroborating poll
     // failure, the dead peer heals immediately — no 150s stopwatch, so a
-    // powered-off server is detected on the first tick after 45s.
+    // powered-off server is detected on the first tick after 30s.
     final events = <String>[];
     final clock = support.FakeClock();
     final (container, _) = await seedConnected(events, (o) {
@@ -1554,12 +1595,15 @@ void main() {
   );
 
   test(
-    'a restarted tunnel that never handshakes escalates at the hard ceiling',
+    'a never-handshook acts at the grace when the control plane answers',
     () async {
-      // Post-restart the observed-handshake ceiling has no timestamp to age,
-      // so the never-handshook branch must carry the ladder forward once the
-      // hard grace passes — otherwise a dead peer sits "Connected" forever
-      // while out-of-band polls keep succeeding.
+      // The blocked-UDP shape: the API answers out-of-band while the tunnel's
+      // own path never does, and wg_dns yields no probeable target so the echo
+      // is null every tick — there is no performed-dead echo to lean on. The
+      // successful poll keeps the corroboration gate closed, so the
+      // never-handshook verdict is what carries this, and a reachable control
+      // plane makes that enough at [firstHandshakeGrace] instead of at the
+      // later uncorroborated ceiling.
       final events = <String>[];
       final clock = support.FakeClock();
       final (container, _) = await seedConnected(
@@ -1579,19 +1623,19 @@ void main() {
       final ctl = container.read(connectionProvider.notifier);
       ctl.debugHandshakeReader = () async => null;
       await ctl.pollStatusOnce();
+      expect(container.read(connectionProvider).lastStatusAt, isNotNull);
       events.clear();
 
-      // Just below the hard grace: still gated (the recent poll keeps
-      // corroboration away), so nothing happens.
+      // Just below the grace: still gated, so nothing happens.
       clock.advance(
-        ConnectionTuning.hardFirstHandshakeCeiling - const Duration(seconds: 1),
+        ConnectionTuning.firstHandshakeGrace - const Duration(seconds: 1),
       );
-      await ctl.pollStatusOnce();
       await ctl.checkHealthOnce();
       expect(container.read(connectionProvider).autoFailoverAttempts, 0);
       expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
 
-      // Past the hard grace the tunnel path is dead: fast-track a move.
+      // Past it. This stock region serves no rung below, so there is nothing
+      // cheaper than the move and the confirmed dead path takes it.
       clock.advance(const Duration(seconds: 2));
       await ctl.checkHealthOnce();
 
@@ -1599,9 +1643,73 @@ void main() {
       expect(state.phase, ConnPhase.connected);
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
+      expect(events, contains('GET:/vpn-regions'));
       expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     },
   );
+
+  test('a never-handshook waits for the hard ceiling when the control plane is down', () async {
+    // The same evidence with nobody to corroborate it. A fast-track move stops
+    // the tunnel and spends the move budget on local evidence alone, so it
+    // waits for [hardFirstHandshakeCeiling]; the cheap same-server restart
+    // still happens, because restarting a dead config costs nothing. Without
+    // that ceiling the session would sit "Connected" forever with no echo to
+    // speak for it.
+    final events = <String>[];
+    final clock = support.FakeClock();
+    final (container, _) = await seedConnected(
+      events,
+      (o) {
+        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/status')) return activeStatusJson();
+        if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
+        if (o.path.endsWith('/switch')) return dialJsonSrv2();
+        throw StateError('unexpected ${o.path}');
+      },
+      clock: clock,
+      gatewayProbe: support.FakeGatewayProbe(null),
+      keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
+    );
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugHandshakeReader = () async => null;
+    await ctl.pollStatusOnce();
+    events.clear();
+
+    // Past the grace but short of the ceiling: the restart runs, no move.
+    clock.advance(ConnectionTuning.firstHandshakeGrace);
+    await ctl.checkHealthOnce();
+    var state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.autoHealAttempts, 1);
+    expect(state.autoFailoverAttempts, 0);
+    expect(events.where((e) => e.startsWith('tunnel:')), isNotEmpty);
+    // The heal reset the tunnel-start anchor, so the ceiling measures the
+    // restarted tunnel — and the incident's heal budget is spent, which is
+    // exactly why the ceiling has to be able to move on its own. Re-assert the
+    // spent budget the way `_autoHeal` does so this row measures the ceiling
+    // rather than the heal budget.
+    ctl.snap = ctl.snap.copyWith(autoHealAttempts: 1);
+    events.clear();
+
+    // Just below the uncorroborated ceiling: nothing left to act on.
+    clock.advance(
+      ConnectionTuning.hardFirstHandshakeCeiling - const Duration(seconds: 1),
+    );
+    await ctl.checkHealthOnce();
+    expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+    expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
+
+    // Past it the path is dead on local evidence alone: fast-track the move.
+    clock.advance(const Duration(seconds: 2));
+    await ctl.checkHealthOnce();
+
+    state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.autoFailoverAttempts, 1);
+    expect(state.dial?.serverId, 'srv-2');
+    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+  });
 
   test(
     'alive gateway echo suppresses the heal despite a stale handshake',

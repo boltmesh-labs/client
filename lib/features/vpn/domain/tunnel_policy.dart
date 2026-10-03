@@ -252,13 +252,19 @@ String? _canonicalIp(String host) {
 /// - Reader unsupported: null is *absence of evidence* (unreadable IPC, or
 ///   no native reader on this platform) and never counts as stale on its
 ///   own — the degraded-stage path still heals those platforms.
+/// [graceAfter] and [staleAfter] are required rather than defaulted, for the
+/// same reason `failover_policy.dart` requires its thresholds: a silent default
+/// is a second copy of a tuned value, and the two drifting apart is exactly how
+/// a retune stops taking effect. It already had one — a 45s [graceAfter] that
+/// silently matched [ConnectionTuning.hardFirstHandshakeCeiling] at one call
+/// site and meant nothing at the others.
 bool isHandshakeStale({
   required DateTime? lastHandshakeAt,
   required DateTime now,
+  required Duration graceAfter,
+  required Duration staleAfter,
   DateTime? connectedAt,
   bool readerSupported = true,
-  Duration graceAfter = const Duration(seconds: 45),
-  Duration staleAfter = const Duration(seconds: 150),
 }) {
   final last = lastHandshakeAt;
   if (last != null) {

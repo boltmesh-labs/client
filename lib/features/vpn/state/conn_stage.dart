@@ -252,6 +252,7 @@ extension ConnectionStage on ConnectionController {
         // 150s aging (the 45s never-handshook grace is a connected-stage
         // concern; see [ConnectionHealth]).
         graceAfter: ConnectionTuning.handshakeStaleAfter,
+        staleAfter: ConnectionTuning.handshakeStaleAfter,
       );
       // Tri-state, never throws (see [ConnectionHealth._gatewayAlive]):
       // null = skipped/errored (unknown, defers), false = echoed-dead.

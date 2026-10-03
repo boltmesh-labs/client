@@ -39,6 +39,18 @@ enum ConnectionFailureCause {
 ///   handshake that stayed dead past the hard ceiling. It substitutes for a
 ///   *performed* dead echo when the echo is unprobeable, and is sufficient to
 ///   fast-track without a successful control-plane probe.
+/// - [neverHandshookPastGrace] is the cheaper never-handshook verdict: a
+///   supported reader that has seen no handshake at all since the tunnel
+///   started, past [ConnectionTuning.firstHandshakeGrace] (see
+///   `isHandshakeStale`). There is nothing for that peer to be idle about, so
+///   it is real local evidence — but unlike [hardStalled] it only counts while
+///   [apiReachable] is true. The reason is the cost of the action, not the
+///   strength of the evidence: the same-server rung step it licenses is gated
+///   on the control plane answering anyway, while a fast-track move is not, and
+///   that one waits for the later, uncorroborated
+///   [ConnectionTuning.hardFirstHandshakeCeiling] instead. Gating it here keeps
+///   the pre-probe fast-track from inheriting a threshold meant for the cheap
+///   decision.
 /// - [serverConfirmedDown] is the backend's own verdict on the serving node
 ///   (`GET …/server-status`). The only *attributed* death signal here — every
 ///   other input describes what this client observes, which a local path fault
@@ -54,6 +66,7 @@ ConnectionFailureCause classifyFailure({
   required bool? gatewayAlive,
   required bool? apiReachable,
   bool hardStalled = false,
+  bool neverHandshookPastGrace = false,
   bool serverConfirmedDown = false,
   bool confirmedLocalPathDeath = false,
 }) {
@@ -76,6 +89,13 @@ ConnectionFailureCause classifyFailure({
   // hard-stale handshake, or backend node verdict was handled above and may
   // fast-track before probing the control plane.
   if (gatewayAlive == false && apiReachable == true) {
+    return ConnectionFailureCause.tunnelPathDead;
+  }
+  // A supported reader that never saw a handshake past the grace window: real
+  // local evidence, but only once the control plane agrees. Without that answer
+  // this stays a blackout, so the pre-probe fast-track (which spends the move
+  // budget without asking anyone) keeps waiting for the hard ceiling instead.
+  if (neverHandshookPastGrace && apiReachable == true) {
     return ConnectionFailureCause.tunnelPathDead;
   }
   return ConnectionFailureCause.totalBlackout;

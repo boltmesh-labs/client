@@ -30,6 +30,22 @@ abstract final class ConnectionTuning {
   /// anywhere near the full [handshakeStaleAfter] window (which only ages
   /// out an *observed* handshake). Unsupported readers never enter this
   /// branch at all.
+  ///
+  /// Two roles, both of them about acting *cheaply*. It is the corroboration
+  /// gate for detecting a stall, and it is the never-handshook threshold at
+  /// which the ladder may change transport — because a rung step is a
+  /// same-server restart that the control plane's answer has licensed (see
+  /// `ladder_policy.dart`), which is the corroboration this window lacks on
+  /// its own. A peer that has not completed a handshake in six retry
+  /// intervals is not slow, and there is nothing for it to be idle about.
+  ///
+  /// It is deliberately *not* enough for an uncorroborated server move; that
+  /// spends the move budget and stops the tunnel without asking anyone, so it
+  /// waits for the later [hardFirstHandshakeCeiling]. Neither window is gated
+  /// on a recovery restart having happened: both measure from the tunnel-start
+  /// anchor, which every start resets — a restart moves the window rather than
+  /// suspending it, and gating it would make the first connect after a
+  /// long-idle client wait longer for a diagnosis than one that just restarted.
   static const firstHandshakeGrace = Duration(seconds: 30);
 
   /// Observed-handshake age past which a stale handshake acts *without*
@@ -43,12 +59,26 @@ abstract final class ConnectionTuning {
   /// control plane.
   static const hardHandshakeStaleAfter = Duration(seconds: 180);
 
-  /// Never-handshook ceiling for a *supported* reader once a recovery restart
-  /// has happened: the fresh tunnel has no handshake, so the standard
-  /// [firstHandshakeGrace] stays corroboration-gated and the ladder could
-  /// never progress past the first restart while status polls keep succeeding.
-  /// 45s (~9 WG retries) is ample even on slow links, and
-  /// unsupported readers never enter this branch at all.
+  /// Never-handshook ceiling for a *supported* reader: the point at which
+  /// "no handshake yet" is read as positive path-death evidence *without* any
+  /// corroboration — no backend poll failure, no quiet-backend slow track, no
+  /// control-plane probe.
+  ///
+  /// This is the deliberately higher bar for the one action that needs no
+  /// corroboration to be safe enough: a fast-track server move stops the tunnel
+  /// and spends the move budget on local evidence alone, because the control
+  /// probe shares OS routes with the path that just died and would only fail
+  /// through it. 45s (≈9 WireGuard retries) is ample even on a slow link, and
+  /// still short enough that a filtered first connect is diagnosed well inside
+  /// a minute. Compare [firstHandshakeGrace], which is enough for the cheap
+  /// actions — detection, and a rung step the control plane has licensed.
+  ///
+  /// Independent of recovery restarts by construction: this measures from the
+  /// tunnel-start anchor (`connectedAt`), which every start resets. An earlier
+  /// version of this comment claimed it applied only "once a recovery restart
+  /// had happened"; it never did, and the code has no way to know. What a
+  /// restart does is move the window forward — a fresh tunnel has not
+  /// handshaked yet, so its clock starts over, which is the intent.
   static const hardFirstHandshakeCeiling = Duration(seconds: 45);
 
   /// Observed-handshake age beyond which a performed-dead in-tunnel gateway

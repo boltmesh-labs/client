@@ -709,9 +709,18 @@ rest of the pipeline (which files, when, verify) is unchanged.
   A rung step additionally requires the control plane to *answer*: a blackout or
   an unknown probe justifies restarting the cached config, but it says nothing
   about this transport specifically, so a restart during an outage stays on the
-  current rung. That distinction is the whole of the ladder's ordering, and it
-  lives in one pure decision (`domain/ladder_policy.dart`) with the evidence
-  table in `test/features/vpn/domain/ladder_policy_test.dart`.
+  current rung. Evidence is graded by the cost of the action it buys. A
+  handshake that never completed at all — past `firstHandshakeGrace` (30s), not
+  merely stale — is real local evidence, because a peer that never answered six
+  WireGuard handshake retries is not idle, and with the control plane reachable
+  that licenses a rung step at 30s. The same evidence with nobody to corroborate
+  it does not: a fast-track server move stops the tunnel and spends the move
+  budget without asking anyone, so it waits for `hardFirstHandshakeCeiling`
+  (45s), which measures from the tunnel's start and is deliberately independent
+  of how many times the tunnel has been restarted. That distinction is the whole
+  of the ladder's ordering, and it lives in one pure decision
+  (`domain/ladder_policy.dart`) with the evidence table in
+  `test/features/vpn/domain/ladder_policy_test.dart`.
   The heal budget is one restart per incident, so the ladder buys exactly one
   step: once that is spent, the same confirmed-dead evidence escalates to the
   server move, and a stall the new rung does not fix falls through to the

@@ -104,6 +104,7 @@ RecoveryStep decideLocalRecovery({
   required bool serverConfirmedDown,
   required bool confirmedLocalPathDeath,
   required bool hardStalled,
+  required bool neverHandshookPastGrace,
   required bool lowerRungAvailable,
   required bool canHeal,
   required bool moveBudgetLeft,
@@ -114,12 +115,15 @@ RecoveryStep decideLocalRecovery({
   }
   // Local evidence alone, with the control plane deliberately null: a probe
   // made while this tunnel still routes traffic can fail *because* the path is
-  // broken, so a fast-track must not depend on it.
+  // broken, so a fast-track must not depend on it. `neverHandshookPastGrace` is
+  // passed in for uniformity and is inert here by construction — the classifier
+  // honors it only when the probe answered, and this call says it did not.
   final cause = classifyFailure(
     hasNetwork: true,
     gatewayAlive: gatewayAlive,
     apiReachable: null,
     hardStalled: hardStalled,
+    neverHandshookPastGrace: neverHandshookPastGrace,
     serverConfirmedDown: serverConfirmedDown,
     confirmedLocalPathDeath: confirmedLocalPathDeath,
   );
@@ -152,6 +156,7 @@ RecoveryStep decideRecoveryStep({
   required bool serverConfirmedDown,
   required bool confirmedLocalPathDeath,
   required bool hardStalled,
+  required bool neverHandshookPastGrace,
   required bool lowerRungAvailable,
   required bool canHeal,
   required bool moveBudgetLeft,
@@ -168,6 +173,7 @@ RecoveryStep decideRecoveryStep({
     gatewayAlive: gatewayAlive,
     apiReachable: apiReachable,
     hardStalled: hardStalled,
+    neverHandshookPastGrace: neverHandshookPastGrace,
     serverConfirmedDown: serverConfirmedDown,
     confirmedLocalPathDeath: confirmedLocalPathDeath,
   );

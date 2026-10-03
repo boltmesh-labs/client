@@ -301,6 +301,8 @@ void main() {
       lastHandshakeAt: last,
       now: now,
       readerSupported: supported,
+      graceAfter: const Duration(seconds: 45),
+      staleAfter: const Duration(seconds: 150),
     );
     expect(stale(now), isFalse);
     expect(stale(now.subtract(const Duration(seconds: 149))), isFalse);
@@ -317,8 +319,15 @@ void main() {
 
   test('isHandshakeStale: never-handshook only needs the grace window', () {
     final now = DateTime.utc(2026, 9, 19, 12);
-    bool stale(DateTime? since) =>
-        isHandshakeStale(lastHandshakeAt: null, now: now, connectedAt: since);
+    // The windows are the caller's to pass (see the function's doc): a
+    // deliberate no-defaults API, so each caller states which bar it means.
+    bool stale(DateTime? since) => isHandshakeStale(
+      lastHandshakeAt: null,
+      now: now,
+      connectedAt: since,
+      graceAfter: const Duration(seconds: 45),
+      staleAfter: const Duration(seconds: 150),
+    );
     expect(stale(null), isFalse);
     expect(stale(now.subtract(const Duration(seconds: 10))), isFalse);
     expect(stale(now.subtract(const Duration(seconds: 44))), isFalse);
@@ -336,6 +345,8 @@ void main() {
       now: now,
       connectedAt: since,
       readerSupported: false,
+      graceAfter: const Duration(seconds: 45),
+      staleAfter: const Duration(seconds: 150),
     );
     expect(stale(null), isFalse);
     // Absence of evidence: hours without a read prove nothing — the

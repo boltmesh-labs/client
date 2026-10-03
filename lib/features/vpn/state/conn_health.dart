@@ -207,25 +207,50 @@ extension ConnectionHealth on ConnectionController {
           now: now,
           quietFor: ConnectionTuning.backendQuietFor,
         );
+    // Never-handshook verdict: a supported reader has seen no handshake at all
+    // since this tunnel started, past [ConnectionTuning.firstHandshakeGrace].
+    // Unlike a *stale observed* handshake there is nothing for this peer to be
+    // idle about — it simply never answered — so it is local evidence in its
+    // own right, and it is what makes a filtered first connect diagnosable
+    // instead of merely stalled.
+    //
+    // It is not enough to fast-track a server move (that stops the tunnel and
+    // spends the move budget with nobody asked), which is why the classifier
+    // honors it only once the control plane answers. It *is* enough for the
+    // rung step it licenses, and that is the gap this closes: the move budget is
+    // bounded and the demotion is not, so a never-handshook that spent its one
+    // heal as a same-rung restart could never be diagnosed as a blocked
+    // transport at all — the hard ceiling arrived after the heal budget was
+    // gone.
+    final neverHandshookPastGrace =
+        handshake == null &&
+        isHandshakeStale(
+          lastHandshakeAt: null,
+          now: now,
+          connectedAt: _connectedAt,
+          readerSupported: _readerSupported,
+          graceAfter: ConnectionTuning.firstHandshakeGrace,
+          // Never reached on the null branch, passed because the policy has no
+          // defaults.
+          staleAfter: ConnectionTuning.handshakeStaleAfter,
+        );
     // Hard ceiling: past [ConnectionTuning.hardHandshakeStaleAfter]
-    // (observed) or [ConnectionTuning.hardFirstHandshakeCeiling] after a
-    // restart (never handshook), the handshake acts *without* backend
-    // corroboration. A reachable control plane (WG UDP blocked,
-    // API up) keeps polls succeeding, so corroboration never arrives and the
-    // ladder would otherwise sit in the stall state forever; the ceiling
-    // makes recovery deterministic. It only enters the stall — the
-    // fast-track rung still requires positive local path-death evidence. An
-    // unsupported reader's null stays absence of evidence.
+    // (observed) or [ConnectionTuning.hardFirstHandshakeCeiling] from this
+    // tunnel's start (never handshook), the handshake acts *without* backend
+    // corroboration or a control-plane answer. A reachable control plane (WG UDP
+    // blocked, API up) keeps polls succeeding, so corroboration never arrives
+    // and the ladder would otherwise sit in the stall state forever; the ceiling
+    // makes recovery deterministic, and it is the bar the uncorroborated
+    // fast-track move is held to. An unsupported reader's null stays absence of
+    // evidence.
     final hardStalled = isHandshakeStale(
       lastHandshakeAt: handshake,
       now: now,
       connectedAt: _connectedAt,
       readerSupported: _readerSupported,
-      // Keep this explicit so the recovery-only first-handshake ceiling stays
-      // independently tunable from the policy function's general default.
-      graceAfter: Duration(
-        seconds: ConnectionTuning.hardFirstHandshakeCeiling.inSeconds,
-      ),
+      // Explicit rather than left to the policy default so it is obvious this is
+      // the deliberately later, uncorroborated bar and not the grace above.
+      graceAfter: ConnectionTuning.hardFirstHandshakeCeiling,
       staleAfter: ConnectionTuning.hardHandshakeStaleAfter,
     );
     // Two performed-dead echoes are sufficient local evidence to restart the
@@ -280,9 +305,17 @@ extension ConnectionHealth on ConnectionController {
       }
     }
     final localEvidence =
-        stageStalled || localEchoStalled || hardStalled || serverDown;
+        stageStalled ||
+        localEchoStalled ||
+        hardStalled ||
+        neverHandshookPastGrace ||
+        serverDown;
     final handshakeStalled =
-        standardStalled || localEchoStalled || hardStalled || serverDown;
+        standardStalled ||
+        localEchoStalled ||
+        hardStalled ||
+        neverHandshookPastGrace ||
+        serverDown;
     if (!localEvidence && !handshakeStalled) {
       // `_startWith` publishes connected before the next health tick can
       // observe the new handshake. This is the validation point for a local
@@ -319,6 +352,11 @@ extension ConnectionHealth on ConnectionController {
           : '${now.difference(handshake).inSeconds}s';
       if (hardStalled) {
         why = 'handshake hard-stale ($age)';
+      } else if (neverHandshookPastGrace) {
+        // Named apart from the plain stale case: "never completed" is what
+        // makes this diagnosable as a blocked transport rather than a peer that
+        // went quiet, and support reads this string.
+        why = 'handshake never completed';
       } else if (echoShortens) {
         why = 'handshake stale ($age), echo dead ×$_deadEchoStrikes';
       } else {
@@ -369,6 +407,7 @@ extension ConnectionHealth on ConnectionController {
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
       hardStalled: hardStalled,
+      neverHandshookPastGrace: neverHandshookPastGrace,
       lowerRungAvailable: lowerRungAvailable,
       canHeal: canHeal,
       moveBudgetLeft: moveBudgetLeft,
@@ -440,6 +479,7 @@ extension ConnectionHealth on ConnectionController {
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
       hardStalled: hardStalled,
+      neverHandshookPastGrace: neverHandshookPastGrace,
       lowerRungAvailable: lowerRungAvailable,
       canHeal: canHeal,
       moveBudgetLeft: moveBudgetLeft,

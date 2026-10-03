@@ -473,6 +473,11 @@ extension ConnectionColdStart on ConnectionController {
             lastHandshakeAt: handshake,
             now: now,
             connectedAt: _connectedAt,
+            // Only the observed-handshake branch can run here — the null case is
+            // guarded above — so the grace is inert. Passed explicitly because
+            // the policy function has no defaults, by design.
+            graceAfter: ConnectionTuning.firstHandshakeGrace,
+            staleAfter: ConnectionTuning.handshakeStaleAfter,
           )) {
         return true;
       }
@@ -499,6 +504,7 @@ extension ConnectionColdStart on ConnectionController {
             ? now.subtract(ConnectionTuning.handshakeStaleAfter)
             : _connectedAt,
         graceAfter: ConnectionTuning.handshakeStaleAfter,
+        staleAfter: ConnectionTuning.handshakeStaleAfter,
       );
       if (restageTerminal && handshakeStaleConfirmed && gateway == false) {
         return false;
