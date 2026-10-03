@@ -52,6 +52,12 @@ public final class AmneziaWgConnectSmokeTest {
     assertTrue(userspace.contains("h1=115-120\n"));
     assertTrue(userspace.contains("allowed_ip=10.0.0.0/8\n"));
     assertFalse(userspace.contains("PrivateKey ="));
+    // The engine's bind parses address literals only, so the serialized body has to
+    // carry the endpoint as an address. A hostname reaching it fails the whole
+    // configuration, which is why a lookup failure has to be caught before the
+    // device is configured (see AndroidAwgHost.start) rather than silently dropping
+    // the endpoint line.
+    assertTrue(userspace.contains("endpoint=198.51.100.1:51820\n"));
 
     new GoBackend(context);
     String version = org.amnezia.awg.GoBackend.awgVersion();

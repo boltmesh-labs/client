@@ -43,6 +43,21 @@ internal object AndroidAwgHost {
     )
     require(parsed.peers.size == 1) { "BoltMesh Android AWG requires one peer" }
 
+    // The peer's hostname is resolved when the config is serialized for the engine:
+    // `InetEndpoint.getResolved` looks it up (preferring v4) and renders the address,
+    // because amneziawg-go's StdNetBind parses address literals only and would reject
+    // a name outright. It is also where a lookup failure goes — the endpoint line is
+    // then simply left out of the body, so the device would accept a peer with no
+    // endpoint and report up while never handshaking, indistinguishable from a slow
+    // path. Fail here instead, before the TUN exists, naming the host that could not
+    // be found. The result is cached for a minute, so the serialization below reads it
+    // rather than looking it up twice.
+    val peer = parsed.peers.single()
+    check(peer.endpoint.flatMap { it.resolved }.isPresent) {
+      "BoltMesh Android AWG could not resolve " +
+        peer.endpoint.map { "${it.host}:${it.port}" }.orElse("the configured endpoint")
+    }
+
     val owner = backend ?: GoBackend(context.applicationContext).also { backend = it }
     var streamHandle = -1
     if (streamSpec != null) {
