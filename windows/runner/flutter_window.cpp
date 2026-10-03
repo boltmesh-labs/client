@@ -27,8 +27,10 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   // App-owned transport to the privileged boltmeshd helper (see
-  // helper_pipe.h). The app itself runs unprivileged.
-  boltmesh::RegisterHelperPipe(flutter_controller_->engine());
+  // helper_pipe.h). The app itself runs unprivileged. Outcomes come back as
+  // kHelperOutcomeMessage on this window, so they complete on the platform
+  // thread without going through the engine's task runner.
+  boltmesh::RegisterHelperPipe(flutter_controller_->engine(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -73,6 +75,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+
+    // A helper worker's outcome. Handled here rather than through
+    // PostPlatformThreadTask so completing a MethodResult never depends on the
+    // engine's task runner; see helper_pipe.cpp for why that matters.
+    case boltmesh::kHelperOutcomeMessage:
+      boltmesh::CompleteHelperPipeOutcome(reinterpret_cast<void*>(lparam));
+      return 0;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

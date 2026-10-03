@@ -13,8 +13,8 @@
 // The exchange runs on a detached worker thread, never on the platform
 // thread: a stopped, wedged, or impersonating helper must not stall window
 // messages, the tray, or close handling for the whole 10-60 second budget.
-// The outcome is marshalled back to the platform thread through the engine,
-// where MethodResult callbacks belong.
+// The outcome is marshalled back to the platform thread, where MethodResult
+// callbacks belong, as a kHelperOutcomeMessage window message.
 #include "helper_pipe.h"
 
 #include <cstdint>
@@ -39,15 +39,25 @@ namespace {
 
 using Result = flutter::MethodResult<flutter::EncodableValue>;
 
-// The engine is owned by the FlutterViewController and dies with the window,
-// while an exchange may still be in flight on a worker thread. g_engine_mutex
-// guards g_engine so a worker can never post to a destroyed engine: shutdown
-// clears the pointer before the controller is torn down, and a worker holds
-// the mutex across its post. A post the engine's task runner never runs
-// (because the engine is destroyed) is cancelled, which destroys the captured
-// result without touching the engine.
-std::mutex g_engine_mutex;
-flutter::FlutterEngine* g_engine = nullptr;  // guarded by g_engine_mutex
+// The window is owned by Win32Window and is destroyed before the engine, while
+// an exchange may still be in flight on a worker thread. g_state_mutex guards
+// g_window so a worker can never post a message to a destroyed window:
+// ShutdownHelperPipe clears it while still on the platform thread, before the
+// window goes away, and a worker reads it under the same lock.
+//
+// Why a window message rather than flutter::FlutterEngine::
+// PostPlatformThreadTask: that API heap-allocates the posted std::function and
+// hands ownership to the engine, which frees it from a cancellation handler if
+// the engine dies before the platform thread runs the task. When the GPU
+// device is lost — reachable here, since a virtualised adapter under RDP can
+// lose it — the two orderings interleave so the platform thread runs a task
+// whose std::function was already freed, faulting on an access violation
+// inside the engine's trampoline. It reproduces with an empty posted lambda, so
+// no payload change avoids it; only not using the engine's task runner does. A
+// window message is delivered by the thread that owns the MethodResult and
+// stores nothing the engine can free underneath us.
+std::mutex g_state_mutex;
+HWND g_window = nullptr;  // guarded by g_state_mutex
 
 // One exchange handed to a worker. It owns the request and the result; the
 // result is only completed from a platform-thread task.
@@ -57,24 +67,28 @@ struct PendingExchange {
   std::shared_ptr<Result> result;
 };
 
+// A worker's outcome, handed to the platform thread as the window message's
+// lParam and owned by it from the moment PostOutcome succeeds.
+struct HelperOutcome {
+  std::shared_ptr<Result> result;
+  std::string response;
+  bool ok;
+};
+
 // PostOutcome delivers a worker's outcome on the platform thread, where
-// MethodResult callbacks belong. It holds g_engine_mutex across the post so the
-// engine cannot be destroyed between the null check and the call, and drops the
-// outcome when the engine is already gone.
+// MethodResult callbacks belong. It reads g_window under the mutex and posts
+// while still holding it, so the window cannot be destroyed between the check
+// and the post. A post that fails drops the outcome, which the Dart side
+// already treats as a transport timeout.
 void PostOutcome(std::shared_ptr<Result> result, std::string response,
                  bool ok) {
-  std::lock_guard<std::mutex> lock(g_engine_mutex);
-  flutter::FlutterEngine* engine = g_engine;
-  if (engine == nullptr) return;
-  engine->PostPlatformThreadTask([result = std::move(result),
-                                  response = std::move(response),
-                                  ok]() mutable {
-    if (ok) {
-      result->Success(flutter::EncodableValue(std::move(response)));
-    } else {
-      result->Error("unavailable", "boltmeshd pipe unavailable");
-    }
-  });
+  std::lock_guard<std::mutex> lock(g_state_mutex);
+  if (g_window == nullptr) return;
+  auto* outcome = new HelperOutcome{std::move(result), std::move(response), ok};
+  if (!::PostMessage(g_window, kHelperOutcomeMessage, 0,
+                     reinterpret_cast<LPARAM>(outcome))) {
+    delete outcome;
+  }
 }
 
 // StartExchange performs one pipe exchange off the platform thread. The
@@ -103,9 +117,23 @@ void StartExchange(std::shared_ptr<PendingExchange> exchange) {
 
 }  // namespace
 
-void RegisterHelperPipe(flutter::FlutterEngine* engine) {
+void CompleteHelperPipeOutcome(void* outcome) {
+  // Platform thread, from the window procedure. Takes ownership of the
+  // outcome the worker posted.
+  std::unique_ptr<HelperOutcome> completed(
+      static_cast<HelperOutcome*>(outcome));
+  if (!completed) return;
+  if (completed->ok) {
+    completed->result->Success(
+        flutter::EncodableValue(std::move(completed->response)));
+  } else {
+    completed->result->Error("unavailable", "boltmeshd pipe unavailable");
+  }
+}
+
+void RegisterHelperPipe(flutter::FlutterEngine* engine, HWND window) {
   static bool registered = false;
-  if (registered || engine == nullptr) return;
+  if (registered || engine == nullptr || window == nullptr) return;
   flutter::BinaryMessenger* messenger = engine->messenger();
   if (messenger == nullptr) return;
 
@@ -186,18 +214,29 @@ void RegisterHelperPipe(flutter::FlutterEngine* engine) {
   channels.push_back(std::move(channel));
 
   {
-    std::lock_guard<std::mutex> lock(g_engine_mutex);
-    g_engine = engine;
+    std::lock_guard<std::mutex> lock(g_state_mutex);
+    g_window = window;
   }
   registered = true;
 }
 
 void ShutdownHelperPipe() {
-  // Called on the platform thread before the controller (and its engine) is
-  // destroyed. In-flight workers either post before this returns or observe a
-  // null engine and drop their outcome.
-  std::lock_guard<std::mutex> lock(g_engine_mutex);
-  g_engine = nullptr;
+  // Called on the platform thread before the window is destroyed. Clear the
+  // handle first so no worker can post after this point, then drain anything
+  // already queued: those outcomes own a MethodResult, and the message loop
+  // will never dispatch them once the window is gone.
+  HWND window = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_state_mutex);
+    window = g_window;
+    g_window = nullptr;
+  }
+  if (window == nullptr) return;
+  MSG msg;
+  while (::PeekMessage(&msg, window, kHelperOutcomeMessage,
+                       kHelperOutcomeMessage, PM_REMOVE)) {
+    CompleteHelperPipeOutcome(reinterpret_cast<void*>(msg.lParam));
+  }
 }
 
 }  // namespace boltmesh
