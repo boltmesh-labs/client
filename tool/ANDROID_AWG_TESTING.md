@@ -77,6 +77,63 @@ background UIDs — it cannot target UDP. Two ways out:
   one protocol rather than the whole interface — but it affects every peer on that
   node, so it wants a dedicated test node.
 
+### Blocking UDP on the node with firewalld
+
+`firewall-cmd --add-port=51820/udp` does **not** block anything: it adds an
+allowance, which is a no-op if the port is already permitted. Dropping needs a
+rich rule with an explicit `drop` action:
+
+```bash
+sudo firewall-cmd --permanent \
+  --add-rich-rule='rule family="ipv4" port port="51820" protocol="udp" drop'
+sudo firewall-cmd --reload
+```
+
+Watch two traps, both of which cost a run:
+
+- **TCP 443 must stay allowed.** `firewall-cmd --reload` discards runtime-only
+  state, so a `443/tcp` allowance added without `--permanent` silently disappears
+  and the node stops serving the stream transport. The symptom is misleading: the
+  bridge reports `dial tcp <node>:443: i/o timeout` and then stops reporting a
+  protect failure, which reads like a socket-protection bug rather than a closed
+  port. Confirm from a second host before blaming the client:
+  `timeout 5 bash -c 'cat </dev/null >/dev/tcp/192.168.1.116/443'`.
+- **Check the source address.** A source-scoped rule must match the address the
+  node actually sees the client as, which is not necessarily the emulator host's.
+
+Remove the rule afterwards; a live node should not keep a drop rule.
+
+## Demotion on device (verified)
+
+Proven on an Android 16 x86_64 emulator against the staging backend, with UDP
+51820 dropped on test2's node and TCP 443 left allowed. Connect to `test2`
+(obfuscated, so the AWG floor applies), and the health policy walks the ladder:
+
+```text
+transport rung set native -> awg server=test2
+Handshake did not complete after 5 seconds, retrying        (AWG over blocked UDP)
+transport demoted (handshake stale (never), echo dead ×3) awg -> stream
+auto-heal start (handshake stale (never), echo dead ×3) attempt=1 heals=0 failovers=0
+could not be protected from the VPN                          (fail-closed, bridge before engine)
+stream: session established with 192.168.1.116:443          (recovered on the same node)
+Received handshake response                                  (inner WG handshake over the stream)
+```
+
+The demotion lands on `auto-heal`, not on `health fast-track -> direct failover`:
+a confirmed dead echo (`echo dead ×3`) would otherwise have spent the move budget
+instead of stepping the rung. With the ladder intact the session recovers on the
+blocked node, which is the whole reason the stream rung exists.
+
+Timing: the stall needs ~45s from connect — `hardFirstHandshakeCeiling` for a
+reader that never handshook, or ~50s once two dead echoes latch. The one
+fail-closed `could not be protected` line before `session established` is
+expected: `AndroidAwgHost.start` starts the bridge before the engine, so the
+VpnService has not registered a protector yet, and the bridge fails closed and
+retries.
+
+If the stream rung does not recover, the ladder escalates as designed — one rung
+step from the existing heal budget, then `failover ok ... cross-region`.
+
 ## Stream rung
 
 The stream rung runs the same `boltmesh/stream` bridge `boltmeshd` runs, inside
