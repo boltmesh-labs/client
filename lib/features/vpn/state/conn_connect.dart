@@ -150,6 +150,9 @@ extension ConnectionConnect on ConnectionController {
     if (!sessionCurrent()) {
       throw StateError('Session changed after peer persistence.');
     }
+    // The device holds a peer again, so the local knowledge a disconnect
+    // recorded no longer describes it (see [_peerReleasedLocally]).
+    _peerReleasedLocally = false;
     return dial;
   }
 
@@ -284,7 +287,7 @@ extension ConnectionConnect on ConnectionController {
         phase: ConnPhase.error,
         message: rateWait != null
             ? _rateLimitMessage(rateWait)
-            : (vpnErr?.message ?? e.toString()),
+            : failureReason(vpnErr, e),
         opFailed: true,
       );
     } finally {
@@ -349,7 +352,7 @@ extension ConnectionConnect on ConnectionController {
         phase: ConnPhase.error,
         message: wait != null
             ? _rateLimitMessage(wait)
-            : (vpnErr?.message ?? e.toString()),
+            : failureReason(vpnErr, e),
         opFailed: true,
       );
       return;
@@ -495,7 +498,7 @@ extension ConnectionConnect on ConnectionController {
         phase: ConnPhase.error,
         message: wait != null
             ? _rateLimitMessage(wait)
-            : (vpnErr?.message ?? e.toString()),
+            : failureReason(vpnErr, e),
         opFailed: true,
       );
       return;

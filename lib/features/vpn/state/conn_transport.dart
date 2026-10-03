@@ -222,6 +222,11 @@ extension ConnectionTransport on ConnectionController {
     if (!sessionCurrent()) {
       throw StateError('Session changed during config.');
     }
+    // Server truth answers: the device holds the peer this dial describes, so
+    // the local knowledge a disconnect recorded does not (see
+    // [_peerReleasedLocally]). A peerless device never reaches here — `config`
+    // answers 404 and the caller's own fresh-bind recovery runs instead.
+    _peerReleasedLocally = false;
     final serverKey = dial.clientPublicKey;
     if (serverKey == null || serverKey.isEmpty) {
       return (dial: dial, rebound: false);
@@ -307,7 +312,7 @@ extension ConnectionTransport on ConnectionController {
     final wait = _noteRateLimit(vpnErr);
     final reason = wait != null
         ? _rateLimitMessage(wait)
-        : (vpnErr?.message ?? e.toString());
+        : failureReason(vpnErr, e);
     final prefix = ambiguous ? ambiguousPrefix : cleanPrefix;
     if (tunnelDown) {
       // No tunnel is running and no reconnect is scheduled: stop the ticks

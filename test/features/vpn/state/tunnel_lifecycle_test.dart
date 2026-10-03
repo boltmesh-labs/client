@@ -1169,6 +1169,132 @@ void main() {
     expect(state.serverId, 'srv-2');
   });
 
+  test('switch after a confirmed disconnect binds without the doomed POST', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    await store.setDeviceId('dev-1');
+    await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+    // One key for the fresh bind only: a switch POST would need a second.
+    final keys = FakeKeys([const Keypair('FRESH-PRIV', 'FRESH-PUB')]);
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+        if (o.path.endsWith('/connect')) {
+          return dialJson(serverId: 'srv-2', serverName: 'two');
+        }
+        // A peerless switch is answered with 404 PEER_NOT_FOUND, so any request
+        // here is the round trip the local knowledge exists to avoid.
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final container = makeContainer(store: store, keys: keys, api: api);
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugTunnel = FakeTunnel(events);
+
+    await ctl.disconnect();
+    events.clear();
+
+    await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+    // The tunnel is already down from the disconnect, and the peer it released
+    // is known gone, so the bind is the whole operation.
+    expect(events, ['POST:/vpn-devices/dev-1/connect', 'tunnel:start']);
+    expect(await store.privateKey(), 'FRESH-PRIV');
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(state.dial?.serverId, 'srv-2');
+    expect(state.serverId, 'srv-2');
+  });
+
+  test(
+    'switch after an unconfirmed disconnect still attempts the POST',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      // The switch POST's ephemeral key, then the fresh bind's.
+      final keys = FakeKeys([
+        const Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
+        const Keypair('FRESH-PRIV', 'FRESH-PUB'),
+      ]);
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          // The release never reached the server, so the peer may still exist:
+          // binding over it would 409, and the switch is the request that moves it.
+          if (o.path.endsWith('/disconnect')) throw networkTimeout(o);
+          if (o.path.endsWith('/switch')) throw peerless(o);
+          if (o.path.endsWith('/connect')) {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(store: store, keys: keys, api: api);
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = FakeTunnel(events);
+
+      await ctl.disconnect();
+      expect(container.read(connectionProvider).message, contains('pending'));
+      events.clear();
+
+      await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+      // Nothing local was established, so the POST is still the authority — and
+      // its 404 recovery binds exactly as before.
+      expect(events, [
+        'POST:/vpn-devices/dev-1/switch',
+        'tunnel:stop',
+        'POST:/vpn-devices/dev-1/connect',
+        'tunnel:start',
+      ]);
+      expect(container.read(connectionProvider).dial?.serverId, 'srv-2');
+    },
+  );
+
+  test(
+    'a bind after the local release clears the knowledge it recorded',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final keys = FakeKeys([
+        const Keypair('FRESH-PRIV', 'FRESH-PUB'),
+        const Keypair('SECOND-PRIV', 'SECOND-PUB'),
+      ]);
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+          if (o.path.endsWith('/connect')) {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          if (o.path.endsWith('/switch')) return dialJson(serverId: 'srv-3');
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(store: store, keys: keys, api: api);
+      final ctl = container.read(connectionProvider.notifier)
+        ..debugTunnel = FakeTunnel(events);
+
+      await ctl.disconnect();
+      await ctl.switchServer(regionId: null, serverId: 'srv-2');
+      expect(ctl.debugPeerReleasedLocally, isFalse);
+
+      // The device holds srv-2's peer now, so a switch must move it rather than
+      // bind over it.
+      events.clear();
+      await ctl.switchServer(regionId: null, serverId: 'srv-3');
+
+      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(
+        events.where((e) => e.endsWith('/connect')),
+        isEmpty,
+        reason: 'a switch over a bound peer must not re-bind',
+      );
+    },
+  );
+
   test('peerless switch while connected rebinds on the new target', () async {
     final events = <String>[];
     final store = FakeStore();

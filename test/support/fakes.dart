@@ -497,6 +497,11 @@ class FakeHelperSocket implements HelperSocket {
   /// Ops sent, in order (convenience view over [requests]).
   List<String> get ops => [for (final r in requests) r['op'] as String];
 
+  /// Scripted daemon rejection for `up`: the exchange answers with an error
+  /// envelope carrying this code, the way `boltmeshd` reports a config or
+  /// data-plane failure. Null (the default) means `up` succeeds.
+  ({String code, String message})? rejectUpWith;
+
   /// Capability tokens the daemon advertises in its responses, which is how
   /// [HelperClient.capabilities] is populated from `ping`. Absent by default so
   /// a suite has to opt in to a daemon that offers a capability — the same
@@ -532,6 +537,15 @@ class FakeHelperSocket implements HelperSocket {
     final op = request['op'];
     if (fail || (op is String && failingOps.contains(op))) {
       throw HelperTransportException('helper unreachable ($op)');
+    }
+    final rejection = op == 'up' ? rejectUpWith : null;
+    if (rejection != null) {
+      return {
+        'v': helperProtocolVersion,
+        'id': request['id'],
+        'ok': false,
+        'error': {'code': rejection.code, 'message': rejection.message},
+      };
     }
     return {
       'v': helperProtocolVersion,

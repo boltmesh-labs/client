@@ -131,7 +131,7 @@ extension ConnectionProvision on ConnectionController {
         phase: ConnPhase.error,
         message: rateWait != null
             ? _rateLimitMessage(rateWait)
-            : (vpnErr?.message ?? e.toString()),
+            : failureReason(vpnErr, e),
         opFailed: true,
       );
       rethrow;

@@ -232,7 +232,7 @@ extension ConnectionLifecycle on ConnectionController {
       AppLog.error('lan-toggle restart failed', vpnErr?.message ?? e);
       snap = snap.copyWith(
         phase: ConnPhase.error,
-        message: vpnErr?.message ?? e.toString(),
+        message: failureReason(vpnErr, e),
       );
       return false;
     } finally {
@@ -294,6 +294,11 @@ extension ConnectionLifecycle on ConnectionController {
       // the UI reports `error`.
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Disconnecting…');
       await _stopTunnel('disconnect');
+      // The tunnel is down from here on, so the device holds no peer this
+      // session no matter how the steps below end. Recorded up front because
+      // only a *confirmed* release makes it true, and that is the one case a
+      // later switch can act on (see [_peerReleasedLocally]).
+      _peerReleasedLocally = true;
       // The tunnel is down: the cached dial must never resurrect it, and
       // any pending cold watch is superseded by this explicit teardown.
       _coldRestore.clear();
@@ -310,6 +315,8 @@ extension ConnectionLifecycle on ConnectionController {
           AppLog.info(
             'disconnect api skipped (rate limited, ${seconds}s left)',
           );
+          // The release never reached the server, so a peer may still exist.
+          _peerReleasedLocally = false;
           _finishLocalDisconnect(
             'Disconnected locally. Server release pending '
             '(rate limited, ${seconds}s).',
@@ -320,7 +327,7 @@ extension ConnectionLifecycle on ConnectionController {
           await _api.disconnect(id);
         } on DioException catch (e) {
           final kind = asVpnError(e)?.kind;
-          final reason = asVpnError(e)?.message ?? e.toString();
+          final reason = failureReason(asVpnError(e), e);
           AppLog.error('disconnect api failed kind=$kind', e);
           _noteRateLimit(asVpnError(e));
           if (kind == ApiErrorKind.notFound) {
@@ -334,6 +341,11 @@ extension ConnectionLifecycle on ConnectionController {
           }
           // Tunnel is down either way: stay usable, flag the pending
           // server-side release (cleared on the next connect).
+          //
+          // The peer release is NOT confirmed here, so the local knowledge is
+          // withdrawn: a peer the backend may still hold must be switched
+          // rather than re-bound, and a `/switch` that 404s recovers anyway.
+          _peerReleasedLocally = false;
           _finishLocalDisconnect(
             'Disconnected locally. Server release pending ($reason)',
           );
@@ -354,7 +366,7 @@ extension ConnectionLifecycle on ConnectionController {
       // next to the error.
       snap = snap.copyWith(
         phase: ConnPhase.error,
-        message: vpnErr?.message ?? e.toString(),
+        message: failureReason(vpnErr, e),
         lastStage: null,
       );
       return id;

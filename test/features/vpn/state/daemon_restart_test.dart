@@ -143,6 +143,77 @@ void main() {
     });
   });
 
+  group('a rejected `up` never reaches the user as a daemon diagnostic', () {
+    /// [FakeHelperSocket] scripted to answer `ping` but reject `up` with [code].
+    support.FakeHelperSocket rejectingUp(String code, String message) =>
+        support.FakeHelperSocket()
+          ..rejectUpWith = (code: code, message: message);
+
+    test('the daemon text for a failed configure is not the UI message', () async {
+      final events = <String>[];
+      final store = HelperStore();
+      // The reported failure: the obfuscated device rejected the peer endpoint.
+      final socket = rejectingUp(
+        'internal',
+        'obfuscated up: configure device: IPC error -22: failed to set '
+            'endpoint node.example.net:51820: No such host is known.',
+      );
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final (container, ctl) = helperContainer(
+        store: store,
+        socket: socket,
+        api: api,
+      );
+      await seedDevice(store);
+
+      await ctl.connect();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.error);
+      final message = state.message;
+      expect(message, isNot(contains('IPC error')));
+      expect(message, isNot(contains('No such host')));
+      expect(message, isNot(contains('HelperException')));
+      expect(message, isNot(contains('node.example.net')));
+      expect(message, contains('could not start'));
+      // The diagnostic is still recorded, which is where a bug report gets it.
+      expect(socket.ops, contains('up'));
+    });
+
+    test(
+      'an unreachable helper names the helper, not the socket error',
+      () async {
+        final events = <String>[];
+        final store = HelperStore();
+        final socket = support.FakeHelperSocket()..fail = true;
+        final api = VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/config')) return dialJson();
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+        final (container, ctl) = helperContainer(
+          store: store,
+          socket: socket,
+          api: api,
+        );
+        await seedDevice(store);
+
+        await ctl.connect();
+
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.error);
+        expect(state.message, contains('helper service'));
+        expect(state.message, isNot(contains('HelperTransportException')));
+      },
+    );
+  });
+
   group('service termination', () {
     test('disconnect reaches idle when the daemon is gone, and a later connect recovers', () async {
       final events = <String>[];

@@ -120,9 +120,45 @@ extension ConnectionSwitch on ConnectionController {
         return;
       }
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Switching…');
+      final deviceId = id;
+      if (_peerReleasedLocally) {
+        // This session released the device's peer (see
+        // [ConnectionLifecycle._disconnectBody]) and has bound none since, so
+        // there is nothing to move: `POST …/switch` on a peerless device
+        // answers 404 PEER_NOT_FOUND, and the catch below recovers by binding a
+        // fresh peer on the new target anyway. Take that recovery directly
+        // instead of spending the request and the round trip to be told what
+        // this client already knows. Everything after it — the pin, the key
+        // persistence, `_startWith` — is that same recovery, run once here
+        // rather than twice.
+        AppLog.info(
+          'switch peerless (released locally) -> bind fresh peer on new target',
+        );
+        if (pinTarget) {
+          selectTarget(serverId: serverId, explicitTarget: explicitTarget);
+        }
+        final fresh = await _bindFreshPeer(
+          deviceId,
+          regionId: regionId,
+          serverId: serverId,
+          sessionEpoch: sessionEpoch,
+        );
+        if (sessionEpoch != _sessionEpoch) return;
+        // The peer is the server's now: a failed restart must not roll the
+        // store back to the pair the disconnect left behind.
+        serverCommitted = true;
+        await _startWith(fresh, sessionEpoch: sessionEpoch);
+        if (sessionEpoch != _sessionEpoch) return;
+        if (pinTarget) {
+          selectTarget(
+            serverId: fresh.serverId,
+            explicitTarget: explicitTarget,
+          );
+        }
+        return;
+      }
       final kp = await _keys.generate();
       if (sessionEpoch != _sessionEpoch) return;
-      final deviceId = id;
       // Probe through the live tunnel first (loopback APIs bypass it without
       // a short timeout, but still without stopping). The tunnel is stopped
       // only when the backend is unreachable through the current path.
@@ -247,9 +283,12 @@ extension ConnectionSwitch on ConnectionController {
         }
       }
       if (vpnErr?.kind == ApiErrorKind.noActivePeer && id != null) {
-        // The device exists but holds no peer (disconnected or GC'd while
-        // idle): there is nothing to switch, so bind a fresh peer directly
-        // on the requested target instead of failing.
+        // The device exists but holds no peer, and this session did not release
+        // it: the backend GC'd it while idle, or the app restarted with the
+        // release unconfirmed. There is nothing to switch, so bind a fresh peer
+        // directly on the requested target instead of failing. The locally-known
+        // case never reaches here — it is served before the POST (see
+        // [_peerReleasedLocally]), so this is the one recovery path.
         AppLog.info('switch peerless -> bind fresh peer on new target');
         try {
           // [_startWith] only stops a previous tunnel when already

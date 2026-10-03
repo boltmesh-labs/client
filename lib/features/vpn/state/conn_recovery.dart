@@ -96,7 +96,7 @@ extension ConnectionRecovery on ConnectionController {
         snap = snap.copyWith(
           phase: ConnPhase.error,
           message:
-              'VPN stalled ($why). Restart failed (${vpnErr?.message ?? e}). Tap Connect.',
+              'VPN stalled ($why). Restart failed (${failureReason(vpnErr, e)}). Tap Connect.',
           lastStage: null,
           healthNote: null,
           backendIssue: null,
