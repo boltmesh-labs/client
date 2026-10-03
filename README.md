@@ -685,8 +685,16 @@ rest of the pipeline (which files, when, verify) is unchanged.
   Regions tab still lists
   such a region (the list is discovery, not policy), so choosing one there
   surfaces the refusal instead of hiding it. Demotion rides the existing heal
-  (no new budget, timer, or state) and is sticky across connects: no automatic
-  promotion, because every promotion re-pays for a probe that already failed.
+  (no new budget, timer, or state) and is sticky across connects — a reconnect
+  preserves a demotion but never causes one. The one exception is deliberate:
+  after `rungPromotionHealthyFor` (24h) of positively healthy traffic the tick
+  may probe a single cheaper rung, because a blocked transport is usually
+  temporary (a captive portal, a hotel network, one blocked port) and a process
+  that demoted once would otherwise pay the expensive rung for the rest of its
+  life. The last working rung stays armed as the rollback target until the
+  candidate proves live — a fresh handshake or a live gateway echo — and reverts
+  within `rungPromotionProbeTimeout` (45s), so a probe costs one controlled
+  restart and one stale connection at worst.
   One rung at a time — a start runs on a single rung, and the transport carries
   the region's own inner format: an obfuscated region's stream is the AmneziaWG
   conf inside the TLS session, never a stock one.
@@ -698,6 +706,12 @@ rest of the pipeline (which files, when, verify) is unchanged.
   cheap local retry first. Where the region serves no lower rung there is
   nothing to step to, so a heal would only rebuild the same config on the same
   rung and the old move-first escalation is kept unchanged.
+  A rung step additionally requires the control plane to *answer*: a blackout or
+  an unknown probe justifies restarting the cached config, but it says nothing
+  about this transport specifically, so a restart during an outage stays on the
+  current rung. That distinction is the whole of the ladder's ordering, and it
+  lives in one pure decision (`domain/ladder_policy.dart`) with the evidence
+  table in `test/features/vpn/domain/ladder_policy_test.dart`.
   The heal budget is one restart per incident, so the ladder buys exactly one
   step: once that is spent, the same confirmed-dead evidence escalates to the
   server move, and a stall the new rung does not fix falls through to the
@@ -713,6 +727,43 @@ rest of the pipeline (which files, when, verify) is unchanged.
     from memory. This matters because a stranded `/32` is not a cosmetic
     leftover: it exempts one destination from the tunnel on every connect
     afterwards. The record holds routes only, never the PSK.
+  - What the stream rung actually is. Not a second VPN and not a plain TCP
+    wrapper: it is the *same* WireGuard tunnel with its UDP datagrams carried
+    inside a TLS 1.3 session to the node — length-prefixed frames over TLS,
+    nothing else — so a network that blocks or fingerprints WireGuard's own UDP
+    sees one ordinary HTTPS connection instead of a tunnel. Four consequences
+    follow.
+    - The tunnel is still WireGuard end to end. The conf is a normal one with a
+      loopback peer endpoint, so every local signal the health ladder reads —
+      handshake, in-tunnel gateway echo, byte counters — behaves exactly as on
+      the rungs above. Only the transport underneath changed, which is also why
+      a rung change is just a different conf plus a transport spec, never a
+      different recovery path.
+    - It is the most expensive rung, and its cost is structural rather than
+      merely slower: a TLS session and a persistent TCP connection per tunnel,
+      head-of-line blocking across it, and a session drop that stalls the tunnel
+      until the bridge reconnects with backoff (for as long as the tunnel
+      lives). That is why it is last on the ladder, and why AWG remains the
+      primary defence — this is the rung for networks where that defence did not
+      work.
+    - The client does not assemble the bridge itself, which is why selecting the
+      rung needs more than a credential: a data plane that can run it — the
+      privileged helper in-process on Linux and Windows, the AWG host's
+      VpnService on Android — the `stream-transport` capability token that data
+      plane advertises, and a usable credential. On the desktop the daemon owns
+      the bridge for the tunnel's lifetime because it owns the tunnel's
+      lifecycle, and is the only party that can keep the bridge's own egress out
+      of the tunnel it carries.
+    - The node is pinned, not discovered: a certificate SPKI pin plus a
+      per-device PSK (below), so there is no CA chain to trust and no second
+      protocol to speak. It is also deliberately not an anti-probing
+      construction — the node presents its own certificate, so an active prober
+      sees a real TLS server that does not complete the handshake without the
+      key.
+
+    Wire format, the two-way authentication and the routing rules that keep the
+    bridge out of its own tunnel: `boltmeshd/README.md` → *Stream transport*.
+    Platform reach and the bypass-route mechanics: the sibling bullet above.
   - Stream rung contract. `config` and every bind response carry a
     per-device `stream` object; it is deliberately *not* on the region list,
     because the PSK is a per-device secret and discovery is fetched by every

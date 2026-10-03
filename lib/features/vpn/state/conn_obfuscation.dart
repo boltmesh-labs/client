@@ -27,7 +27,14 @@ enum ObfuscationRung {
   /// The in-process AmneziaWG device.
   awg,
 
-  /// The tunnel's datagrams carried inside a TLS session to the node.
+  /// The tunnel's datagrams carried inside a TLS session to the node — the same
+  /// WireGuard tunnel, wrapped so a network that blocks or fingerprints
+  /// WireGuard's own UDP sees ordinary HTTPS. Not a second VPN: the conf is a
+  /// normal one pointed at a loopback bridge the privileged helper runs for the
+  /// tunnel's lifetime, so every local health signal reads the same as on the
+  /// rungs below it. It is last because it is the most expensive and most
+  /// breakable; see the README's *What the stream rung actually is* for the
+  /// wire format and what the client has to already have to select it.
   stream,
 }
 
