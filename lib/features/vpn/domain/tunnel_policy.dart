@@ -1,5 +1,9 @@
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
+import '../../../core/ip.dart';
+import '../data/models.dart';
+import '../data/wg_conf.dart';
+
 /// Pure tunnel-health policy extracted from [ConnectionController].
 ///
 /// Kept free of Riverpod/timers/storage so it can be unit-tested in
@@ -112,6 +116,125 @@ String formatBytes(int bytes) {
 /// reported none (see `ConnState.rxBytes`/`txBytes`).
 String formatBytesOrDash(int? bytes) =>
     bytes == null ? '—' : formatBytes(bytes);
+
+/// True when the live native peer behind a surviving tunnel is the
+/// server-confirmed [dial].
+///
+/// This is the strongest evidence a cold restore has: the tunnel is running and
+/// the server agrees on who it is talking to. The public key is the identity and
+/// is compared exactly, so it alone can carry the answer.
+///
+/// The endpoint only ever *contradicts* it ([EndpointAgreement]). The two sides
+/// never agree on form: the backend hands out a hostname
+/// (`node.example.net:51820`) while the OS reports what the device actually
+/// dialled, which is the resolved address (`198.51.100.20:51820`) — the kernel
+/// and both WireGuard binds store an address, never a name. Comparing them
+/// verbatim therefore failed on every desktop read, so this signal never fired
+/// and the restore silently degraded to the weaker stage/traffic/handshake
+/// probes. Resolving the hostname here to compare would be worse: on a cold
+/// restore this app's resolver may already follow the surviving tunnel, so the
+/// lookup could go through the very tunnel being verified.
+///
+/// An unverifiable pair is not a mismatch. The key has already established the
+/// identity, and refusing to corroborate it would re-break the signal this
+/// comparison exists to provide.
+bool livePeerMatchesDial({
+  required String livePublicKey,
+  required String liveEndpoint,
+  required DialParams dial,
+}) {
+  final key = livePublicKey.trim();
+  if (key.isEmpty) return false;
+  if (key != dial.wgPublicKey.trim()) return false;
+  return endpointAgreement(
+        liveEndpoint.trim(),
+        formatEndpoint(dial.endpoint, dial.wgPort),
+      ) !=
+      EndpointAgreement.mismatch;
+}
+
+/// Whether two `host:port` endpoint strings can be shown to name the same
+/// address.
+///
+/// [match] is a positive proof, [unverifiable] is "cannot tell without a
+/// resolver", and [mismatch] is a positive contradiction — the two literals parse
+/// and differ. Only [mismatch] may veto a match elsewhere, because it is the one
+/// answer that is known rather than merely unknown.
+enum EndpointAgreement {
+  /// Both sides name the same address.
+  match,
+
+  /// The forms cannot be compared here: a hostname against a literal, or a value
+  /// that does not parse. Not evidence against.
+  unverifiable,
+
+  /// Both sides are literals and they differ.
+  mismatch,
+}
+
+/// Classifies two `host:port` endpoint strings.
+///
+/// Equal strings match without parsing, so a name against the same name (the
+/// Android adapter reports the configured endpoint verbatim) is exact. Otherwise
+/// both sides must be literals: a hostname is never resolved here, so a
+/// name-against-address is [EndpointAgreement.unverifiable] rather than a
+/// mismatch.
+EndpointAgreement endpointAgreement(String live, String dial) {
+  if (live.isEmpty || dial.isEmpty) return EndpointAgreement.unverifiable;
+  if (live == dial) return EndpointAgreement.match;
+  final parsedLive = _splitEndpoint(live);
+  final parsedDial = _splitEndpoint(dial);
+  if (parsedLive == null || parsedDial == null) {
+    return EndpointAgreement.unverifiable;
+  }
+  // A differing port is a contradiction whatever the hosts are: it is the same
+  // comparison the exact-string case would have made.
+  if (parsedLive.$2 != parsedDial.$2) return EndpointAgreement.mismatch;
+  // Only a literal host can be compared to anything. A name is never resolved
+  // here (see [livePeerMatchesDial]).
+  final canonicalLive = _canonicalIp(parsedLive.$1);
+  final canonicalDial = _canonicalIp(parsedDial.$1);
+  if (canonicalLive == null || canonicalDial == null) {
+    return EndpointAgreement.unverifiable;
+  }
+  return canonicalLive == canonicalDial
+      ? EndpointAgreement.match
+      : EndpointAgreement.mismatch;
+}
+
+/// The canonical (RFC 5952 for v6) spelling of a literal address, or null when
+/// [host] is a name or malformed.
+///
+/// Canonical rather than trimmed because the two spellings of one v6 address
+/// (`2001:0db8:0000::9` and `2001:db8::9`) are the same address, and a resolver
+/// and the kernel need not agree on which they print.
+String? _canonicalIp(String host) {
+  if (bareIp(host) == null) return null;
+  try {
+    if (host.contains(':')) return formatIpV6(parseIpV6(host));
+    return formatIpV4(parseIpV4(host));
+  } on ArgumentError {
+    return null;
+  }
+}
+
+/// The host and port halves of a `host:port` string, or null when the value has
+/// no separable shape.
+///
+/// The bracketed form is tried first because it is the only unambiguous one, and
+/// `[^:]+` in the plain pattern already refuses anything containing a colon, so a
+/// bare IPv6 literal (`2001:db8::9:51820`) is rejected rather than misread as a
+/// host with a port. Both patterns exist so such a value is unverifiable, which is
+/// the same answer [endpointAgreement] gives for any other unparseable input.
+(String, int)? _splitEndpoint(String endpoint) {
+  final bracketed = RegExp(r'^\[(.+)\]:(\d+)$').firstMatch(endpoint);
+  if (bracketed != null) {
+    return (bracketed.group(1)!, int.parse(bracketed.group(2)!));
+  }
+  final plain = RegExp(r'^([^:]+):(\d+)$').firstMatch(endpoint);
+  if (plain == null) return null;
+  return (plain.group(1)!, int.parse(plain.group(2)!));
+}
 
 /// Dead-peer signal from the last completed WireGuard handshake.
 ///

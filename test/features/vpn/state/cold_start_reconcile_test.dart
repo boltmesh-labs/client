@@ -477,6 +477,47 @@ void main() {
       },
     );
 
+    test('down read with a live peer on a resolved address of the same server '
+        'is treated as likely alive', () async {
+      // The real desktop shape: the backend dials a hostname, and the
+      // surviving tunnel reports the address it resolved that hostname to.
+      // Comparing the two verbatim made the strongest cold-restore signal
+      // dead, so the restore fell through to the weaker probes every time.
+      final events = <String>[];
+      final store = ColdStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      await store.setLastDialJson(
+        jsonEncode(dialJson(endpoint: 'node.example.net')),
+      );
+      final tunnel = ColdTunnel(events, traffic: const {});
+      final (container, ctl) = coldContainer(
+        store: store,
+        tunnel: tunnel,
+        api: configApi(events, (o) {
+          if (o.path.endsWith('/config')) {
+            return dialJson(endpoint: 'node.example.net');
+          }
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      ctl.debugActivePeer = const ActivePeer(
+        publicKey: 'SRV',
+        endpoint: '198.51.100.20:51820',
+      );
+
+      await ctl.reconcileColdStart();
+
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.message, 'Connected');
+      // The bounce is for ownership, not for a dead tunnel: the live peer
+      // proved the data path, so the restore must not also conclude the
+      // session ended outside the app.
+      expect(state.message, isNot(contains('stopped outside')));
+      expect(events, contains('tunnel:start'));
+    });
+
     test('denied stage with cache bounces via server truth', () async {
       final events = <String>[];
       final store = ColdStore();

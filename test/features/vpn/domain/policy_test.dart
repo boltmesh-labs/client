@@ -22,7 +22,214 @@ DiscoveryServer srv(String id, int peers, {Obfuscation? obfuscation}) =>
       obfuscation: obfuscation,
     );
 
+/// A [DialParams] carrying [endpoint] and key [key], for the live-peer
+/// comparison.
+DialParams liveDial({
+  String endpoint = 'node.example.net',
+  String key = 'SRV',
+}) => DialParams.fromJson(dialJson(endpoint: endpoint, wgPublicKey: key));
+
 void main() {
+  // The property this suite exists for: the backend hands out a hostname and
+  // the OS reports the address the device resolved it to, so a verbatim string
+  // comparison never matched and the strongest cold-restore signal was dead on
+  // every desktop read.
+  group('livePeerMatchesDial', () {
+    test('a resolved address matches the hostname dial it came from', () {
+      // The real desktop shape: the dial carries the backend's hostname, the
+      // surviving tunnel reports the address it resolved that hostname to.
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '198.51.100.20:51820',
+          dial: liveDial(),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a literal dial matches the same address reported back', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '203.0.113.10:51820',
+          dial: liveDial(endpoint: '203.0.113.10'),
+        ),
+        isTrue,
+      );
+    });
+
+    // The Android adapter reports the configured endpoint verbatim, so the
+    // name-against-name case has to keep matching exactly.
+    test('a name on both sides matches without resolving', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: 'node.example.net:51820',
+          dial: liveDial(),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a different address for the same key does not match', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '198.51.100.99:51820',
+          dial: liveDial(endpoint: '198.51.100.20'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('a different port for the same address does not match', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '198.51.100.20:51821',
+          dial: liveDial(endpoint: '198.51.100.20'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('a missing endpoint is unverifiable, so the key still carries it', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '',
+          dial: liveDial(),
+        ),
+        isTrue,
+        reason:
+            'an unreadable endpoint is absence of evidence, not contradiction',
+      );
+    });
+
+    test('the key is the identity: a different key never matches', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'OTHER',
+          liveEndpoint: 'node.example.net:51820',
+          dial: liveDial(),
+        ),
+        isFalse,
+      );
+    });
+
+    test('an unreadable key never matches', () {
+      for (final key in ['', '   ']) {
+        expect(
+          livePeerMatchesDial(
+            livePublicKey: key,
+            liveEndpoint: 'node.example.net:51820',
+            dial: liveDial(),
+          ),
+          isFalse,
+          reason: 'key ${key.isEmpty ? 'empty' : 'blank'} must not corroborate',
+        );
+      }
+    });
+
+    test('IPv6 endpoints match across the bracketed and bare forms', () {
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '[2001:db8::9]:51820',
+          dial: liveDial(endpoint: '2001:db8::9'),
+        ),
+        isTrue,
+      );
+      expect(
+        endpointAgreement('[2001:0db8:0000::9]:51820', '[2001:db8::9]:51820'),
+        EndpointAgreement.match,
+        reason: 'the same v6 address in two spellings is one address',
+      );
+    });
+  });
+
+  group('endpointAgreement', () {
+    test('a name against an address is unverifiable, not a mismatch', () {
+      // Deliberately not resolved: on a cold restore this app's resolver may
+      // already follow the surviving tunnel, so a lookup could go through the
+      // very tunnel being verified. Unverifiable must not veto the key match,
+      // or the signal is dead on exactly the desktop shape it exists for.
+      expect(
+        endpointAgreement('node.example.net:51820', '198.51.100.20:51820'),
+        EndpointAgreement.unverifiable,
+      );
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: 'node.example.net:51820',
+          dial: liveDial(endpoint: '198.51.100.20'),
+        ),
+        isTrue,
+        reason:
+            'the key carries the identity when the endpoint cannot be compared',
+      );
+    });
+
+    test('two literals that differ are a mismatch, and it vetoes', () {
+      expect(
+        endpointAgreement('198.51.100.99:51820', '198.51.100.20:51820'),
+        EndpointAgreement.mismatch,
+      );
+      expect(
+        livePeerMatchesDial(
+          livePublicKey: 'SRV',
+          liveEndpoint: '198.51.100.99:51820',
+          dial: liveDial(endpoint: '198.51.100.20'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('a differing port is a mismatch even with a name on one side', () {
+      // The port is comparable without resolving anything, so it is not part of
+      // the unverifiable bucket.
+      expect(
+        endpointAgreement('node.example.net:51821', '198.51.100.20:51820'),
+        EndpointAgreement.mismatch,
+      );
+    });
+
+    test('equal strings match without parsing', () {
+      expect(
+        endpointAgreement('node.example.net:51820', 'node.example.net:51820'),
+        EndpointAgreement.match,
+      );
+    });
+
+    test('a v4-mapped literal is a different address from the plain v4', () {
+      expect(
+        endpointAgreement(
+          '[::ffff:198.51.100.20]:51820',
+          '198.51.100.20:51820',
+        ),
+        EndpointAgreement.mismatch,
+      );
+    });
+
+    test('unparseable values are unverifiable, never a mismatch', () {
+      for (final pair in [
+        ('', '198.51.100.20:51820'),
+        ('198.51.100.20:51820', ''),
+        ('garbage', '198.51.100.20:51820'),
+        ('198.51.100.20', '198.51.100.20:51820'),
+        ('2001:db8::9:51820', '198.51.100.20:51820'),
+        ('198.51.100.20:notaport', '198.51.100.20:51820'),
+      ]) {
+        expect(
+          endpointAgreement(pair.$1, pair.$2),
+          EndpointAgreement.unverifiable,
+          reason: '"${pair.$1}" vs "${pair.$2}" must not be a mismatch',
+        );
+      }
+    });
+  });
+
   test('isDegradedStage flags waiting states only', () {
     expect(isDegradedStage(VpnStage.waitingConnection), isTrue);
     expect(isDegradedStage(VpnStage.reconnect), isTrue);

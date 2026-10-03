@@ -530,13 +530,14 @@ extension ConnectionColdStart on ConnectionController {
     return _tunnel.getActivePeer();
   }
 
-  /// True when the live native peer is the server-confirmed [dial]: same
-  /// server public key on the same endpoint. Reported to
-  /// [_coldRestoreAlive] as likely-alive evidence; the down-read caller
-  /// still bounces to regain backend ownership of the TUN.
-  bool _livePeerMatches(DialParams dial, ActivePeer live) {
-    if (live.publicKey.trim().isEmpty) return false;
-    if (live.publicKey.trim() != dial.wgPublicKey.trim()) return false;
-    return live.endpoint.trim() == formatEndpoint(dial.endpoint, dial.wgPort);
-  }
+  /// True when the live native peer is the server-confirmed [dial]. Reported to
+  /// [_coldRestoreAlive] as likely-alive evidence; the down-read caller still
+  /// bounces to regain backend ownership of the TUN. See
+  /// [livePeerMatchesDial] for what the endpoint comparison can and cannot prove.
+  bool _livePeerMatches(DialParams dial, ActivePeer live) =>
+      livePeerMatchesDial(
+        livePublicKey: live.publicKey,
+        liveEndpoint: live.endpoint,
+        dial: dial,
+      );
 }
