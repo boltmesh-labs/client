@@ -230,8 +230,15 @@ func TestUpObfuscatedResolvesHostnameEndpoint(t *testing.T) {
 	if len(h.routes.added) != 1 || !h.routes.added[0].Equal(net.ParseIP("198.51.100.20")) {
 		t.Errorf("resolved endpoint not pinned: %v", h.routes.added)
 	}
-	if !strings.Contains(h.dev.bodies[0], "endpoint=vpn.example.net:51820\n") {
+	// The device is handed the address the plan pinned, not the name. This is the
+	// Windows half of the defect: WinRingBind parses an endpoint with getaddrinfo
+	// and AI_NUMERICHOST, so a name fails the device's configuration outright with
+	// WSAHOST_NOT_FOUND ("No such host is known").
+	if !strings.Contains(h.dev.bodies[0], "endpoint=198.51.100.20:51820\n") {
 		t.Errorf("device endpoint = %q", h.dev.bodies[0])
+	}
+	if strings.Contains(h.dev.bodies[0], "vpn.example.net") {
+		t.Errorf("device was handed the hostname:\n%q", h.dev.bodies[0])
 	}
 }
 
@@ -251,6 +258,11 @@ func TestUpObfuscatedPinsNothingForALoopbackEndpoint(t *testing.T) {
 	// The tunnel itself still comes up; it is only the underlay pin that is skipped.
 	if len(h.netIf.addresses) != 1 {
 		t.Errorf("addresses = %v, want the tunnel address installed", h.netIf.addresses)
+	}
+	// A literal endpoint reaches the device as the client wrote it: there is nothing
+	// to resolve, and the bridge's own address is what the datagrams must go to.
+	if !strings.Contains(h.dev.bodies[0], "endpoint=127.0.0.1:39735\n") {
+		t.Errorf("device endpoint = %q", h.dev.bodies[0])
 	}
 }
 
@@ -285,6 +297,29 @@ func TestUpObfuscatedFailsClosedWhenEndpointHasNoPhysicalPath(t *testing.T) {
 	}
 	if _, statErr := os.Stat(h.m.configPath()); !os.IsNotExist(statErr) {
 		t.Error("config file left behind by a failed plan")
+	}
+}
+
+func TestUpObfuscatedFailsClosedWhenTheEndpointDoesNotResolve(t *testing.T) {
+	h := newAwgHarness(t)
+	h.m.resolveHost = func(context.Context, string) ([]net.IP, error) {
+		return nil, errors.New("lookup vpn.example.net: no such host")
+	}
+	text := strings.Replace(obfuscatedConfig,
+		"Endpoint = 203.0.113.10:51820", "Endpoint = vpn.example.net:51820", 1)
+
+	_, err := h.m.Up(context.Background(), text, nil)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up(unresolvable) = %v, want internal", err)
+	}
+	// Nothing is created, because the address the device would have to be handed is
+	// the address the underlay route would have been pinned for.
+	if h.tunCreates != 0 || len(h.dev.bodies) != 0 {
+		t.Error("an unresolvable endpoint must not create a data plane")
+	}
+	if _, statErr := os.Stat(h.m.configPath()); !os.IsNotExist(statErr) {
+		t.Error("config file left behind by a failed resolution")
 	}
 }
 

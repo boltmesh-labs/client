@@ -191,8 +191,14 @@ func TestUpObfuscatedResolvesHostnameEndpoint(t *testing.T) {
 	if !h.findCall("ip", "route", "replace", "198.51.100.20/32", "via", "192.168.1.1", "dev", "eth0") {
 		t.Errorf("resolved endpoint not pinned:\n%v", h.callStrings())
 	}
-	if !strings.Contains(h.dev.bodies[0], "endpoint=vpn.example.net:51820\n") {
+	// The device is handed the address the plan pinned, not the name: no amneziawg-go
+	// bind resolves one, so a body still carrying it is a configuration the device
+	// rejects outright.
+	if !strings.Contains(h.dev.bodies[0], "endpoint=198.51.100.20:51820\n") {
 		t.Errorf("device endpoint = %q", h.dev.bodies[0])
+	}
+	if strings.Contains(h.dev.bodies[0], "vpn.example.net") {
+		t.Errorf("device was handed the hostname:\n%q", h.dev.bodies[0])
 	}
 }
 
@@ -233,6 +239,29 @@ func TestUpObfuscatedFailsClosedWhenEndpointUnreachable(t *testing.T) {
 	}
 	if _, statErr := os.Stat(h.m.configPath()); !os.IsNotExist(statErr) {
 		t.Error("config file left behind by a failed plan")
+	}
+}
+
+func TestUpObfuscatedFailsClosedWhenTheEndpointDoesNotResolve(t *testing.T) {
+	h := newAwgHarness(t)
+	h.m.resolveHost = func(context.Context, string) ([]net.IP, error) {
+		return nil, errors.New("lookup vpn.example.net: no such host")
+	}
+	text := strings.Replace(obfuscatedConfig,
+		"Endpoint = 203.0.113.10:51820", "Endpoint = vpn.example.net:51820", 1)
+
+	_, err := h.m.Up(context.Background(), text, nil)
+	var opErr *protocol.OpError
+	if !errors.As(err, &opErr) || opErr.Code != protocol.CodeInternal {
+		t.Fatalf("Up(unresolvable) = %v, want internal", err)
+	}
+	// Nothing is created, because the address the device would have to be handed is
+	// the address the underlay route would have been pinned for.
+	if h.tunCreates != 0 || len(h.dev.bodies) != 0 {
+		t.Error("an unresolvable endpoint must not create a data plane")
+	}
+	if _, statErr := os.Stat(h.m.configPath()); !os.IsNotExist(statErr) {
+		t.Error("config file left behind by a failed resolution")
 	}
 }
 

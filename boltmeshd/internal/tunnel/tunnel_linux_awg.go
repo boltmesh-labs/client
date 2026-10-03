@@ -92,6 +92,17 @@ type obfRoutePlan struct {
 	prefixes []string // underlay prefixes, for exact teardown
 }
 
+// failBeforeCreate reports a failure from a step that ran before anything was
+// created, removing the config file that step wrote. A config left behind is the
+// handle a later teardown — and a daemon that restarted and lost its in-memory
+// state — both read as a live tunnel's.
+func (m *Manager) failBeforeCreate(code string, err error) error {
+	if rmErr := m.removeConfig(); rmErr != nil {
+		return &protocol.OpError{Code: code, Err: errors.Join(err, rmErr)}
+	}
+	return &protocol.OpError{Code: code, Err: err}
+}
+
 // upObfuscated brings the userspace AmneziaWG tunnel up. Sequencing mirrors
 // the native path: resolve tools before writing anything, down whatever is
 // up, write the privileged config, then apply — and on any failure run a
@@ -134,24 +145,25 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string, transp
 	// unreachable endpoint fails with nothing created but the file itself.
 	settings, err := parseObfuscatedSettings(wgQuickConfig)
 	if err != nil {
-		if rmErr := m.removeConfig(); rmErr != nil {
-			return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: errors.Join(err, rmErr)}
-		}
-		return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
+		return nil, m.failBeforeCreate(protocol.CodeBadConfig, err)
 	}
 	uapiBody, err := ConfigToUAPIWithObfuscation(wgQuickConfig)
 	if err != nil {
-		if rmErr := m.removeConfig(); rmErr != nil {
-			return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: errors.Join(err, rmErr)}
-		}
-		return nil, &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
+		return nil, m.failBeforeCreate(protocol.CodeBadConfig, err)
 	}
-	routes, err := m.planObfuscatedRoutes(ctx, ipTool, settings)
+	// The endpoint resolves once, here: the underlay plan pins every address the
+	// answer holds through the physical path, and the device is handed one
+	// literal to dial (see obfuscatedUAPIEndpoint).
+	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
 	if err != nil {
-		if rmErr := m.removeConfig(); rmErr != nil {
-			return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(err, rmErr)}
-		}
-		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: err}
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
+	}
+	if uapiBody, err = obfuscatedUAPIEndpoint(uapiBody, settings.endpoint, ips); err != nil {
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
+	}
+	routes, err := m.planObfuscatedRoutes(ctx, ipTool, settings, ips)
+	if err != nil {
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
 	}
 
 	// The transport and its bypass route come up *before* the tunnel routes:
@@ -251,18 +263,14 @@ func (m *Manager) applyObfuscatedNetwork(ctx context.Context, ipTool string, set
 	return m.setResolverState(ctx, settings.dns)
 }
 
-// planObfuscatedRoutes resolves the plan before anything is created: the
-// endpoint's addresses and their physical path (fail closed when there is
-// none — the tunnel could not work anyway), and one route per AllowedIP,
-// with a strict-mode default claiming the default route at a metric that
-// outranks the physical one.
-func (m *Manager) planObfuscatedRoutes(ctx context.Context, ipTool string, settings obfSettings) (obfRoutePlan, error) {
+// planObfuscatedRoutes plans the route state from the addresses the caller
+// resolved for the endpoint, before anything is created: each one's physical
+// path (fail closed when there is none — the tunnel could not work anyway), and
+// one route per AllowedIP, with a strict-mode default claiming the default route
+// at a metric that outranks the physical one.
+func (m *Manager) planObfuscatedRoutes(ctx context.Context, ipTool string, settings obfSettings, ips []net.IP) (obfRoutePlan, error) {
 	var plan obfRoutePlan
 
-	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
-	if err != nil {
-		return plan, err
-	}
 	for _, ip := range ips {
 		// A loopback endpoint pins no underlay route: the local table resolves
 		// it before any tunnel route exists and none captures it. That is the

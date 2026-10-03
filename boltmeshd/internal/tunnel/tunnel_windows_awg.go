@@ -165,12 +165,19 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string, transp
 	if err != nil {
 		return nil, m.badConfig(err)
 	}
-	underlay, err := m.planObfuscatedUnderlay(ctx, settings)
+	// The endpoint resolves once, here: the underlay plan pins every address the
+	// answer holds through the physical path, and the device is handed one literal
+	// to dial (see obfuscatedUAPIEndpoint).
+	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
 	if err != nil {
-		if rmErr := removeConfigFile(m.configPath()); rmErr != nil {
-			return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(err, rmErr)}
-		}
-		return nil, &protocol.OpError{Code: protocol.CodeInternal, Err: err}
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
+	}
+	if uapiBody, err = obfuscatedUAPIEndpoint(uapiBody, settings.endpoint, ips); err != nil {
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
+	}
+	underlay, err := m.planObfuscatedUnderlay(ips)
+	if err != nil {
+		return nil, m.failBeforeCreate(protocol.CodeInternal, err)
 	}
 
 	// The transport and its bypass route come up *before* the tunnel's routes: from
@@ -219,13 +226,21 @@ func (m *Manager) upObfuscated(ctx context.Context, wgQuickConfig string, transp
 	return readObfuscatedStatus(ctx, m.iface, dev)
 }
 
+// failBeforeCreate reports a failure from a step that ran before anything was
+// created, removing the config file that step wrote. A config left behind is the
+// handle a later teardown — and a daemon that restarted and lost its in-memory
+// state — both read as a live tunnel's.
+func (m *Manager) failBeforeCreate(code string, err error) error {
+	if rmErr := removeConfigFile(m.configPath()); rmErr != nil {
+		return &protocol.OpError{Code: code, Err: errors.Join(err, rmErr)}
+	}
+	return &protocol.OpError{Code: code, Err: err}
+}
+
 // badConfig removes the config a rejected request wrote and reports the reason under
 // the code the client acts on.
 func (m *Manager) badConfig(err error) error {
-	if rmErr := removeConfigFile(m.configPath()); rmErr != nil {
-		return &protocol.OpError{Code: protocol.CodeBadConfig, Err: errors.Join(err, rmErr)}
-	}
-	return &protocol.OpError{Code: protocol.CodeBadConfig, Err: err}
+	return m.failBeforeCreate(protocol.CodeBadConfig, err)
 }
 
 // startObfuscated creates the adapter, wires the device to it, and applies the planned
@@ -410,21 +425,17 @@ func tunnelRoutes(allowedIPs []string) ([]awgTunnelRoute, error) {
 	return routes, nil
 }
 
-// planObfuscatedUnderlay resolves where the endpoint's traffic leaves before anything
-// exists, failing closed when it cannot be found: the tunnel could not work anyway, and
-// a plan built on a guess is a plan that loops the device's own packets into the tunnel
-// it carries.
+// planObfuscatedUnderlay plans where the endpoint's traffic leaves before anything
+// exists, from the addresses the caller resolved, failing closed when one has no
+// physical path: the tunnel could not work anyway, and a plan built on a guess is a
+// plan that loops the device's own packets into the tunnel it carries.
 //
 // A loopback endpoint pins no route at all. That is not a shortcut but the
 // stream-carried case: the local table resolves loopback before any tunnel route is
 // consulted and nothing captures it, while the transport's bring-up has already pinned
 // the node's real upstream.
-func (m *Manager) planObfuscatedUnderlay(ctx context.Context, settings obfSettings) (awgUnderlayPlan, error) {
+func (m *Manager) planObfuscatedUnderlay(ips []net.IP) (awgUnderlayPlan, error) {
 	var plan awgUnderlayPlan
-	ips, err := resolveEndpointAddresses(ctx, settings.endpoint, m.resolveHost)
-	if err != nil {
-		return plan, err
-	}
 	for _, ip := range ips {
 		if ip.IsLoopback() {
 			continue

@@ -237,6 +237,112 @@ func TestResolveEndpointAddressesCoversLiteralAndName(t *testing.T) {
 	})
 }
 
+// TestObfuscatedUAPIEndpointNeverLeavesAName is the load-bearing one: no bind in
+// amneziawg-go resolves a hostname, so a body that still carries one is a device
+// configuration the data plane rejects outright — on Windows as WSAHOST_NOT_FOUND
+// from getaddrinfo's AI_NUMERICHOST, elsewhere as netip.ParseAddrPort's "unable to
+// parse IP". The daemon resolves the endpoint for its underlay route either way, so
+// the literal it looked up is what the device must be handed.
+func TestObfuscatedUAPIEndpointNeverLeavesAName(t *testing.T) {
+	t.Run("a resolved name becomes the address it resolved to", func(t *testing.T) {
+		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{net.ParseIP("198.51.100.20")})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		want := "endpoint=198.51.100.20:51820\n"
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("the first non-loopback address wins, in resolver order", func(t *testing.T) {
+		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{
+				net.ParseIP("127.0.0.1"),
+				net.ParseIP("203.0.113.9"),
+				net.ParseIP("198.51.100.20"),
+			})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		want := "endpoint=203.0.113.9:51820\n"
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("an IPv6 answer keeps its brackets", func(t *testing.T) {
+		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{net.ParseIP("2001:db8::9")})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		want := "endpoint=[2001:db8::9]:51820\n"
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("a literal endpoint is left exactly as written", func(t *testing.T) {
+		original := uapiBodyWith(t, "127.0.0.1:39735")
+		body, err := obfuscatedUAPIEndpoint([]byte(original), "127.0.0.1:39735",
+			[]net.IP{net.ParseIP("127.0.0.1")})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		if string(body) != original {
+			t.Errorf("body = %q, want it untouched %q", body, original)
+		}
+	})
+
+	t.Run("a name that resolved only to loopback fails closed", func(t *testing.T) {
+		_, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{net.ParseIP("127.0.0.1")})
+		if err == nil {
+			t.Error("a name resolving only to loopback was passed to the device as a name")
+		}
+	})
+}
+
+func TestSetUAPIEndpointTouchesOnlyTheNamedHost(t *testing.T) {
+	body := []byte("public_key=" + keyB + "\n" +
+		"endpoint=node.example.test:51820\n" +
+		"endpoint=other.example.test:51821\n" +
+		"allowed_ip=0.0.0.0/0\n")
+
+	got, err := setUAPIEndpoint(body, "node.example.test", "198.51.100.20")
+	if err != nil {
+		t.Fatalf("setUAPIEndpoint: %v", err)
+	}
+	want := "public_key=" + keyB + "\n" +
+		"endpoint=198.51.100.20:51820\n" +
+		"endpoint=other.example.test:51821\n" +
+		"allowed_ip=0.0.0.0/0\n"
+	if string(got) != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestSetUAPIEndpointRefusesABodyItCannotRewrite(t *testing.T) {
+	// The name stays in the body, so returning it unchanged would hand the device
+	// the very thing it cannot parse.
+	if _, err := setUAPIEndpoint([]byte("public_key="+keyB+"\n"), "node.example.test", "198.51.100.20"); err == nil {
+		t.Error("a body with no matching endpoint line was accepted")
+	}
+}
+
+// uapiBodyWith renders a valid obfuscated config whose peer endpoint is [endpoint].
+func uapiBodyWith(t *testing.T, endpoint string) string {
+	t.Helper()
+	text := strings.Replace(obfuscatedConfig, "Endpoint = 203.0.113.10:51820", "Endpoint = "+endpoint, 1)
+	body, err := ConfigToUAPIWithObfuscation(text)
+	if err != nil {
+		t.Fatalf("ConfigToUAPIWithObfuscation: %v", err)
+	}
+	return string(body)
+}
+
 // TestUnderlayPrefixesForSkipsLoopback is the property that makes a stream-carried
 // obfuscated tunnel work at all. Its peer endpoint is the bridge's loopback
 // address, so pinning a route for it would be pinning the local table; the real

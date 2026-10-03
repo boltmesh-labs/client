@@ -236,6 +236,70 @@ func resolveEndpointAddresses(ctx context.Context, endpoint string, resolve func
 	return ips, nil
 }
 
+// obfuscatedUAPIEndpoint rewrites the peer's endpoint in a rendered UAPI body to
+// the literal address the obfuscated data plane can be configured with, given the
+// addresses [endpoint] resolved to.
+//
+// A name is never handed to the device: amneziawg-go parses a peer endpoint
+// through conn.Bind.ParseEndpoint, and neither bind resolves one — StdNetBind is
+// netip.ParseAddrPort, and WinRingBind is getaddrinfo with AI_NUMERICHOST, which
+// rejects a name with WSAHOST_NOT_FOUND. The daemon has already resolved the
+// endpoint for its underlay route, so the literal goes to the device instead of
+// the name, which also makes the address it dials provably one the underlay plan
+// pinned a route for.
+//
+// An endpoint that is already an IP literal is left alone, which covers both a node
+// handed out by address and the stream-carried loopback bridge. A name that
+// resolved to nothing but loopback is an error rather than a pass-through, so the
+// invariant holds unconditionally: this body never carries a name.
+func obfuscatedUAPIEndpoint(body []byte, endpoint string, ips []net.IP) ([]byte, error) {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Endpoint %q: %w", endpoint, err)
+	}
+	if net.ParseIP(host) != nil {
+		return body, nil
+	}
+	addr := ""
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			addr = ip.String()
+			break
+		}
+	}
+	if addr == "" {
+		return nil, fmt.Errorf("endpoint %s resolved only to loopback", host)
+	}
+	return setUAPIEndpoint(body, host, addr)
+}
+
+// setUAPIEndpoint replaces the host of every peer endpoint in a rendered UAPI body
+// that names [host] with [addr], keeping each line's own port.
+//
+// Only matching lines are rewritten, so a config whose other peers dial elsewhere
+// stays correct rather than being repointed. A body with no matching line is an
+// error: it would leave the name in place for the device to reject.
+func setUAPIEndpoint(body []byte, host, addr string) ([]byte, error) {
+	lines := strings.Split(string(body), "\n")
+	matched := false
+	for i, line := range lines {
+		value, ok := strings.CutPrefix(line, "endpoint=")
+		if !ok {
+			continue
+		}
+		lineHost, port, err := net.SplitHostPort(value)
+		if err != nil || !strings.EqualFold(lineHost, host) {
+			continue
+		}
+		lines[i] = "endpoint=" + net.JoinHostPort(addr, port)
+		matched = true
+	}
+	if !matched {
+		return nil, fmt.Errorf("config carries no endpoint for %s", host)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
 // underlayPrefixesFor derives the underlay host route prefixes an obfuscated
 // config pinned, for a teardown that has lost its in-memory state. Loopback
 // endpoints are skipped: they never had one.
