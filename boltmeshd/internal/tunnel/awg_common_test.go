@@ -256,7 +256,7 @@ func TestObfuscatedUAPIEndpointNeverLeavesAName(t *testing.T) {
 		}
 	})
 
-	t.Run("the first non-loopback address wins, in resolver order", func(t *testing.T) {
+	t.Run("the first non-loopback address wins within a family", func(t *testing.T) {
 		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
 			"node.example.test:51820", []net.IP{
 				net.ParseIP("127.0.0.1"),
@@ -267,6 +267,40 @@ func TestObfuscatedUAPIEndpointNeverLeavesAName(t *testing.T) {
 			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
 		}
 		want := "endpoint=203.0.113.9:51820\n"
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body = %q, want %q", body, want)
+		}
+	})
+
+	// The load-bearing case for the family preference: resolver order puts v6
+	// first on a dual-A/AAAA host, and a host with broken v6 connectivity is the
+	// common shape of that. Dialing the first answer would pick the family the
+	// network cannot carry while a working v4 sits in the same underlay plan.
+	t.Run("IPv4 wins over a v6 answer listed first", func(t *testing.T) {
+		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{
+				net.ParseIP("2001:db8::9"),
+				net.ParseIP("198.51.100.20"),
+			})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		want := "endpoint=198.51.100.20:51820\n"
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("a v6-only node still gets its v6", func(t *testing.T) {
+		body, err := obfuscatedUAPIEndpoint([]byte(uapiBodyWith(t, "node.example.test:51820")),
+			"node.example.test:51820", []net.IP{
+				net.ParseIP("2001:db8::9"),
+				net.ParseIP("2001:db8::a"),
+			})
+		if err != nil {
+			t.Fatalf("obfuscatedUAPIEndpoint: %v", err)
+		}
+		want := "endpoint=[2001:db8::9]:51820\n"
 		if !strings.Contains(string(body), want) {
 			t.Errorf("body = %q, want %q", body, want)
 		}
@@ -301,6 +335,14 @@ func TestObfuscatedUAPIEndpointNeverLeavesAName(t *testing.T) {
 			"node.example.test:51820", []net.IP{net.ParseIP("127.0.0.1")})
 		if err == nil {
 			t.Error("a name resolving only to loopback was passed to the device as a name")
+		}
+	})
+
+	// ::1 is v6 loopback but parses as an IPv4-mapped address, so the family
+	// preference must not mistake it for a dialable v4.
+	t.Run("IPv6 loopback is not mistaken for a dialable IPv4", func(t *testing.T) {
+		if got := dialAddress([]net.IP{net.ParseIP("::1")}); got != "" {
+			t.Errorf("dialAddress = %q, want empty for a v6 loopback answer", got)
 		}
 	})
 }

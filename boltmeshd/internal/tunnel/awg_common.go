@@ -252,6 +252,15 @@ func resolveEndpointAddresses(ctx context.Context, endpoint string, resolve func
 // handed out by address and the stream-carried loopback bridge. A name that
 // resolved to nothing but loopback is an error rather than a pass-through, so the
 // invariant holds unconditionally: this body never carries a name.
+//
+// IPv4 wins over IPv6 when the answer holds both. A dual-A/AAAA record on a host
+// with broken v6 connectivity is the common shape, and resolver order is not a
+// statement about which family is reachable: RFC 6724 sorting puts v6 first on most
+// hosts, so picking the first answer would dial an address the network cannot carry
+// while a working v4 pin sits in the same underlay plan unused. This mirrors the
+// Android layer, which prefers v4 for the same DNS64 and IPv6-NAT reasons
+// (`InetEndpoint.getResolved`). A v6-only node still gets its v6: the fallback is
+// the first non-loopback answer, not a v4 requirement.
 func obfuscatedUAPIEndpoint(body []byte, endpoint string, ips []net.IP) ([]byte, error) {
 	host, _, err := net.SplitHostPort(endpoint)
 	if err != nil {
@@ -260,17 +269,32 @@ func obfuscatedUAPIEndpoint(body []byte, endpoint string, ips []net.IP) ([]byte,
 	if net.ParseIP(host) != nil {
 		return body, nil
 	}
-	addr := ""
-	for _, ip := range ips {
-		if !ip.IsLoopback() {
-			addr = ip.String()
-			break
-		}
-	}
+	addr := dialAddress(ips)
 	if addr == "" {
 		return nil, fmt.Errorf("endpoint %s resolved only to loopback", host)
 	}
 	return setUAPIEndpoint(body, host, addr)
+}
+
+// dialAddress picks the address the device should dial from a resolved set: the
+// first IPv4 answer, or the first non-loopback answer when there is none.
+//
+// Loopback is skipped in both passes. It is the stream-carried shape, where the
+// peer's endpoint is the local bridge and the transport pinned the node's real
+// upstream — and a name that resolved only to loopback is a configuration that
+// cannot work, which the caller reports rather than dialing.
+func dialAddress(ips []net.IP) string {
+	for _, ip := range ips {
+		if ip.To4() != nil && !ip.IsLoopback() {
+			return ip.String()
+		}
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 // setUAPIEndpoint replaces the host of every peer endpoint in a rendered UAPI body
