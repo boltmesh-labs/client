@@ -24,6 +24,7 @@ extension ConnectionRecovery on ConnectionController {
     String why, {
     bool hardStalled = false,
     bool localConfirmed = false,
+    bool transportFailureConfirmed = false,
     int? expectedSession,
     int? expectedEpoch,
     DialParams? expectedDial,
@@ -59,13 +60,11 @@ extension ConnectionRecovery on ConnectionController {
       // every heal before the stall can escalate.
       final prevFailovers = snap.autoFailoverAttempts;
       final prevPollFailures = snap.pollFailures;
-      // The heal restart is the ladder's rung step: a path the health
-      // policy confirmed dead locally and that survives a plain restart is
-      // what a fingerprinting middlebox looks like, so the rebuild below
-      // carries the next lower rung's transport when the region has one.
-      // Demoting only on the local-confirmed/heal-decided path is what keeps a
-      // bare unknown read from ever reaching this.
-      _demoteRung(dial, why);
+      // A lower transport is warranted only when the data path looks dead
+      // while the control plane is reachable. A blackout can still justify
+      // restarting the cached config, but it is not evidence that this
+      // transport specifically is blocked.
+      if (transportFailureConfirmed) _demoteRung(dial, why);
       AppLog.info('auto-heal start ($why) attempt=$attempt ${_healBudgets()}');
       snap = snap.copyWith(
         phase: ConnPhase.working,

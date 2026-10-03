@@ -159,18 +159,17 @@ class ConnectionController extends Notifier<ConnState> {
   /// [_applyRung] re-derives it on every start, so a server move follows the
   /// new region's floor and never keeps a rung the new region cannot serve.
   ///
-  /// Below the floor, a stall the health policy confirmed *locally* (a dead
-  /// in-tunnel echo, a hard-stale handshake) escalates one rung at a time.
-  /// Never a bare null read — a missing handshake from a wedged reader is
-  /// absence of evidence, not a blocked protocol.
+  /// Below the floor, a stall that looks like a dead tunnel path while the
+  /// control plane is reachable escalates one rung at a time. A local stall
+  /// during a control-plane blackout only gets a same-rung restart: that is
+  /// absence of evidence that this transport is blocked.
   ///
-  /// Demotion is sticky: once a network has proven it fingerprints WireGuard,
-  /// every later connect stays on the lower rung rather than re-paying the
-  /// failed-probe cycle, and an unblocked network pays only what the rung costs.
-  /// A restart re-probes the region's floor.
+  /// Demotion is sticky: once the control plane answers while the tunnel path
+  /// is dead, every later connect stays on the lower rung rather than re-paying
+  /// the failed-probe cycle. A restart re-probes the region's floor.
   ///
-  /// Walked one rung per heal by [_demoteRung]; see [ObfuscationRung] for the
-  /// order and why the stream rung is last.
+  /// Walked one rung per qualifying heal by [_demoteRung]; see
+  /// [ObfuscationRung] for the order and why the stream rung is last.
   ObfuscationRung _obfuscationRung = ObfuscationRung.native;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was

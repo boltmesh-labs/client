@@ -333,16 +333,16 @@ extension ConnectionHealth on ConnectionController {
     // A locally-confirmed dead path is not the same fact as a dead node, and
     // Layer 1 cannot tell them apart: a middlebox dropping this rung's
     // transport looks exactly like a powered-off server from in here — dead
-    // echo, stale handshake. The ladder exists for the first, so before
-    // spending a move budget on a server change, take the rung step the heal
-    // already carries. `serverDown` is the backend-attributed verdict that
-    // this *is* the node being gone, so it skips the ladder and moves
-    // straight on; with no attributed verdict the cheap local retry runs
-    // first and a stall that survives it still escalates below.
+    // echo, stale handshake. Prefer the same-server heal before spending a
+    // move budget; once the control-plane probe answers, that combination is
+    // sufficient evidence to demote the transport. `serverDown` is the
+    // backend-attributed verdict that this *is* the node being gone, so it
+    // skips the ladder and moves straight on.
     //
     // Gated on a lower rung actually existing: with nowhere to step, a heal
     // would rebuild the same config on the same rung, so it must not consume
-    // the heal budget in place of the move.
+    // the heal budget in place of the move. The probe below still decides
+    // whether this heal is entitled to demote onto that lower rung.
     final ladderStepAvailable = !serverDown && _hasLowerRung(dial) && canHeal;
     final localCause = classifyFailure(
       hasNetwork: true,
@@ -376,6 +376,14 @@ extension ConnectionHealth on ConnectionController {
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
     );
+    // Only step down transports when the tunnel path looks dead while the
+    // control plane is positively reachable. A blackout or an unknown probe
+    // can justify an offline restart, but does not distinguish a blocked
+    // transport from a broader outage.
+    final transportFailureConfirmed =
+        apiReachable == true &&
+        cause == ConnectionFailureCause.tunnelPathDead &&
+        !serverDown;
     // Same rung-before-move rule as the gate above, and it matters more here:
     // this one is reached with a *live* control-plane answer, which is the
     // signature of a blocked transport rather than a dead node — the backend
@@ -443,6 +451,7 @@ extension ConnectionHealth on ConnectionController {
         why,
         hardStalled: hardStalled,
         localConfirmed: localEvidence,
+        transportFailureConfirmed: transportFailureConfirmed,
         expectedSession: sessionEpoch,
         expectedEpoch: epoch,
         expectedDial: dial,

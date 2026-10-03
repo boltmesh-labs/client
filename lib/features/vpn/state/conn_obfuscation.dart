@@ -34,14 +34,16 @@ enum ObfuscationRung {
 /// The obfuscation ladder. Where it *starts* is the region's data plane — a
 /// stock region starts on native, an obfuscated one on AmneziaWG, because its
 /// node cannot read a stock datagram (see [_rungFor]) — and every rung below
-/// that is reached only after a confirmed local stall (see [_demoteRung]).
+/// that is reached only when the health policy sees a dead tunnel path while
+/// the control plane is reachable (see [_demoteRung]).
 ///
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
-/// should be retried on a lower rung — so the ladder adds no budget, timer, or
-/// state of its own. A heal that the next rung does not fix falls through to
-/// the *existing* escalation (failover, then [_surfaceRecoveryExhausted])
-/// rather than a new failure mode.
+/// should be retried on a lower rung — but only when the control plane is
+/// reachable, so a general blackout does not demote the transport. The ladder
+/// adds no budget, timer, or state of its own. A heal that the next rung does
+/// not fix falls through to the *existing* escalation (failover, then
+/// [_surfaceRecoveryExhausted]) rather than a new failure mode.
 extension ConnectionObfuscation on ConnectionController {
   /// The rung this process is on. Sticky across connects: there is no automatic
   /// promotion back up the ladder, because every promotion would re-pay for a

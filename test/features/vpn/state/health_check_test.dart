@@ -395,9 +395,9 @@ void main() {
     expect(state.message, 'Connected');
   });
 
-  // The obfuscated rung is a *response* to a confirmed local stall. These
-  // cases explicitly choose the backend they exercise so host-platform test
-  // defaults cannot silently change which rung is available.
+  // The obfuscated rung is a *response* to a dead tunnel path with a reachable
+  // control plane. These cases explicitly choose the probes and backend they
+  // exercise so host-platform defaults cannot silently change their outcome.
   group('obfuscation ladder', () {
     void useLinuxDataPlane() {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
@@ -601,6 +601,7 @@ void main() {
         Set<String>? caps,
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
+        ControlPlaneProbe? controlProbe,
         bool expectConnected = true,
       }) async {
         final events = <String>[];
@@ -620,6 +621,7 @@ void main() {
           // generate; the connect path reuses the stored identity.
           keys: FakeKeys(),
           api: api,
+          controlProbe: controlProbe,
           tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
         );
         await store.setDeviceId('dev-1');
@@ -677,25 +679,19 @@ void main() {
         },
       );
 
-      test('the first stall walks from AWG onto the stream rung', () async {
+      test('a blackout restart stays on the current AWG rung', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream();
-
         await healOnce(container);
 
-        // AWG is the region's floor, so the first confirmed stall is what
-        // reaches the stream rung: the peer endpoint now points at the bridge's
-        // loopback address and the local listen port is pinned so the bridge
-        // knows where to deliver. The obfuscation directives stay: the region's
-        // node runs the AmneziaWG device, so the datagrams inside the stream
-        // must carry them too — the inner format follows the region, not the
-        // rung.
-        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-        expect(socket.lastConfig, contains('ListenPort = '));
+        // A dead in-tunnel probe during a control-plane blackout justifies
+        // restarting the config, but does not tell us this transport is blocked.
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, isNot(contains('ListenPort = ')));
         expect(socket.lastConfig, contains('Jc = 3'));
         expect(
           container.read(connectionProvider.notifier).obfuscationRung,
-          ObfuscationRung.stream,
+          ObfuscationRung.awg,
         );
       });
 
@@ -716,7 +712,9 @@ void main() {
           // the time the ladder becomes reachable. A single-tick test cannot
           // cover that, which is why the first-stall test above does not.
           useLinuxDataPlane();
-          final (container, socket) = await seedStream();
+          final (container, socket) = await seedStream(
+            controlProbe: support.FakeControlProbe(true),
+          );
           final ctl = container.read(connectionProvider.notifier);
 
           // Tick 1: old enough to probe (>= 30s) but not stale enough to act.
@@ -763,7 +761,9 @@ void main() {
           // reconnect resets it by design, so waiting for a real heal to spend
           // it would test the reset instead of the bound.
           useLinuxDataPlane();
-          final (container, socket) = await seedStream();
+          final (container, socket) = await seedStream(
+            controlProbe: support.FakeControlProbe(true),
+          );
           final ctl = container.read(connectionProvider.notifier);
           ctl.snap = ctl.snap.copyWith(autoHealAttempts: 1);
 
@@ -850,16 +850,19 @@ void main() {
           await ctl.checkHealthOnce();
         }
 
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
-        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-        expect(socket.lastTransport, isNotNull);
+        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastTransport, isNull);
+        expect(container.read(connectionProvider).autoHealAttempts, 1);
       });
 
       test(
         'the bridge receives the transport spec on the stream rung',
         () async {
           useLinuxDataPlane();
-          final (container, socket) = await seedStream();
+          final (container, socket) = await seedStream(
+            controlProbe: support.FakeControlProbe(true),
+          );
           final ctl = container.read(connectionProvider.notifier);
 
           await healOnce(container);
@@ -900,7 +903,10 @@ void main() {
           useLinuxDataPlane();
           // No AWG descriptor at all, so the walk has nowhere to go but stream
           // on the *first* heal — no second cycle needed.
-          final (container, socket) = await seedStream(dial: streamOnlyDial);
+          final (container, socket) = await seedStream(
+            dial: streamOnlyDial,
+            controlProbe: support.FakeControlProbe(true),
+          );
 
           await healOnce(container);
 
@@ -945,7 +951,9 @@ void main() {
 
       test('the walk stops at the last rung rather than inventing one', () async {
         useLinuxDataPlane();
-        final (container, socket) = await seedStream();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
         final ctl = container.read(connectionProvider.notifier);
 
         await healOnce(container);
@@ -975,6 +983,7 @@ void main() {
         () async {
           useLinuxDataPlane();
           final (container, socket) = await seedStream(
+            controlProbe: support.FakeControlProbe(true),
             // The move lands on a stock region whose dial carries no stream
             // credential, so the sticky stream rung has nothing to run there.
             onSwitch: () => dialJson(serverId: 'srv-2', serverName: 'two'),
