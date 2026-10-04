@@ -1437,6 +1437,45 @@ void main() {
         expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
       });
 
+      test('a move to a node serving no obfuscated rung leaves no gap', () async {
+        // The case an index-range clamp gets wrong. The process is on `awg` and
+        // the new node serves `native` and `stream` but not `awg`, so the rung
+        // it is leaving is *between* two advertised rungs rather than outside
+        // the list: `awg`.index falls inside `[native, stream]`. Comparing
+        // indices alone reads that as "still on the ladder" and starts on a
+        // rung the node does not serve — a conf aimed at nothing.
+        //
+        // Membership is the test, and the ceiling is where an unserved rung
+        // lands. It could be the floor instead, but `awg` is where the walk
+        // arrived *from*, and it demoted past `native` to get there, so `native`
+        // is the rung this network has already disproved.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+          // The move lands on a node that runs an ingress but no obfuscated
+          // device, so its list is native then stream with a hole where awg
+          // was on the node it left.
+          onSwitch: () => dialJson(
+            serverId: 'srv-2',
+            serverName: 'two',
+            stream: streamTransportJson(),
+          ),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
+        expect(ctl.transportRung, TransportRung.awg);
+
+        await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        expect(ctl.transportRung, TransportRung.stream);
+        // And the rung it lands on is one the new node really serves: a bridge
+        // is up, pointed at the stock device.
+        expect(socket.lastTransport, isNotNull);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+      });
+
       test('a move onto a dual-format node keeps the sticky rung', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream(

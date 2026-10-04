@@ -414,11 +414,16 @@ extension ConnectionObfuscation on ConnectionController {
   TransportRung? _rungFor(DialParams dial) {
     final runnable = _runnableRungs(dial);
     if (runnable.isEmpty) return null;
+    if (runnable.contains(_transportRung)) return _transportRung;
     final ceiling = runnable.last;
     final floor = runnable.first;
     if (_transportRung.index < floor.index) return floor;
-    if (_transportRung.index > ceiling.index) return ceiling;
-    return _transportRung;
+    // Above the ceiling, or *between* two advertised rungs but served by neither
+    // — the case an index range would read as "still inside the ladder" and start
+    // on a rung the node does not serve. The ceiling is the right side of it:
+    // reaching the unserved rung in the first place means the walk demoted past
+    // the rungs below it, and those are the ones the network is blocking.
+    return ceiling;
   }
 
   /// Applies [_rungFor] before a start, logging the move, and refuses a server
