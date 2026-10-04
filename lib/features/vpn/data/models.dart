@@ -23,7 +23,7 @@ DateTime? _parseExpiry(Object? value) =>
 
 String? _serverHealthToWire(ServerHealth? value) => value?.wire;
 
-/// Per-region tunnel obfuscation descriptor (backend `obfuscation` object).
+/// Per-server tunnel obfuscation descriptor (backend `obfuscation` object).
 ///
 /// Null or `mode: ''` is the native WireGuard data plane. `awg` selects the
 /// obfuscated data plane with a complete parameter set — both tunnel ends
@@ -186,6 +186,13 @@ abstract class DialParams with _$DialParams {
     @JsonKey(name: 'server_name') @Default('') String serverName,
     required String endpoint,
     @JsonKey(name: 'wg_port') required int wgPort,
+    // The port the node's obfuscated listener binds, or null when the serving
+    // server does not offer that rung. Separate from [wgPort] because a server
+    // that offers it has moved its whole tunnel onto this port: a client that
+    // dialled `wgPort` there would put a plaintext WireGuard handshake on the
+    // wire first, which is exactly the fingerprint the rung exists to hide.
+    // Null is what makes "not offered" legible to the ladder.
+    @JsonKey(name: 'awg_port') int? awgPort,
     @JsonKey(name: 'wg_dns') required String wgDns,
     @JsonKey(name: 'wg_public_key') required String wgPublicKey,
     // The server's active peer public key for this device (`GET …/config` and
@@ -193,11 +200,11 @@ abstract class DialParams with _$DialParams {
     // when present the controller verifies the stored keypair matches before
     // starting a tunnel, repairing a divergence a lost bind response can leave.
     @JsonKey(name: 'client_public_key') String? clientPublicKey,
-    // Per-region obfuscation descriptor. Null on backends that predate the
-    // field (native data plane).
+    // The serving node's obfuscation descriptor. Null on backends that predate
+    // the field (native data plane).
     @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
     // This device's stream-transport credential. Null on backends that predate
-    // the field, and for a region whose node runs no ingress.
+    // the field, and for a node that runs no ingress.
     @JsonKey(name: 'stream') StreamTransport? stream,
   }) = _DialParams;
 
@@ -217,7 +224,7 @@ abstract class DiscoveryServer with _$DiscoveryServer {
     @JsonKey(name: 'wg_dns') @Default('') String wgDns,
     @JsonKey(name: 'wg_public_key') String? wgPublicKey,
     @JsonKey(name: 'active_peers') @Default(0) int activePeers,
-    // Per-region obfuscation descriptor. Null on backends that predate the
+    // This node's own obfuscation descriptor. Null on backends that predate the
     // field (native data plane).
     @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
   }) = _DiscoveryServer;

@@ -26,6 +26,7 @@ Map<String, dynamic> dialJson({
   String assignedIp = '10.8.0.5',
   String endpoint = '203.0.113.10',
   int wgPort = 51820,
+  int? awgPort,
   String wgDns = '10.8.0.1',
   String wgPublicKey = 'SRV',
   String? clientPublicKey,
@@ -38,6 +39,11 @@ Map<String, dynamic> dialJson({
   'server_name': serverName,
   'endpoint': endpoint,
   'wg_port': wgPort,
+  // Omitted by default, matching a server that does not offer the awg rung —
+  // the native data plane. Obfuscation suites pass both this and
+  // [awgObfuscationJson], because a server that serves the rung has moved its
+  // tunnel onto this port and the client must dial it.
+  'awg_port': ?awgPort,
   'wg_dns': wgDns,
   'wg_public_key': wgPublicKey,
   // Omitted when null: existing suites assert the pre-field behavior. A suite

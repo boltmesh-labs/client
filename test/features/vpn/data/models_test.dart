@@ -19,6 +19,24 @@ void main() {
       expect(dial.serverId, 'srv-1');
       expect(dial.serverName, '');
       expect(dial.wgPort, 51820);
+      // Absent means the server does not offer the rung — which is a state the
+      // ladder reads, not a missing field it should default away.
+      expect(dial.awgPort, isNull);
+    });
+
+    test('parses the obfuscated listener port when the rung is offered', () {
+      final dial = DialParams.fromJson({
+        'id': 'dev-1',
+        'assigned_ip': '10.8.0.5',
+        'server_id': 'srv-1',
+        'endpoint': '203.0.113.10',
+        'wg_port': 51820,
+        'awg_port': 51821,
+        'wg_dns': '10.8.0.1',
+        'wg_public_key': 'SRV',
+      });
+      expect(dial.wgPort, 51820);
+      expect(dial.awgPort, 51821);
     });
   });
 

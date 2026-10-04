@@ -404,8 +404,12 @@ void main() {
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
     }
 
+    // Both halves together, because a server that serves the awg rung has moved
+    // its whole tunnel onto `awg_port`: the descriptor says the format and the
+    // port says where to reach it, and a payload with only the first would have
+    // the client dialling a port nothing listens on.
     Map<String, dynamic> obfDial() =>
-        dialJson(obfuscation: awgObfuscationJson());
+        dialJson(obfuscation: awgObfuscationJson(), awgPort: 51821);
 
     Future<(ProviderContainer, FakeTunnel)> seedObfuscated() {
       final events = <String>[];
@@ -532,6 +536,7 @@ void main() {
               serverId: 'srv-2',
               serverName: 'two',
               obfuscation: awgObfuscationJson(),
+              awgPort: 51821,
             );
           }
           throw StateError('unexpected ${o.path}');
@@ -593,6 +598,7 @@ void main() {
         endpoint: endpoint,
         wgPublicKey: wgPublicKey,
         obfuscation: awgObfuscationJson(),
+        awgPort: 51821,
         stream: streamTransportJson(),
       );
 
@@ -660,24 +666,23 @@ void main() {
         await ctl.checkHealthOnce();
       }
 
-      test(
-        'an obfuscated region starts on AWG, with stream below it',
-        () async {
-          useLinuxDataPlane();
-          final (container, socket) = await seedStream();
+      test('an obfuscated region starts on AWG, with stream below it', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
 
-          // The region's floor is AWG, so the first start is already obfuscated
-          // and points straight at the node. The stream rung is below it and is
-          // only reached on evidence, not on the first try.
-          expect(socket.lastConfig, contains('Jc = 3'));
-          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
-          expect(socket.lastTransport, isNull);
-          expect(
-            container.read(connectionProvider.notifier).obfuscationRung,
-            ObfuscationRung.awg,
-          );
-        },
-      );
+        // The server's floor is AWG, so the first start is already obfuscated
+        // and points straight at the node — on the obfuscated port, which is
+        // where a server offering that rung moved its whole tunnel. The stream
+        // rung is below it and is only reached on evidence, not on the first
+        // try.
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(socket.lastTransport, isNull);
+        expect(
+          container.read(connectionProvider.notifier).obfuscationRung,
+          ObfuscationRung.awg,
+        );
+      });
 
       test(
         'Android keeps AWG as the floor even when the region offers stream',
@@ -687,7 +692,7 @@ void main() {
           final (container, socket) = await seedStream();
 
           expect(socket.lastConfig, contains('Jc = 3'));
-          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
           expect(socket.lastTransport, isNull);
           expect(
             container.read(connectionProvider.notifier).obfuscationRung,
@@ -703,7 +708,7 @@ void main() {
 
         // A dead in-tunnel probe during a control-plane blackout justifies
         // restarting the config, but does not tell us this transport is blocked.
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
         expect(socket.lastConfig, isNot(contains('ListenPort = ')));
         expect(socket.lastConfig, contains('Jc = 3'));
         expect(
@@ -875,7 +880,8 @@ void main() {
           container.read(connectionProvider).recoveryAction,
           RecoveryAction.tryingAwg,
         );
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        // On the obfuscated port, which is where the server moved its tunnel.
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
         expect(socket.lastTransport, isNull);
 
         // A fresh handshake on the candidate confirms it. A later outage must
@@ -1031,51 +1037,90 @@ void main() {
         }
 
         expect(ctl.obfuscationRung, ObfuscationRung.awg);
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
         expect(socket.lastTransport, isNull);
         expect(container.read(connectionProvider).autoHealAttempts, 1);
       });
 
-      test(
-        'the bridge receives the transport spec on the stream rung',
-        () async {
-          useLinuxDataPlane();
-          final (container, socket) = await seedStream(
-            controlProbe: support.FakeControlProbe(true),
-          );
-          final ctl = container.read(connectionProvider.notifier);
+      test('the bridge receives the transport spec on the stream rung', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
 
-          await healOnce(container);
-          ctl.debugHandshakeReader = () async => DateTime.now();
-          await ctl.disconnect();
-          await ctl.connect();
-          staleHandshake(ctl);
-          await ctl.checkHealthOnce();
+        await healOnce(container);
+        ctl.debugHandshakeReader = () async => DateTime.now();
+        await ctl.disconnect();
+        await ctl.connect();
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
 
-          // The spec the helper receives is what makes the bridge real: the
-          // credential passes through from the control plane, and the two
-          // loopback addresses are this client's contribution, agreeing with
-          // the conf the same start built.
-          final spec = socket.lastTransport;
-          expect(spec, isNotNull);
-          expect(spec!['mode'], 'stream');
-          expect(spec['server'], 'vpn.example.net:443');
-          expect(spec['server_name'], 'vpn.example.net');
-          expect(spec['psk'], isNotEmpty);
-          expect(spec['listen'], isNot(spec['deliver']));
+        // The spec the helper receives is what makes the bridge real: the
+        // credential passes through from the control plane, and the two
+        // loopback addresses are this client's contribution, agreeing with
+        // the conf the same start built.
+        final spec = socket.lastTransport;
+        expect(spec, isNotNull);
+        expect(spec!['mode'], 'stream');
+        expect(spec['server'], 'vpn.example.net:443');
+        expect(spec['server_name'], 'vpn.example.net');
+        expect(spec['psk'], isNotEmpty);
+        expect(spec['listen'], isNot(spec['deliver']));
 
-          // The conf the same start built has to agree with the spec, or the
-          // tunnel's peer endpoint and the bridge's listener would be different
-          // addresses and nothing would ever handshake.
-          final listen = spec['listen'] as String;
-          final deliverPort = (spec['deliver'] as String).split(':').last;
-          expect(socket.lastConfig, contains('Endpoint = $listen'));
-          expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
-          // And the tunnel the bridge carries is the region's obfuscated one:
-          // the node's AmneziaWG device would drop stock datagrams.
-          expect(socket.lastConfig, contains('Jc = 3'));
-        },
-      );
+        // The conf the same start built has to agree with the spec, or the
+        // tunnel's peer endpoint and the bridge's listener would be different
+        // addresses and nothing would ever handshake.
+        final listen = spec['listen'] as String;
+        final deliverPort = (spec['deliver'] as String).split(':').last;
+        expect(socket.lastConfig, contains('Endpoint = $listen'));
+        expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
+        // And the tunnel the bridge carries is the server's obfuscated one: the
+        // node's AmneziaWG device would drop stock datagrams. The bridge
+        // reaches the node itself, so the obfuscated port is the node's to
+        // answer on — the conf's peer endpoint is the local bridge and says
+        // nothing about which node port the bridge dials.
+        expect(socket.lastConfig, contains('Jc = 3'));
+      });
+
+      // The port the rung is reached on is the property most easily lost in a
+      // refactor and most expensive when it is: a client that dialled wg_port at
+      // a server serving the awg rung would put a plaintext WireGuard handshake
+      // on the wire first — the exact fingerprint the rung exists to hide — and
+      // then fail to connect, which reads to the health ladder as a blocked
+      // network rather than a wrong port.
+      test('the awg rung dials the obfuscated port, never wg_port', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(
+          socket.lastConfig,
+          isNot(contains('Endpoint = 203.0.113.10:51820')),
+        );
+        expect(
+          container.read(connectionProvider.notifier).obfuscationRung,
+          ObfuscationRung.awg,
+        );
+      });
+
+      test('a server offering no awg port keeps the WireGuard port', () async {
+        useLinuxDataPlane();
+        // A backend predating the field, or a server whose row lost the port: the
+        // descriptor still says AWG, so there is nothing else to try but the one
+        // port the payload names.
+        final (container, socket) = await seedStream(
+          dial: () => dialJson(obfuscation: awgObfuscationJson()),
+        );
+
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(
+          container.read(connectionProvider.notifier).obfuscationRung,
+          ObfuscationRung.awg,
+        );
+      });
 
       test(
         'a region offering only the stream credential reaches it at once',
@@ -1191,7 +1236,8 @@ void main() {
         () async {
           useLinuxDataPlane();
           final (container, socket) = await seedStream(
-            dial: () => dialJson(obfuscation: awgObfuscationJson()),
+            dial: () =>
+                dialJson(obfuscation: awgObfuscationJson(), awgPort: 51821),
           );
           final ctl = container.read(connectionProvider.notifier);
 
@@ -1213,6 +1259,7 @@ void main() {
         final (container, socket) = await seedStream(
           dial: () => dialJson(
             obfuscation: awgObfuscationJson(),
+            awgPort: 51821,
             stream: streamTransportJson(
               psk: base64Encode(List<int>.filled(16, 0xbb)),
             ),

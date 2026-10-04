@@ -7,15 +7,15 @@ part of 'connection_controller.dart';
 /// rides a TLS session to the node, which is what defeats a network that blocks
 /// or fingerprints WireGuard's own UDP, and costs the most when it fails.
 ///
-/// The order is the walk order, but where the walk *starts* is the region's,
-/// not the process's: a stock region's node runs stock WireGuard, so native is
-/// its floor, while an obfuscated region's node runs the AmneziaWG device, so a
-/// stock datagram is illegible to it — native is not a cheap probe there but a
-/// guaranteed-failed attempt that would put a plaintext WireGuard handshake on
-/// the wire first. See [_rungFor].
+/// The order is the walk order, but where the walk *starts* is the serving
+/// server's, not the process's: a stock server's node runs stock WireGuard, so
+/// native is its floor, while an obfuscated server's node runs the AmneziaWG
+/// device, so a stock datagram is illegible to it — native is not a cheap probe
+/// there but a guaranteed-failed attempt that would put a plaintext WireGuard
+/// handshake on the wire first. See [_rungFor].
 ///
 /// The rungs are alternatives — one at a time, never stacked — but the *inner*
-/// WireGuard format follows the region, not the rung: an obfuscated region's
+/// WireGuard format follows the server, not the rung: an obfuscated server's
 /// node runs the AmneziaWG device, so the datagrams it receives must carry the
 /// obfuscation directives whether they arrive directly (AWG) or inside a stream
 /// transport. The stream's TLS session is the outer camouflage; the inner
@@ -38,9 +38,9 @@ enum ObfuscationRung {
   stream,
 }
 
-/// The obfuscation ladder. Where it *starts* is the region's data plane — a
-/// stock region starts on native, an obfuscated one on AmneziaWG, because its
-/// node cannot read a stock datagram (see [_rungFor]) — and every rung below
+/// The obfuscation ladder. Where it *starts* is the serving server's data plane
+/// — a stock server starts on native, an obfuscated one on AmneziaWG, because
+/// its node cannot read a stock datagram (see [_rungFor]) — and every rung below
 /// that is reached only when the health policy sees a dead tunnel path while
 /// the control plane is reachable (see [_demoteRung]).
 ///
@@ -57,28 +57,47 @@ extension ConnectionObfuscation on ConnectionController {
   /// rung after [ConnectionTuning.rungPromotionHealthyFor]; it returns to the
   /// known-working rung if liveness is not confirmed within
   /// [ConnectionTuning.rungPromotionProbeTimeout]. Region changes also move the
-  /// rung to the new floor or the highest rung that region can serve.
+  /// rung to the new floor or the highest rung that server can serve.
   ObfuscationRung get obfuscationRung => _obfuscationRung;
 
   /// The obfuscation parameters to build a conf for [dial] with, or null when
   /// this start's tunnel is stock WireGuard.
   ///
   /// The native rung is stock by definition, and it is only ever the floor of a
-  /// region whose node runs stock WireGuard. Every rung above it follows the
-  /// region: an obfuscated region's node runs the AmneziaWG device, so both the
+  /// server whose node runs stock WireGuard. Every rung above it follows the
+  /// server: an obfuscated server's node runs the AmneziaWG device, so both the
   /// AWG rung and the stream rung build an obfuscated conf, and the stream's
   /// bridge then carries those obfuscated datagrams inside its TLS session. The
-  /// format is the region's, not the rung's.
+  /// format is the server's, not the rung's.
   ObfuscationParams? _obfuscationParamsFor(DialParams dial) {
     if (_obfuscationRung == ObfuscationRung.native) return null;
     final obf = dial.obfuscation;
     return obf != null && obf.isAwg ? obf.params : null;
   }
 
+  /// The node's own UDP port for the rung this start is on.
+  ///
+  /// `awgPort` when the descriptor is AWG, `wgPort` otherwise — and the two are
+  /// not interchangeable: a node serving the obfuscated rung binds `awgPort` and
+  /// nothing listens on `wgPort`, so dialling `wgPort` there puts a plaintext
+  /// WireGuard handshake on the wire first, which is the fingerprint the rung
+  /// exists to hide, and then fails to connect besides.
+  ///
+  /// Falls back to `wgPort` when the descriptor is AWG but no `awg_port` came
+  /// with it. That is the shape of a backend predating the field, and dialling
+  /// the one port such a backend knows about is the only thing left to try; the
+  /// rung is never selected for it anyway, since a server that cannot name the
+  /// port is not offering the rung.
+  int _tunnelPortFor(DialParams dial) {
+    final obf = dial.obfuscation;
+    if (obf != null && obf.isAwg && dial.awgPort != null) return dial.awgPort!;
+    return dial.wgPort;
+  }
+
   /// The stream transport for this start, or null unless this process is on the
   /// stream rung.
   ///
-  /// Returns null when the region offers no credential, and throws when the rung
+  /// Returns null when the server offers no credential, and throws when the rung
   /// is selected but the platform or daemon cannot run it: those are different
   /// problems, and silently falling back to the native rung would defeat the
   /// heal that put us here by retrying the path just proven dead.
@@ -126,7 +145,7 @@ extension ConnectionObfuscation on ConnectionController {
     return true;
   }
 
-  /// The next cheaper rung this region can run, or null at its floor.
+  /// The next cheaper rung this server can run, or null at its floor.
   ObfuscationRung? _cheaperRungFor(DialParams dial) {
     final obf = dial.obfuscation;
     final floor = obf != null && obf.isAwg
@@ -326,7 +345,7 @@ extension ConnectionObfuscation on ConnectionController {
   /// ladder alone when the answer is no.
   bool _hasLowerRung(DialParams dial) => _nextRungFor(dial) != null;
 
-  /// The first rung below native that [dial]'s region and this platform can
+  /// The first rung below native that [dial]'s server and this platform can
   /// actually run, preferring AWG because it is the cheaper one.
   ObfuscationRung? _firstAvailableRung(DialParams dial) {
     if (_awgRungAvailable(dial)) return ObfuscationRung.awg;
@@ -339,14 +358,14 @@ extension ConnectionObfuscation on ConnectionController {
     return obf != null && obf.isAwg && awgDataPlaneSupported();
   }
 
-  /// Whether the stream rung could run here at all: the region must offer a
+  /// Whether the stream rung could run here at all: the server must offer a
   /// usable credential, this platform must have a data plane for it, and the
   /// installed daemon must advertise the capability. All three, because
   /// selecting the rung without any of them can only fail.
   ///
-  /// An obfuscated region adds a fourth: the stream's inner datagrams carry the
-  /// region's obfuscation directives, so this platform must also be able to run
-  /// the obfuscated data plane that produces them. On a stock region there is
+  /// An obfuscated server adds a fourth: the stream's inner datagrams carry the
+  /// server's obfuscation directives, so this platform must also be able to run
+  /// the obfuscated data plane that produces them. On a stock server there is
   /// no such requirement.
   bool _streamRungAvailable(DialParams dial) {
     final credential = dial.stream;
@@ -363,25 +382,25 @@ extension ConnectionObfuscation on ConnectionController {
 
   /// The rung to start [dial] on, given the process's current one.
   ///
-  /// Two rules, both about the region rather than the network:
+  /// Two rules, both about the serving server rather than the network:
   ///
-  ///  * Never start below the region's floor. A stock region's node runs stock
+  ///  * Never start below the server's floor. A stock server's node runs stock
   ///    WireGuard, so native is the floor and the cheapest rung. An obfuscated
-  ///    region's node runs the AmneziaWG device, so a stock datagram is
+  ///    server's node runs the AmneziaWG device, so a stock datagram is
   ///    illegible to it: a native start there is not a cheap probe but a
   ///    guaranteed-failed attempt that puts a plaintext WireGuard handshake on
   ///    the wire first — the exact fingerprint the rung exists to hide. Its
   ///    floor is AWG.
-  ///  * Never keep a rung the region cannot serve. A server move can land on a
-  ///    region with no stream credential, where a sticky stream rung could only
+  ///  * Never keep a rung the server cannot serve. A server move can land on a
+  ///    server with no stream credential, where a sticky stream rung could only
   ///    throw (see [_streamTransportFor]).
   ///
   /// The health policy's demotion survives both: this only raises to the floor
   /// and lowers to the ceiling, so a walk down the ladder is never undone.
   ///
-  /// A region whose format this build cannot produce a datagram for — an
-  /// obfuscated region off Linux (see `platform_info.dart`) — has no rung at
-  /// all, and null says so. Selection keeps such a region out of Auto and out of
+  /// A server whose format this build cannot produce a datagram for — an
+  /// obfuscated server off Linux (see `platform_info.dart`) — has no rung at
+  /// all, and null says so. Selection keeps such a server out of Auto and out of
   /// the failover candidates ([regionServable]), so this is reached only by a
   /// target the user pinned or the control plane handed back; [_applyRung]
   /// refuses rather than sending a native start the node cannot read.
@@ -396,19 +415,19 @@ extension ConnectionObfuscation on ConnectionController {
     return _obfuscationRung;
   }
 
-  /// Applies [_rungFor] before a start, logging the move, and refuses a region
+  /// Applies [_rungFor] before a start, logging the move, and refuses a server
   /// whose format this build cannot run.
   ///
   /// Called at the top of every [_startWith] — the one point a connect, a
   /// switch, a heal and a cold restore all pass through — so a move onto a
-  /// region with a different format can never start on the previous region's
-  /// rung, and an obfuscated region can never start native.
+  /// server with a different format can never start on the previous server's
+  /// rung, and an obfuscated server can never start native.
   ///
-  /// Refusing is the point: the region's node would reject every datagram this
-  /// side could send, so a native start there cannot connect and leaks the
-  /// plaintext handshake doing it. Selection keeps these regions out of the
-  /// automatic paths, so reaching this names a target the user chose or the
-  /// control plane returned.
+  /// Refusing is the point: the node would reject every datagram this side could
+  /// send, so a native start there cannot connect and leaks the plaintext
+  /// handshake doing it. Selection keeps these servers out of the automatic
+  /// paths, so reaching this names a target the user chose or the control plane
+  /// returned.
   void _applyRung(DialParams dial) {
     if (_promotionFallbackRung != null &&
         !identical(dial, _promotionFallbackDial)) {
@@ -418,8 +437,8 @@ extension ConnectionObfuscation on ConnectionController {
     final next = _rungFor(dial);
     if (next == null) {
       throw UnsupportedError(
-        'The region serving "${dial.serverName}" runs obfuscated WireGuard, '
-        'which this build cannot run. Choose a region with a stock data plane.',
+        'The server "${dial.serverName}" runs obfuscated WireGuard, '
+        'which this build cannot run. Choose a server with a stock data plane.',
       );
     }
     if (next == _obfuscationRung) return;

@@ -638,23 +638,31 @@ rest of the pipeline (which files, when, verify) is unchanged.
   kill escalates in ~15s rather than a full poll interval. There is no
   same-server config-refresh rung: a reboot-rotated server key is picked up
   by a server move or a manual reconnect.
-- Transport ladder: where it *starts* is the region's data plane, and a path
-  the health policy confirmed dead *locally* is rebuilt one rung lower per
+- Transport ladder: where it *starts* is the serving server's data plane, and a
+  path the health policy confirmed dead *locally* is rebuilt one rung lower per
   heal, so an unobstructed network pays nothing. `native` (platform WireGuard) →
   `awg` (in-process AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams
-  inside a TLS session to the node, Linux, Windows, and Android). A stock region's node
-  runs stock WireGuard, so its floor is `native`; an obfuscated region's node
+  inside a TLS session to the node, Linux, Windows, and Android). A stock server's node
+  runs stock WireGuard, so its floor is `native`; an obfuscated server's node
   runs the AmneziaWG device, so a stock datagram is illegible to it and its
   floor is `awg` — starting native there would be a guaranteed-failed attempt
   that put a plaintext WireGuard handshake on the wire first, which is exactly
   the fingerprint the rung exists to hide. The floor is re-derived on every
-  start, so a server move follows the new region's format and never keeps a
-  rung the new region cannot serve. A rung is only selected when the region can
+  start, so a server move follows the new server's format and never keeps a
+  rung the new server cannot serve. A rung is only selected when the server can
   serve it *and* this platform can run it *and* the data plane advertises
   `stream-transport` — the `boltmeshd` daemon advertises that token only on
   builds whose `up` would honour the spec, and the Android adapter advertises it
   for its in-process native bridge, so an older helper or a macOS one keeps the
   rung off the ladder instead of selecting a rung guaranteed to be refused.
+  - Each rung has its own node port. A server serving the `awg` rung has moved its
+    whole tunnel onto `awg_port` and nothing listens on `wg_port`, so the rung
+    dials `awg_port`; a stock server dials `wg_port`. Getting this wrong is not a
+    cosmetic mistake — it puts a plaintext WireGuard handshake on the wire at a
+    node that cannot read it, which is the fingerprint the rung exists to hide,
+    and then fails to connect, which the health ladder reads as a blocked
+    network rather than a wrong port. The dial payload therefore carries
+    `awg_port` beside `wg_port`, null on a server that does not offer the rung.
   - The two lower rungs have different platform reach. The **stream** transport
   is a bridge plus a way to keep the bridge's own egress off the tunnel it
   carries. The bridge is the same `boltmesh/stream` code everywhere; what
@@ -696,14 +704,14 @@ rest of the pipeline (which files, when, verify) is unchanged.
   within `rungPromotionProbeTimeout` (45s), so a probe costs one controlled
   restart and one stale connection at worst.
   One rung at a time — a start runs on a single rung, and the transport carries
-  the region's own inner format: an obfuscated region's stream is the AmneziaWG
+  the server's own inner format: an obfuscated server's stream is the AmneziaWG
   conf inside the TLS session, never a stock one.
   The rung step comes *before* the server move, because Layer 1 cannot tell a
   blocked transport from a dead node: a middlebox dropping this rung's traffic
   is indistinguishable from a powered-off server at the echo and the handshake.
   `serverDown` is the backend-attributed verdict that the node itself is gone,
   so that skips the ladder and moves straight on; anything else takes the
-  cheap local retry first. Where the region serves no lower rung there is
+  cheap local retry first. Where the server serves no lower rung there is
   nothing to step to, so a heal would only rebuild the same config on the same
   rung and the old move-first escalation is kept unchanged.
   A rung step additionally requires the control plane to *answer*: a blackout or
@@ -726,7 +734,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   server move, and a stall the new rung does not fix falls through to the
   existing escalation (move, then the surfaced recovery error), never a new
   failure mode. The rung is sticky across the reconnects that reset the budget,
-  so a region offering both AWG and stream stays on stream once it has stepped
+  so a server offering both AWG and stream stays on stream once it has stepped
   down — a reconnect preserves a demotion but never causes one.
   - Bypass-route lifetime. The pinned routes outlive the daemon that installed
     them, so the set is recorded beside the config and written *before* each

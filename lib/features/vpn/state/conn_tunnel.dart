@@ -166,7 +166,14 @@ extension ConnectionTunnel on ConnectionController {
       // On the stream rung the peer endpoint is the bridge's loopback address,
       // not the node: the bridge is what reaches the node.
       endpointHost: transport?.listen.split(':').first ?? dial.endpoint,
-      endpointPort: transport?.listenPort ?? dial.wgPort,
+      // Otherwise the node's own port for this rung. A node serving the
+      // obfuscated rung has moved its whole tunnel onto `awg_port` and nothing
+      // listens on `wg_port`, so dialling the latter would put a plaintext
+      // WireGuard handshake on the wire first — the fingerprint the rung exists
+      // to hide, and a guaranteed-failed attempt besides. Falls back to
+      // `wgPort` when the descriptor is AWG but the server names no port, which
+      // is the shape of a backend predating the field.
+      endpointPort: transport?.listenPort ?? _tunnelPortFor(dial),
       dns: dial.wgDns,
       allowLocal: allowLocal,
       obfuscation: _obfuscationParamsFor(dial),
