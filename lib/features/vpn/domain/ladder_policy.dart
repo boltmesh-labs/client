@@ -82,6 +82,14 @@ enum RecoveryStep {
 /// than at the call site, where one of them used to sit) is what makes the
 /// "the backend verdict skips the ladder" rule a tested row rather than an
 /// expression that has to be re-read to be trusted.
+///
+/// Deliberately a pure predicate over one tick, with no step counter of its own:
+/// the step is *one* rung and is idempotent — the caller reads the ladder off
+/// the dial, so a rung with nothing below it offers no step however healthy the
+/// budget is, and a rung with one below it offers exactly one. How many steps an
+/// incident may take is therefore the heal budget's alone
+/// (`ConnectionTuning.maxHealsPerIncident`, via `canAttemptAutoHeal`), which is
+/// what keeps the walk's length and the ladder's length from disagreeing.
 bool rungStepAvailable({
   required bool serverConfirmedDown,
   required bool lowerRungAvailable,

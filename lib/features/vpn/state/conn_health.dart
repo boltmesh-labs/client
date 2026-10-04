@@ -389,6 +389,7 @@ extension ConnectionHealth on ConnectionController {
       autoHealAttempts: snap.autoHealAttempts,
       autoFailoverAttempts: snap.autoFailoverAttempts,
       maxFailovers: ConnectionTuning.maxAutoFailovers,
+      maxHealsPerIncident: ConnectionTuning.maxHealsPerIncident,
       maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
     );
     final moveBudgetLeft =

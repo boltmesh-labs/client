@@ -102,21 +102,29 @@ void main() {
   });
 
   group('canAttemptAutoHeal', () {
-    test('allows one restart per incident', () {
+    test('allows the per-incident restarts, and no more', () {
+      // The ladder buys one rung per heal, so the cap is the walk's length
+      // rather than a single step: a dual-format node serves two rungs below
+      // its floor and a middlebox that blocks one usually blocks the other.
+      for (var attempts = 0; attempts < 2; attempts++) {
+        expect(
+          canAttemptAutoHeal(
+            autoHealAttempts: attempts,
+            autoFailoverAttempts: 0,
+            maxFailovers: maxFailovers,
+            maxHealsPerIncident: 2,
+            maxHealsAfterMoveBudget: 1,
+          ),
+          isTrue,
+          reason: 'heal $attempts of 2 is affordable',
+        );
+      }
       expect(
         canAttemptAutoHeal(
-          autoHealAttempts: 0,
+          autoHealAttempts: 2,
           autoFailoverAttempts: 0,
           maxFailovers: maxFailovers,
-          maxHealsAfterMoveBudget: 1,
-        ),
-        isTrue,
-      );
-      expect(
-        canAttemptAutoHeal(
-          autoHealAttempts: 1,
-          autoFailoverAttempts: 0,
-          maxFailovers: maxFailovers,
+          maxHealsPerIncident: 2,
           maxHealsAfterMoveBudget: 1,
         ),
         isFalse,
@@ -129,9 +137,26 @@ void main() {
           autoHealAttempts: 0,
           autoFailoverAttempts: maxFailovers,
           maxFailovers: maxFailovers,
+          maxHealsPerIncident: 2,
           maxHealsAfterMoveBudget: 1,
         ),
         isTrue,
+      );
+    });
+
+    test('the per-incident budget does not follow the move budget', () {
+      // With the move budget spent the second rung is not a cheap alternative
+      // to a move, just another restart of a path that is already proven dead,
+      // so the trailing budget takes over rather than the walk's length.
+      expect(
+        canAttemptAutoHeal(
+          autoHealAttempts: 1,
+          autoFailoverAttempts: maxFailovers,
+          maxFailovers: maxFailovers,
+          maxHealsPerIncident: 2,
+          maxHealsAfterMoveBudget: 1,
+        ),
+        isFalse,
       );
     });
   });

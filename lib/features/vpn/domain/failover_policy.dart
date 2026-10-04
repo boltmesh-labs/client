@@ -59,23 +59,26 @@ bool shouldEscalateToFailover({
 /// Whether a local cached-tunnel restart is still allowed for this failure
 /// incident.
 ///
-/// One restart can recover a wedged native tunnel without changing the
-/// server-side peer. Further restarts are not useful evidence of recovery: if
-/// the control plane is available, failover should take over; otherwise the
-/// controller waits rather than flapping the same tunnel forever.
+/// Before the move budget is spent the cap is [maxHealsPerIncident], which is
+/// what lets the transport ladder walk more than one rung on a node that serves
+/// more than one below its floor — a restart can recover a wedged native tunnel
+/// without changing the server-side peer, and each of them is also one rung step
+/// down the ladder (see `ladder_policy.dart`). Once the move budget is spent
+/// there is nowhere to move, so the trailing [maxHealsAfterMoveBudget] applies
+/// instead: further restarts are not useful evidence of recovery, so the
+/// controller waits for the control plane rather than flapping the same tunnel.
 bool canAttemptAutoHeal({
   required int autoHealAttempts,
   required int autoFailoverAttempts,
   required int maxFailovers,
+  required int maxHealsPerIncident,
   required int maxHealsAfterMoveBudget,
 }) {
-  // With the move budget spent there is nowhere to move, so the trailing
-  // same-server budget applies; before it, one restart per incident is the
-  // cap. Both are read from `ConnectionTuning` at the call site, so a
-  // retune there is a retune here.
+  // Both limits are read from `ConnectionTuning` at the call site, so a retune
+  // there is a retune here.
   final limit = autoFailoverAttempts >= maxFailovers
       ? maxHealsAfterMoveBudget
-      : 1;
+      : maxHealsPerIncident;
   return autoHealAttempts < limit;
 }
 

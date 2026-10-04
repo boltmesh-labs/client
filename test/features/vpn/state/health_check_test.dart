@@ -651,6 +651,7 @@ void main() {
         Set<String>? caps,
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
+        Map<String, dynamic> Function()? onStatus,
         List<Map<String, dynamic>> Function()? onRegions,
         GatewayProbe? gatewayProbe,
         ControlPlaneProbe? controlProbe,
@@ -667,7 +668,13 @@ void main() {
             if (o.path.endsWith('/vpn-regions')) {
               if (onRegions != null) return onRegions();
             }
-            if (o.path.endsWith('/status')) throw networkTimeout(o);
+            if (o.path.endsWith('/status')) {
+              // A quiet backend is the legacy default and is a legitimate thing
+              // to test; a suite that needs the *reachable* backend (which is
+              // what keeps a rung step from escalating to a move) answers.
+              if (onStatus != null) return onStatus();
+              throw networkTimeout(o);
+            }
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -784,12 +791,17 @@ void main() {
       });
 
       test('the walk reaches the stream rung on a second incident', () async {
-        // One rung per incident, because the heal budget is what buys the step
-        // and it is one restart per incident by design. The second step is where
-        // the inner format inverts: the node's bridge injects into its *stock*
-        // device, so a stream session carries stock datagrams whatever the node
-        // also serves. An obfuscated conf inside the TLS session would reach a
-        // device that does not speak them.
+        // One rung per incident: [stepDown] heals and then re-arms the heal
+        // budget, which is what a second outage does on its own. The second step
+        // is where the inner format inverts: the node's bridge injects into its
+        // *stock* device, so a stream session carries stock datagrams whatever
+        // the node also serves. An obfuscated conf inside the TLS session would
+        // reach a device that does not speak them.
+        //
+        // Re-arming is not incidental here — it is what keeps this row about the
+        // rung's shape. The walk inside a single incident needs a *reachable*
+        // backend so the escalation gate does not pre-empt the second step, and
+        // that is the row below.
         useLinuxDataPlane();
         final (container, socket) = await seedStream(
           controlProbe: support.FakeControlProbe(true),
@@ -803,6 +815,64 @@ void main() {
         expect(socket.lastConfig, contains('ListenPort = '));
         expect(socket.lastConfig, isNot(contains('Jc =')));
         expect(socket.lastTransport, isNotNull);
+      });
+
+      test('one incident walks both rungs a dual-format node serves below native', () async {
+        // The multi-step walk: one incident, both rungs, one heal each. A node
+        // serving `native`, `awg` and `stream` has two rungs to disprove, and
+        // the one most likely to disprove them — a middlebox fingerprinting
+        // WireGuard — takes stock and obfuscated together while leaving an
+        // ordinary TLS session alone. Stopping after one step would move servers
+        // on exactly the network where the rung that would have worked was never
+        // tried.
+        //
+        // The backend answers throughout, and that is not incidental: the
+        // escalation gate fires once a heal has run *and* the backend looks
+        // unreachable, so with a quiet backend the walk still stops after one
+        // step (the row above) and moves instead. A reachable backend with a dead
+        // tunnel path is precisely the blocked-transport signature the ladder
+        // exists for, and the only case in which a second rung is worth trying
+        // rather than a server move.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+          onStatus: () => activeStatusJson(),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        // A answered poll inside [ConnectionTuning.backendQuietFor] is what makes
+        // the backend look reachable; without it the gate below is satisfied by
+        // the never-polled slow track.
+        await ctl.pollStatusOnce();
+        expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+        final walked = <TransportRung>[];
+
+        // Heal twice on the same incident. The evidence is graduated and each
+        // heal clears the dead-echo run, so each step needs its own banking
+        // tick; the heal budget is never re-armed, which is the point.
+        for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+          await ctl.checkHealthOnce();
+          walked.add(ctl.transportRung);
+        }
+
+        // Both rungs below the floor, in advertised order — never a skip, never
+        // a repeat — and no move: the walk outranks the server move for as long
+        // as the budget lasts.
+        expect(walked, [TransportRung.awg, TransportRung.stream]);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+        // The stock datagrams inside the TLS session are the stream rung's own
+        // requirement, and this is where it is finally pinned: the walk arrived
+        // here from an obfuscated rung, so a format carried over from it would
+        // be a conf the node's bridge cannot read.
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastTransport, isNotNull);
+        expect(
+          container.read(connectionProvider).autoHealAttempts,
+          ConnectionTuning.maxHealsPerIncident,
+        );
       });
 
       test('a backend-confirmed dead node moves servers without stepping a rung', () async {
@@ -975,21 +1045,26 @@ void main() {
       test(
         'the rung step is bounded by the heal budget, then moves servers',
         () async {
-          // The other half of the contract: the ladder buys exactly one step,
-          // spent from the heal budget that already existed. Once that budget
-          // is spent, a confirmed dead path moves servers instead — so the
-          // ladder trades a move budget for a rung rather than granting an
-          // unbounded retry on the same rung.
+          // The other half of the contract: the ladder buys exactly as many
+          // steps as the heal budget allows ([ConnectionTuning
+          // .maxHealsPerIncident], one rung each), spent from the heal budget
+          // that already existed. Once that budget is spent, a confirmed dead
+          // path moves servers instead — so the ladder trades a move budget for
+          // a bounded number of rungs rather than granting an unbounded retry
+          // on the same rung.
           //
           // The budget is spent in-session rather than by healing first: a
-          // reconnect resets it by design, so waiting for a real heal to spend
-          // it would test the reset instead of the bound.
+          // reconnect resets it by design, so waiting for real heals to spend
+          // it would test the walk instead of the bound. What the walk itself
+          // does with those heals is the row above.
           useLinuxDataPlane();
           final (container, socket) = await seedStream(
             controlProbe: support.FakeControlProbe(true),
           );
           final ctl = container.read(connectionProvider.notifier);
-          ctl.snap = ctl.snap.copyWith(autoHealAttempts: 1);
+          ctl.snap = ctl.snap.copyWith(
+            autoHealAttempts: ConnectionTuning.maxHealsPerIncident,
+          );
 
           // Bank strike 1 on a handshake too fresh to act on.
           ctl.debugHandshakeReader = () async =>
@@ -1007,6 +1082,47 @@ void main() {
           final state = container.read(connectionProvider);
           expect(ctl.transportRung, TransportRung.native);
           expect(socket.lastTransport, isNull);
+          expect(state.autoFailoverAttempts, 1);
+        },
+      );
+
+      test(
+        'a walk that spent the budget moves servers instead of healing again',
+        () async {
+          // The end of the walk, on the node that serves the whole ladder. The
+          // rung is the bottom one and the budget is gone, so the same
+          // confirmed dead path that bought two steps now buys a move: that is
+          // the bound the ladder has to keep, and it is the reason the walk is
+          // a bounded walk rather than a loop.
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream(
+            controlProbe: support.FakeControlProbe(true),
+            onRegions: () => regionsList(twoServers()),
+            onSwitch: () => streamDial(
+              serverId: 'srv-2',
+              serverName: 'two',
+              endpoint: '203.0.113.11',
+              wgPublicKey: 'SRV2',
+            ),
+          );
+          final ctl = container.read(connectionProvider.notifier);
+
+          // Walk the ladder down and past its end, re-arming between incidents
+          // the way separate outages would, so this row is about the move and
+          // not about the walk above.
+          await stepDownTo(container, TransportRung.stream);
+          staleHandshake(ctl);
+          await ctl.checkHealthOnce();
+
+          final state = container.read(connectionProvider);
+          // The move kept the rung, because the new node advertises it too
+          // (see the ceiling clamp in `_rungFor`): a roam is not charged for
+          // the walk again, and the sticky rung only yields to a node that
+          // cannot serve it.
+          expect(ctl.transportRung, TransportRung.stream);
+          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+          expect(socket.lastTransport, isNotNull);
+          expect(state.dial?.serverId, 'srv-2');
           expect(state.autoFailoverAttempts, 1);
         },
       );
@@ -1842,7 +1958,9 @@ void main() {
     // exactly why the ceiling has to be able to move on its own. Re-assert the
     // spent budget the way `_autoHeal` does so this row measures the ceiling
     // rather than the heal budget.
-    ctl.snap = ctl.snap.copyWith(autoHealAttempts: 1);
+    ctl.snap = ctl.snap.copyWith(
+      autoHealAttempts: ConnectionTuning.maxHealsPerIncident,
+    );
     events.clear();
 
     // Just below the uncorroborated ceiling: nothing left to act on.
@@ -2484,8 +2602,8 @@ void main() {
 
   test('an unreachable control probe waits after the local heal', () async {
     // Gateway unprobeable (null echo) and the control probe is a performed
-    // failure: after one local heal, recovery must wait rather than stop the
-    // tunnel and spend a failover budget that cannot make an API call.
+    // failure: once the heal budget is spent, recovery must wait rather than stop
+    // the tunnel and spend a failover budget that cannot make an API call.
     final events = <String>[];
     final (container, _) = await seedConnected(
       events,
@@ -2504,14 +2622,18 @@ void main() {
     );
     final ctl = container.read(connectionProvider.notifier);
 
-    for (var i = 0; i < 2; i++) {
+    // Drain the whole heal budget first — one heal is no longer the cap, and a
+    // node serving no rung below spends each of them on the same config. The
+    // wait is what happens *after* the budget, so it needs a tick of its own.
+    for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
       await stallOnce(ctl);
     }
+    await stallOnce(ctl);
 
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-1');
-    expect(state.autoHealAttempts, 1);
+    expect(state.autoHealAttempts, ConnectionTuning.maxHealsPerIncident);
     expect(state.autoFailoverAttempts, 0);
     expect(state.recoveryAction, RecoveryAction.waiting);
     expect(state.recoveryReason, RecoveryReason.controlPlaneUnavailable);

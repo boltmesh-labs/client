@@ -713,9 +713,9 @@ rest of the pipeline (which files, when, verify) is unchanged.
   serving only `awg` and `stream` on `stream`. Region selection no longer filters
   on format at all: every server advertises `native`, so every region is dialable
   everywhere and a per-region filter could only ever exclude regions that would
-  have worked. Demotion rides the existing heal
-  (no new budget, timer, or state) and is sticky across connects — a reconnect
-  preserves a demotion but never causes one. The one exception is deliberate:
+  have worked. Demotion rides the existing heal (no new timer or state, and the
+  heal budget is the ladder's whole walk) and is sticky across connects — a
+  reconnect preserves a demotion but never causes one. The one exception is deliberate:
   after `rungPromotionHealthyFor` (24h) of positively healthy traffic the tick
   may probe a single cheaper rung, because a blocked transport is usually
   temporary (a captive portal, a hotel network, one blocked port) and a process
@@ -759,13 +759,25 @@ rest of the pipeline (which files, when, verify) is unchanged.
   of the ladder's ordering, and it lives in one pure decision
   (`domain/ladder_policy.dart`) with the evidence table in
   `test/features/vpn/domain/ladder_policy_test.dart`.
-  The heal budget is one restart per incident, so the ladder buys exactly one
-  step: once that is spent, the same confirmed-dead evidence escalates to the
-  server move, and a stall the new rung does not fix falls through to the
-  existing escalation (move, then the surfaced recovery error), never a new
-  failure mode. The rung is sticky across the reconnects that reset the budget,
-  so a server offering both AWG and stream stays on stream once it has stepped
-  down — a reconnect preserves a demotion but never causes one.
+  The heal budget is two restarts per incident (`maxHealsPerIncident`), one rung
+  per restart, so a node serving `native`, `awg` and `stream` is walked to the
+  bottom of its own list inside a single incident: a middlebox that fingerprints
+  WireGuard takes stock and obfuscated together while leaving an ordinary TLS
+  session alone, so stopping after one step would move servers on exactly the
+  network where the rung that would have worked was never tried. Once the budget
+  is spent the same confirmed-dead evidence escalates to the server move, and a
+  stall no rung fixes falls through to the existing escalation (move, then the
+  surfaced recovery error), never a new failure mode. It is the *walk* that is
+  bounded, not the retries — a node with one rung below gets exactly one step,
+  and a heal with nothing below spends itself on the current rung as before.
+  After the move budget is spent the trailing budget (`maxHealsAfterMoveBudget`)
+  takes over at one restart: with nowhere to move, the second rung is no longer
+  a cheap alternative to a move but just another restart of a path already proven
+  dead. The rung is sticky across the reconnects that reset the budget, so a
+  server offering both AWG and stream stays on stream once it has stepped down —
+  a reconnect preserves a demotion but never causes one, and a roam onto a node
+  that also serves the sticky rung keeps it rather than paying for the walk
+  again.
   - Bypass-route lifetime. The pinned routes outlive the daemon that installed
     them, so the set is recorded beside the config and written *before* each
     install — a crash in between would otherwise leak a `/32` nothing accounts

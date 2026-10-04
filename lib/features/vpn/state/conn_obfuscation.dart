@@ -13,10 +13,11 @@ part of 'connection_controller.dart';
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
 /// should be retried on a lower rung — but only when the control plane is
-/// reachable, so a general blackout does not demote the transport. This adds
-/// no recovery budget or polling timer. After a long healthy period, the health
-/// tick may probe one cheaper rung; the last known-working rung remains the
-/// rollback target until the candidate proves live.
+/// reachable, so a general blackout does not demote the transport. It costs no
+/// polling timer and no budget of its own: [ConnectionTuning.maxHealsPerIncident]
+/// is what bounds the walk. After a long healthy period, the health tick may
+/// probe one cheaper rung; the last known-working rung remains the rollback
+/// target until the candidate proves live.
 extension ConnectionObfuscation on ConnectionController {
   /// The rung this process is on. Demotions stay sticky across connects to
   /// avoid re-paying for a failed path. The health tick may probe one cheaper
@@ -125,13 +126,13 @@ extension ConnectionObfuscation on ConnectionController {
   /// Idempotent: a process already on the last advertised rung reports false, so
   /// the heal that demotes is also the only one that can.
   ///
-  /// The walk is a single step, not a jump: a heal that moved straight to the
-  /// bottom rung would skip the cheaper one and, if that failed, leave no evidence
-  /// about whether the rung in between would have worked. With the advertised
-  /// list there is no cheaper rung *unless the node says it runs one*, so the
-  /// skip concern only ever arises on a node that serves two rungs below the floor
-  /// — which the one-heal-per-incident budget does not yet walk through (see the
-  /// plan's Phase 4).
+  /// The walk is one rung per heal and never skips: with the advertised list
+  /// there is no cheaper rung *unless the node says it runs one*, and the rung
+  /// below is by definition the one the rung above has not disproved yet. How
+  /// many steps an incident gets is [ConnectionTuning.maxHealsPerIncident]'s
+  /// business, not this method's — a node serving two rungs below the floor is
+  /// walked to the bottom of its own list, and one rung below gets exactly one
+  /// step.
   ///
   /// [why] is the health reason that triggered the heal, so the log names the
   /// evidence the demotion acted on.
@@ -179,6 +180,7 @@ extension ConnectionObfuscation on ConnectionController {
           autoHealAttempts: snap.autoHealAttempts,
           autoFailoverAttempts: snap.autoFailoverAttempts,
           maxFailovers: ConnectionTuning.maxAutoFailovers,
+          maxHealsPerIncident: ConnectionTuning.maxHealsPerIncident,
           maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
         )) {
       return;
@@ -202,6 +204,7 @@ extension ConnectionObfuscation on ConnectionController {
             autoHealAttempts: snap.autoHealAttempts,
             autoFailoverAttempts: snap.autoFailoverAttempts,
             maxFailovers: ConnectionTuning.maxAutoFailovers,
+            maxHealsPerIncident: ConnectionTuning.maxHealsPerIncident,
             maxHealsAfterMoveBudget: ConnectionTuning.maxHealsAfterMoveBudget,
           ) ||
           currentConnectedAt == null ||

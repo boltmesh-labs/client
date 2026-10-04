@@ -136,6 +136,23 @@ abstract final class ConnectionTuning {
   /// automatic move to a different server.
   static const failoverHealThreshold = 1;
 
+  /// Same-server restarts allowed per failure incident, and so the number of
+  /// rung steps one incident can buy (see `ladder_policy.dart`).
+  ///
+  /// Two, because a dual-format node serves two rungs below its floor and the
+  /// two are different causes: a middlebox that fingerprints WireGuard blocks
+  /// `native` and `awg` together but has no reason to touch a TLS session, so a
+  /// walk that stopped after one step would move servers on a network where the
+  /// rung that would have worked was never tried. It is the *walk* that is
+  /// bounded, not the retries — a heal with nothing below spends itself on the
+  /// current rung exactly as before.
+  ///
+  /// The ladder length is what bounds this in practice: the step is always the
+  /// next advertised entry, so a node serving one rung below the floor gets one
+  /// step and no more, and once the bottom rung is reached the same confirmed
+  /// dead-path evidence moves servers instead.
+  static const maxHealsPerIncident = 2;
+
   /// Automatic server moves per connected session. Bounds ping-ponging
   /// while two servers are down; the health-tick cadence is the backoff.
   static const maxAutoFailovers = 3;
@@ -145,6 +162,10 @@ abstract final class ConnectionTuning {
   /// must wait for the control plane or surface an actionable error instead of
   /// restarting a proven-dead config forever (see
   /// [ConnectionRecovery._surfaceRecoveryExhausted]).
+  ///
+  /// Deliberately *not* [maxHealsPerIncident]: once there is nowhere to move,
+  /// the second rung is no longer a cheap alternative to a move but just another
+  /// restart of a path that is already proven dead.
   static const maxHealsAfterMoveBudget = 1;
 
   /// Stable connected time before probing one cheaper transport rung. The

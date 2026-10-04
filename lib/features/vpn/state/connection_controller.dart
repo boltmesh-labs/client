@@ -169,8 +169,11 @@ class ConnectionController extends Notifier<ConnState> {
   /// probes one cheaper rung; absent liveness within the probe window, it
   /// returns to the rung that was working. A restart re-probes the node's floor.
   ///
-  /// Walked one rung per qualifying heal by [_demoteRung]; see
-  /// [TransportRung] for the order and why the stream rung is last.
+  /// Walked one rung per qualifying heal by [_demoteRung], so an incident spends
+  /// up to [ConnectionTuning.maxHealsPerIncident] of them — a node serving two
+  /// rungs below its floor is walked to the bottom of its own list, and one
+  /// serving a single rung below gets exactly one step. See [TransportRung] for
+  /// the order and why the stream rung is last.
   TransportRung _transportRung = TransportRung.native;
 
   /// Previous known-working rung while a controlled cheaper-rung probe is in
