@@ -145,12 +145,13 @@ extension ConnectionTunnel on ConnectionController {
     }
     final allowLocal = await _device.allowLocal();
     if (!sessionCurrent()) return;
-    // The rung this start runs on: the region's floor, then the rung the health
-    // policy has selected through demotion or a confirmed promotion probe.
+    // The rung this start runs on: the serving node's floor, then whatever rung the
+    // health policy has selected through demotion or a confirmed promotion probe.
     // Applied here because this is the one point a connect, switch, heal,
-    // promotion and cold restore all pass through, so a move onto a region with
-    // a different format can never inherit the previous region's rung — and an
-    // obfuscated region can never start native. See `conn_obfuscation.dart`.
+    // promotion and cold restore all pass through, so a move onto a node with a
+    // different rung list can never inherit the previous node's rung, and can
+    // never start on a rung the new node does not serve. See
+    // `conn_obfuscation.dart`.
     _applyRung(dial);
     // The transport the ladder selected for this start. Native resolves to null
     // and costs an unobstructed network nothing; the stream rung rewrites the
@@ -169,13 +170,11 @@ extension ConnectionTunnel on ConnectionController {
       // On the stream rung the peer endpoint is the bridge's loopback address,
       // not the node: the bridge is what reaches the node.
       endpointHost: transport?.listen.split(':').first ?? dial.endpoint,
-      // Otherwise the node's own port for this rung. A node serving the
-      // obfuscated rung has moved its whole tunnel onto `awg_port` and nothing
-      // listens on `wg_port`, so dialling the latter would put a plaintext
-      // WireGuard handshake on the wire first — the fingerprint the rung exists
-      // to hide, and a guaranteed-failed attempt besides. Falls back to
-      // `wgPort` when the descriptor is AWG but the server names no port, which
-      // is the shape of a backend predating the field.
+      // Otherwise the port this rung's own entry advertises. The node runs a
+      // separate device per rung on its own port, so dialling another rung's port
+      // would put a plaintext WireGuard handshake on the wire at a device that
+      // cannot read it — the fingerprint the awg rung exists to hide, and a
+      // guaranteed-failed attempt besides.
       endpointPort: transport?.listenPort ?? _tunnelPortFor(dial),
       dns: _overlayDnsFor(dial),
       allowLocal: allowLocal,

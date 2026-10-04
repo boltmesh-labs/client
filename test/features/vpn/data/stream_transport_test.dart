@@ -15,6 +15,16 @@ StreamTransport validCredential({List<String>? pins}) => StreamTransport(
   clientId: base64.encode(List<int>.filled(streamClientIDSize, 0xcc)),
 );
 
+/// [validCredential], spelled out as a wire object for a fixture the ladder
+/// decodes end to end.
+Map<String, Object?> validCredentialJson() => {
+  'server': 'vpn.example.net:443',
+  'server_name': 'vpn.example.net',
+  'spki_sha256': [base64.encode(List<int>.filled(streamSPKISize, 0xaa))],
+  'psk': base64.encode(List<int>.filled(streamPSKSize, 0xbb)),
+  'client_id': base64.encode(List<int>.filled(streamClientIDSize, 0xcc)),
+};
+
 void main() {
   group('StreamTransport.isUsable', () {
     test('accepts a complete credential', () {
@@ -63,7 +73,7 @@ void main() {
       });
     });
 
-    test('an absent stream decodes to null, not a broken credential', () {
+    test('a node with no stream rung offers no credential', () {
       final dial = DialParams.fromJson(const {
         'id': 'dev-1',
         'assigned_ip': '10.8.0.5',
@@ -73,10 +83,10 @@ void main() {
         'wg_dns': '10.8.0.1',
         'wg_public_key': 'SRV',
       });
-      expect(dial.stream, isNull);
+      expect(dial.transportFor(TransportRung.stream), isNull);
     });
 
-    test('decodes the backend stream object field for field', () {
+    test('decodes the stream entry field for field', () {
       final credential = validCredential();
       final dial = DialParams.fromJson({
         'id': 'dev-1',
@@ -86,15 +96,57 @@ void main() {
         'wg_port': 51820,
         'wg_dns': '10.8.0.1',
         'wg_public_key': 'SRV',
-        'stream': {
-          'server': credential.server,
-          'server_name': credential.serverName,
-          'spki_sha256': credential.spkiPins,
-          'psk': credential.psk,
-          'client_id': credential.clientId,
-        },
+        'transports': [
+          {'rung': 'native', 'port': 51820},
+          {
+            'rung': 'stream',
+            'port': 443,
+            'credential': {
+              'server': credential.server,
+              'server_name': credential.serverName,
+              'spki_sha256': credential.spkiPins,
+              'psk': credential.psk,
+              'client_id': credential.clientId,
+            },
+          },
+        ],
       });
-      expect(dial.stream, credential);
+      final entry = dial.transportFor(TransportRung.stream)!;
+      expect(entry.credential, credential);
+      // The port rides with the credential, so a bridge never has to read a
+      // sibling field to find where to dial.
+      expect(entry.port, 443);
+    });
+
+    test('a malformed credential leaves the rung off the list', () {
+      // A PSK the daemon would refuse must never be turned into a transport.
+      // The entry still decodes — a malformed value is a thing to inspect — but
+      // it is not complete, so the ladder never sees an offer it cannot honour.
+      final dial = DialParams.fromJson({
+        'id': 'dev-1',
+        'assigned_ip': '10.8.0.5',
+        'server_id': 'srv-1',
+        'endpoint': '203.0.113.10',
+        'wg_port': 51820,
+        'wg_dns': '10.8.0.1',
+        'wg_public_key': 'SRV',
+        'transports': [
+          {'rung': 'native', 'port': 51820},
+          {
+            'rung': 'stream',
+            'port': 443,
+            'credential': {
+              'server': validCredential().server,
+              'server_name': validCredential().serverName,
+              'spki_sha256': validCredential().spkiPins,
+              'psk': base64.encode(List<int>.filled(16, 1)),
+              'client_id': validCredential().clientId,
+            },
+          },
+        ],
+      });
+      expect(dial.advertisedRungs, [TransportRung.native]);
+      expect(dial.transportFor(TransportRung.stream), isNull);
     });
   });
 

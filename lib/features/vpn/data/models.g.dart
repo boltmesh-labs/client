@@ -6,15 +6,33 @@ part of 'models.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-_Obfuscation _$ObfuscationFromJson(Map<String, dynamic> json) => _Obfuscation(
-  mode: json['mode'] as String? ?? '',
-  params: json['params'] == null
-      ? null
-      : ObfuscationParams.fromJson(json['params'] as Map<String, dynamic>),
-);
+_TransportOption _$TransportOptionFromJson(Map<String, dynamic> json) =>
+    _TransportOption(
+      rung: TransportRung.fromWire(json['rung'] as String?),
+      port: (json['port'] as num).toInt(),
+      params: json['params'] == null
+          ? null
+          : ObfuscationParams.fromJson(json['params'] as Map<String, dynamic>),
+      credential: json['credential'] == null
+          ? null
+          : StreamTransport.fromJson(
+              json['credential'] as Map<String, dynamic>,
+            ),
+    );
 
-Map<String, dynamic> _$ObfuscationToJson(_Obfuscation instance) =>
-    <String, dynamic>{'mode': instance.mode, 'params': instance.params};
+Map<String, dynamic> _$TransportOptionToJson(_TransportOption instance) =>
+    <String, dynamic>{
+      'rung': _$TransportRungEnumMap[instance.rung],
+      'port': instance.port,
+      'params': instance.params,
+      'credential': instance.credential,
+    };
+
+const _$TransportRungEnumMap = {
+  TransportRung.native: 'native',
+  TransportRung.awg: 'awg',
+  TransportRung.stream: 'stream',
+};
 
 _ObfuscationParams _$ObfuscationParamsFromJson(
   Map<String, dynamic> json,
@@ -78,16 +96,14 @@ _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   serverName: json['server_name'] as String? ?? '',
   endpoint: json['endpoint'] as String,
   wgPort: (json['wg_port'] as num).toInt(),
-  awgPort: (json['awg_port'] as num?)?.toInt(),
   wgDns: json['wg_dns'] as String,
   wgPublicKey: json['wg_public_key'] as String,
   clientPublicKey: json['client_public_key'] as String?,
-  obfuscation: json['obfuscation'] == null
-      ? null
-      : Obfuscation.fromJson(json['obfuscation'] as Map<String, dynamic>),
-  stream: json['stream'] == null
-      ? null
-      : StreamTransport.fromJson(json['stream'] as Map<String, dynamic>),
+  transports:
+      (json['transports'] as List<dynamic>?)
+          ?.map((e) => TransportOption.fromJson(e as Map<String, dynamic>))
+          .toList() ??
+      const <TransportOption>[],
 );
 
 Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
@@ -100,12 +116,10 @@ Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
       'server_name': instance.serverName,
       'endpoint': instance.endpoint,
       'wg_port': instance.wgPort,
-      'awg_port': instance.awgPort,
       'wg_dns': instance.wgDns,
       'wg_public_key': instance.wgPublicKey,
       'client_public_key': instance.clientPublicKey,
-      'obfuscation': instance.obfuscation,
-      'stream': instance.stream,
+      'transports': instance.transports,
     };
 
 _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>
@@ -117,9 +131,6 @@ _DiscoveryServer _$DiscoveryServerFromJson(Map<String, dynamic> json) =>
       wgDns: json['wg_dns'] as String? ?? '',
       wgPublicKey: json['wg_public_key'] as String?,
       activePeers: (json['active_peers'] as num?)?.toInt() ?? 0,
-      obfuscation: json['obfuscation'] == null
-          ? null
-          : Obfuscation.fromJson(json['obfuscation'] as Map<String, dynamic>),
     );
 
 Map<String, dynamic> _$DiscoveryServerToJson(_DiscoveryServer instance) =>
@@ -131,7 +142,6 @@ Map<String, dynamic> _$DiscoveryServerToJson(_DiscoveryServer instance) =>
       'wg_dns': instance.wgDns,
       'wg_public_key': instance.wgPublicKey,
       'active_peers': instance.activePeers,
-      'obfuscation': instance.obfuscation,
     };
 
 _ServerStatus _$ServerStatusFromJson(Map<String, dynamic> json) =>

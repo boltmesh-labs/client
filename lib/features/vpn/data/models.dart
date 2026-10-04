@@ -23,36 +23,58 @@ DateTime? _parseExpiry(Object? value) =>
 
 String? _serverHealthToWire(ServerHealth? value) => value?.wire;
 
-/// Per-server tunnel obfuscation descriptor (backend `obfuscation` object).
+/// One rung the serving node advertises on the dial payload
+/// (backend `TransportOptionOut`).
 ///
-/// Null or `mode: ''` is the native WireGuard data plane. `awg` selects the
-/// obfuscated data plane with a complete parameter set — both tunnel ends
-/// must run identical parameters, so a descriptor with a mode but no params
-/// is a misconfiguration the client treats as native rather than building a
-/// half-obfuscated tunnel that can never handshake.
+/// The rung's *own* payload rides the entry: the port that rung's device binds,
+/// and the parameters or credential it needs. Nothing about a rung is spread
+/// across sibling fields, so "which rungs can this node serve" is answered by
+/// reading the list rather than by inferring it from which optional fields
+/// happen to be present.
 @freezed
-abstract class Obfuscation with _$Obfuscation {
-  const Obfuscation._();
+abstract class TransportOption with _$TransportOption {
+  const TransportOption._();
 
-  const factory Obfuscation({
-    @Default('') String mode,
-    ObfuscationParams? params,
-  }) = _Obfuscation;
+  const factory TransportOption({
+    /// The wire rung name. Unknown values decode to null rather than throwing,
+    /// and a null [rung] makes the entry unusable — see [runnable].
+    @JsonKey(name: 'rung', fromJson: TransportRung.fromWire)
+    TransportRung? rung,
+    required int port,
+    // The complete AmneziaWG parameter set, on the `awg` rung only. Both tunnel
+    // ends run these values, so an incomplete set is never emitted into a conf.
+    @JsonKey(name: 'params') ObfuscationParams? params,
+    // This device's stream credential, on the `stream` rung only.
+    @JsonKey(name: 'credential') StreamTransport? credential,
+  }) = _TransportOption;
 
-  factory Obfuscation.fromJson(Map<String, Object?> json) =>
-      _$ObfuscationFromJson(json);
+  factory TransportOption.fromJson(Map<String, Object?> json) =>
+      _$TransportOptionFromJson(json);
 
-  /// True when this descriptor selects the obfuscated (AmneziaWG) data
-  /// plane *and* carries the complete parameter set to build a conf with.
-  bool get isAwg => mode == 'awg' && params != null && params!.isComplete;
+  /// Whether a conf can be built for this entry here and now.
+  ///
+  /// Structural completeness only — whether *this platform* has the data plane
+  /// is the ladder's question, not the payload's. So a rung this build cannot
+  /// run is well-formed but not runnable, and a rung whose payload is missing
+  /// or incomplete is not runnable anywhere, which is what makes a half-built
+  /// entry from the control plane indistinguishable from a rung that was never
+  /// advertised: both are simply absent from the ladder.
+  bool get isComplete => switch (rung) {
+    TransportRung.native => params == null && credential == null,
+    TransportRung.awg =>
+      params != null && params!.isComplete && credential == null,
+    TransportRung.stream =>
+      credential != null && credential!.isUsable && params == null,
+    null => false,
+  };
 }
 
-/// AmneziaWG obfuscation parameters (`params` object). Mirrors the backend
-/// contract: counts/sizes as numbers, magic-header ranges as `[lo, hi]`
-/// pairs. Fields decode leniently (nullable) so a partial descriptor from a
-/// buggy backend never breaks the whole dial payload — [isComplete] is the
-/// gate, and both tunnel ends must run identical values, so an incomplete
-/// set is never emitted into a conf.
+/// AmneziaWG obfuscation parameters (a transport entry's `params` object).
+/// Mirrors the backend contract: counts/sizes as numbers, magic-header ranges
+/// as `[lo, hi]` pairs. Fields decode leniently (nullable) so a partial
+/// descriptor from a buggy backend never breaks the whole dial payload —
+/// [isComplete] is the gate, and both tunnel ends must run identical values,
+/// so an incomplete set is never emitted into a conf.
 @freezed
 abstract class ObfuscationParams with _$ObfuscationParams {
   const ObfuscationParams._();
@@ -109,7 +131,38 @@ abstract class ObfuscationParams with _$ObfuscationParams {
       range[0] <= range[1];
 }
 
-/// Per-device stream-transport credential (backend `stream` object).
+/// The transports a node can serve a device on (backend `TransportRungEnum`).
+///
+/// Declaration order is the cost order, which is the order the ladder walks down,
+/// but it is documentation rather than the contract: a client takes the order off
+/// the advertised list, because that list is what the node actually serves. An
+/// unknown wire value decodes to null so a rung added to the backend later
+/// degrades to "not offered" rather than being mistaken for one this build can
+/// start.
+enum TransportRung {
+  /// The kernel WireGuard device, pointed straight at the node.
+  native,
+
+  /// The in-process AmneziaWG device.
+  awg,
+
+  /// The tunnel's datagrams carried inside a TLS session to the node.
+  stream;
+
+  /// Wire value, for tests and logs.
+  String get wire => name;
+
+  static TransportRung? fromWire(String? value) {
+    if (value == null) return null;
+    for (final v in values) {
+      if (v.name == value) return v;
+    }
+    return null;
+  }
+}
+
+/// Per-device stream-transport credential (a transport entry's `credential`
+/// object).
 ///
 /// Carries everything the helper's in-process bridge needs to carry the
 /// tunnel's datagrams to the node inside a TLS session: the node's address and
@@ -179,6 +232,8 @@ bool _base64OfSize(String value, int size) {
 
 @freezed
 abstract class DialParams with _$DialParams {
+  const DialParams._();
+
   const factory DialParams({
     @JsonKey(name: 'id') required String deviceId,
     @JsonKey(name: 'assigned_ip') required String assignedIp,
@@ -197,13 +252,6 @@ abstract class DialParams with _$DialParams {
     @JsonKey(name: 'server_name') @Default('') String serverName,
     required String endpoint,
     @JsonKey(name: 'wg_port') required int wgPort,
-    // The port the node's obfuscated listener binds, or null when the serving
-    // server does not offer that rung. Separate from [wgPort] because a server
-    // that offers it has moved its whole tunnel onto this port: a client that
-    // dialled `wgPort` there would put a plaintext WireGuard handshake on the
-    // wire first, which is exactly the fingerprint the rung exists to hide.
-    // Null is what makes "not offered" legible to the ladder.
-    @JsonKey(name: 'awg_port') int? awgPort,
     @JsonKey(name: 'wg_dns') required String wgDns,
     @JsonKey(name: 'wg_public_key') required String wgPublicKey,
     // The server's active peer public key for this device (`GET …/config` and
@@ -211,13 +259,43 @@ abstract class DialParams with _$DialParams {
     // when present the controller verifies the stored keypair matches before
     // starting a tunnel, repairing a divergence a lost bind response can leave.
     @JsonKey(name: 'client_public_key') String? clientPublicKey,
-    // The serving node's obfuscation descriptor. Null on backends that predate
-    // the field (native data plane).
-    @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
-    // This device's stream-transport credential. Null on backends that predate
-    // the field, and for a node that runs no ingress.
-    @JsonKey(name: 'stream') StreamTransport? stream,
+    // Every rung this node serves this device on, cheapest first — the ladder the
+    // client walks. Each entry carries the port that rung's own device binds, plus
+    // the parameters or credential it needs, so nothing about a rung has to be
+    // inferred from sibling fields.
+    //
+    // A rung absent from this list is a rung the node does not serve, which is
+    // how "not offered" and "offered but unusable" are the same thing to the
+    // ladder: neither can be started, and on-device they look identical to a
+    // blocked network, so the control plane withholds rather than emits an entry
+    // that cannot be built.
+    @JsonKey(name: 'transports')
+    @Default(<TransportOption>[])
+    List<TransportOption> transports,
   }) = _DialParams;
+
+  /// The rung this node serves on [rung], or null when it does not serve it.
+  ///
+  /// The single place a rung's advertisement is read, so "is this rung offered"
+  /// and "what does building it need" cannot disagree. Entries that are not
+  /// [TransportOption.isComplete] are treated as absent: an entry this build
+  /// cannot assemble is not an offer.
+  TransportOption? transportFor(TransportRung rung) {
+    for (final option in transports) {
+      if (option.rung == rung) return option.isComplete ? option : null;
+    }
+    return null;
+  }
+
+  /// The rungs this node serves, cheapest first, in this build's terms.
+  ///
+  /// [transports] filtered to the entries a conf could actually be built from.
+  /// Callers that need to *start* on this server ask [transportFor]; this is the
+  /// ordered view the ladder walks and the floor rule reads.
+  List<TransportRung> get advertisedRungs => [
+    for (final t in transports)
+      if (t.isComplete) t.rung!,
+  ];
 
   factory DialParams.fromJson(Map<String, Object?> json) =>
       _$DialParamsFromJson(json);
@@ -235,9 +313,6 @@ abstract class DiscoveryServer with _$DiscoveryServer {
     @JsonKey(name: 'wg_dns') @Default('') String wgDns,
     @JsonKey(name: 'wg_public_key') String? wgPublicKey,
     @JsonKey(name: 'active_peers') @Default(0) int activePeers,
-    // This node's own obfuscation descriptor. Null on backends that predate the
-    // field (native data plane).
-    @JsonKey(name: 'obfuscation') Obfuscation? obfuscation,
   }) = _DiscoveryServer;
 
   factory DiscoveryServer.fromJson(Map<String, Object?> json) =>

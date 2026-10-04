@@ -18,7 +18,13 @@ import 'fakes.dart' as support;
 /// an exact size.
 String base64Encode(List<int> bytes) => base64.encode(bytes);
 
-/// Canonical successful dial payload (backend `DialOut`).
+/// Canonical dial payload (backend `VpnDeviceCreateOut`).
+///
+/// [transports] is the ladder the client walks, so a suite that wants a rung
+/// passes [awgPort] or [stream] and this assembles the ordered entry for it —
+/// which is what a node serving it actually sends. A rung whose payload was
+/// withheld is simply absent from the list, the same shape as a node that never
+/// served it, and that indistinguishability is the point of the withholding.
 Map<String, dynamic> dialJson({
   String deviceId = 'dev-1',
   String serverId = 'srv-1',
@@ -26,59 +32,66 @@ Map<String, dynamic> dialJson({
   String assignedIp = '10.8.0.5',
   String endpoint = '203.0.113.10',
   int wgPort = 51820,
+  // The awg rung's own port. Naming it is what puts the entry in the list, the
+  // way a node's `awg_enabled` puts it there.
   int? awgPort,
   String wgDns = '10.8.0.1',
   String wgPublicKey = 'SRV',
   String? clientPublicKey,
-  Object? obfuscation,
+  // The awg entry's params. Omit for the canonical complete set; pass a raw map
+  // to break it, or omit the entry entirely by leaving [awgPort] null.
+  Object? awgParams,
+  // The stream rung's credential. Omitted — rung absent — when null, matching a
+  // node that runs no ingress or has issued this device no credential.
   Object? stream,
   // The obfuscated overlay's address. Derived from [awgPort] rather than passed:
-  // a node serving the awg rung has to name all three of the rung's ingredients
-  // (descriptor, port, address) or the client treats the rung as not offered,
-  // which is the point of the withholding. Deriving keeps the awg suites from
-  // restating it and keeps the native suites (no awgPort) on the absent path they
-  // mean to exercise.
+  // a node serving the awg rung has to name the rung's ingredients *and* the
+  // address its second device routes, or the client treats the rung as not
+  // offered. Deriving keeps the awg suites from restating it and keeps the native
+  // suites (no awgPort) on the absent path they mean to exercise.
   //
-  // Pass `''` for the *incomplete* shapes the withholding has to survive — a
-  // server advertising the port with no address on the overlay it would need.
+  // Pass `''` for the *incomplete* shapes the withholding has to survive — an
+  // advertised rung with no address on the overlay it would need.
   String? awgAssignedIp,
   String awgDns = '10.9.0.1',
 }) {
-  final servesAwg = awgPort != null;
   final address = awgAssignedIp ?? '10.9.0.5';
+  // The overlay address rides with the rung: a node serving no second device has
+  // no second network for it to live on.
+  final servesAwgAddress = awgPort != null && address.isNotEmpty;
   return {
     'id': deviceId,
     'assigned_ip': assignedIp,
-    // Omitted unless the awg rung is served, matching a server that does not offer
-    // it. A second address rather than a second copy of `assigned_ip`: the node
-    // runs one overlay per device, and a stock address is unreachable on the
-    // obfuscated one.
-    'awg_assigned_ip': ?(servesAwg && address.isNotEmpty ? address : null),
-    'awg_dns': ?(servesAwg && address.isNotEmpty ? awgDns : null),
+    'awg_assigned_ip': ?(servesAwgAddress ? address : null),
+    'awg_dns': ?(servesAwgAddress ? awgDns : null),
     'server_id': serverId,
     'server_name': serverName,
     'endpoint': endpoint,
     'wg_port': wgPort,
-    // Omitted by default, matching a server that does not offer the awg rung —
-    // the native data plane. Obfuscation suites pass both this and
-    // [awgObfuscationJson], because the node runs a separate device for that rung
-    // on its own port and the client must dial it.
-    'awg_port': ?awgPort,
     'wg_dns': wgDns,
     'wg_public_key': wgPublicKey,
     // Omitted when null: existing suites assert the pre-field behavior. A suite
     // exercising key reconciliation supplies the server-side peer key.
     'client_public_key': ?clientPublicKey,
-    // Same: omitted by default so existing suites exercise the native
-    // data plane. Obfuscation suites pass [awgObfuscationJson], and the
-    // stream-transport suites pass a `stream` credential object.
-    'obfuscation': ?obfuscation,
-    'stream': ?stream,
+    // Cheapest first, which is the order the ladder walks. `native` is always
+    // present: every node runs a stock device, and that is what makes it the rung
+    // a client can always start on.
+    'transports': [
+      {'rung': 'native', 'port': wgPort},
+      if (awgPort != null)
+        {
+          'rung': 'awg',
+          'port': awgPort,
+          'params': awgParams ?? awgObfuscationParamsJson(),
+        },
+      if (stream != null) {'rung': 'stream', 'port': 443, 'credential': stream},
+    ],
   };
 }
 
-/// Canonical per-device stream-transport credential (backend `stream` object):
-/// the node's TLS address, a certificate pin, and this device's PSK and id.
+/// Canonical per-device stream-transport credential (a transport entry's
+/// `credential` object): the node's TLS address, a certificate pin, and this
+/// device's PSK and id.
 Map<String, dynamic> streamTransportJson({
   String server = 'vpn.example.net:443',
   String serverName = 'vpn.example.net',
@@ -92,29 +105,41 @@ Map<String, dynamic> streamTransportJson({
   'client_id': base64Encode(List<int>.filled(16, 0xcc)),
 };
 
-/// Canonical complete AmneziaWG obfuscation descriptor (backend
-/// `obfuscation` object): counts/sizes as numbers, magic-header ranges as
-/// `[lo, hi]` pairs. Both tunnel ends must run identical values.
-Map<String, dynamic> awgObfuscationJson() => {
-  'mode': 'awg',
-  'params': {
-    'jc': 3,
-    'jmin': 40,
-    'jmax': 70,
-    's1': 15,
-    's2': 17,
-    's3': 10,
-    's4': 5,
-    'h1': [115, 120],
-    'h2': [130, 130],
-    'h3': [150, 160],
-    'h4': [171, 171],
-  },
+/// Canonical complete AmneziaWG parameter set (a transport entry's `params`):
+/// counts/sizes as numbers, magic-header ranges as `[lo, hi]` pairs. Both tunnel
+/// ends must run identical values.
+Map<String, dynamic> awgObfuscationParamsJson() => {
+  'jc': 3,
+  'jmin': 40,
+  'jmax': 70,
+  's1': 15,
+  's2': 17,
+  's3': 10,
+  's4': 5,
+  'h1': [115, 120],
+  'h2': [130, 130],
+  'h3': [150, 160],
+  'h4': [171, 171],
 };
 
-/// [awgObfuscationJson] decoded into the model, for suites that build discovery
-/// or region objects rather than a dial payload.
-Obfuscation awgObfuscation() => Obfuscation.fromJson(awgObfuscationJson());
+/// [awgObfuscationParamsJson] decoded into the model, for suites that build a
+/// rung entry rather than a whole dial payload.
+ObfuscationParams awgObfuscationParams() =>
+    ObfuscationParams.fromJson(awgObfuscationParamsJson());
+
+/// The awg rung's ladder entry against [awgPort], for suites that need to put the
+/// rung on a list they assemble by hand.
+Map<String, dynamic> awgTransportJson({int port = 51821}) => {
+  'rung': 'awg',
+  'port': port,
+  'params': awgObfuscationParamsJson(),
+};
+
+/// The stream rung's ladder entry against [stream].
+Map<String, dynamic> streamTransportEntryJson(
+  Map<String, dynamic> stream, {
+  int port = 443,
+}) => {'rung': 'stream', 'port': port, 'credential': stream};
 
 /// [dialJson] for the same server after a reboot rotated its WireGuard key.
 Map<String, dynamic> rotatedDialJson() => {

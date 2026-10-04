@@ -5,6 +5,8 @@ import 'package:boltmesh/features/vpn/data/wg_conf.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/vpn_harness.dart';
+
 void main() {
   group('normalizeAddressCidr', () {
     test('ipv4 bare gets /32', () {
@@ -392,10 +394,19 @@ void main() {
     });
   });
 
-  group('Obfuscation', () {
-    test('decodes the backend descriptor shape', () {
-      final obf = Obfuscation.fromJson(const {
-        'mode': 'awg',
+  group('the awg rung entry', () {
+    // The rung's parameters ride the entry and gate whether it can be built at
+    // all, so their completeness is a wire-contract question rather than a conf
+    // question — it decides whether the rung is offered, not what it emits.
+    bool offered(Map<String, Object?> params) => const TransportOption(
+      rung: TransportRung.awg,
+      port: 51821,
+    ).copyWith(params: ObfuscationParams.fromJson(params)).isComplete;
+
+    test('decodes the backend parameter shape', () {
+      final option = TransportOption.fromJson(const {
+        'rung': 'awg',
+        'port': 51821,
         'params': {
           'jc': 3,
           'jmin': 40,
@@ -410,59 +421,80 @@ void main() {
           'h4': [171, 171],
         },
       });
-      expect(obf.isAwg, isTrue);
-      expect(obf.params!.jc, 3);
-      expect(obf.params!.h1, [115, 120]);
+      expect(option.rung, TransportRung.awg);
+      expect(option.isComplete, isTrue);
+      expect(option.params!.jc, 3);
+      expect(option.params!.h1, [115, 120]);
     });
 
-    test('mode without a complete param set is not awg', () {
-      // A half-descriptor must never reach a conf: both tunnel ends must
-      // run identical parameters, and a partial set cannot handshake.
-      expect(const Obfuscation(mode: 'awg').isAwg, isFalse);
+    test('an incomplete parameter set is not an offer', () {
+      // Both tunnel ends must run identical parameters, and a partial set cannot
+      // handshake — so a half-filled entry must never reach a conf, and must not
+      // put the rung on the ladder either.
       expect(
-        Obfuscation.fromJson(const {
-          'mode': 'awg',
-          'params': {
-            'jc': 3,
-            'jmin': 40,
-            'jmax': 70,
-            's1': 15,
-            's2': 17,
-            's3': 10,
-            // s4 missing
-            'h1': [115, 120],
-            'h2': [130, 130],
-            'h3': [150, 160],
-            'h4': [171, 171],
-          },
-        }).isAwg,
+        const TransportOption(rung: TransportRung.awg, port: 51821).isComplete,
         isFalse,
       );
-      // A reversed range is malformed, not usable.
       expect(
-        Obfuscation.fromJson(const {
-          'mode': 'awg',
-          'params': {
-            'jc': 3,
-            'jmin': 40,
-            'jmax': 70,
-            's1': 15,
-            's2': 17,
-            's3': 10,
-            's4': 5,
-            'h1': [120, 115],
-            'h2': [130, 130],
-            'h3': [150, 160],
-            'h4': [171, 171],
-          },
-        }).isAwg,
+        offered(const {
+          'jc': 3,
+          'jmin': 40,
+          'jmax': 70,
+          's1': 15,
+          's2': 17,
+          's3': 10,
+          // s4 missing
+          'h1': [115, 120],
+          'h2': [130, 130],
+          'h3': [150, 160],
+          'h4': [171, 171],
+        }),
+        isFalse,
+      );
+      // A reversed header range is malformed, not merely unusual.
+      expect(
+        offered(const {
+          'jc': 3,
+          'jmin': 40,
+          'jmax': 70,
+          's1': 15,
+          's2': 17,
+          's3': 10,
+          's4': 5,
+          'h1': [120, 115],
+          'h2': [130, 130],
+          'h3': [150, 160],
+          'h4': [171, 171],
+        }),
         isFalse,
       );
     });
 
-    test('native descriptor decodes as not awg', () {
-      expect(const Obfuscation().isAwg, isFalse);
-      expect(Obfuscation.fromJson(const {'mode': ''}).isAwg, isFalse);
+    test("another rung's payload does not make this entry complete", () {
+      // A credential is not a parameter set. Reading one as the other would put
+      // the wrong directives in a conf aimed at the obfuscated device, so an
+      // entry carrying the wrong payload for its rung is not an offer.
+      expect(
+        TransportOption.fromJson(const {
+          'rung': 'awg',
+          'port': 51821,
+          'credential': {
+            'server': 'vpn.example.net:443',
+            'server_name': 'vpn.example.net',
+            'spki_sha256': ['qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo='],
+            'psk': 'u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u=',
+            'client_id': 'AwMDAwMDAwMDAwMDAwMDAwMDAwM=',
+          },
+        }).isComplete,
+        isFalse,
+      );
+      expect(
+        const TransportOption(
+          rung: TransportRung.native,
+          port: 51820,
+        ).copyWith(params: awgObfuscationParams()).isComplete,
+        isFalse,
+      );
     });
   });
 
@@ -503,23 +535,25 @@ void main() {
       );
     });
 
-    test('a stream-carried obfuscated region needs both capabilities', () {
-      // The transport carries whatever the tunnel produces, so for an obfuscated
-      // region the obfuscated data plane is a precondition for the stream rung:
-      // offering the transport without it would start a tunnel whose inner format
-      // the node cannot read. The two stay separate predicates because they are two
-      // capabilities -- how the datagrams travel versus what they say -- so this
-      // pins the relationship rather than the two platform tables.
-      for (final platform in TargetPlatform.values) {
-        if (streamTransportSupported(platform: platform) &&
-            !awgDataPlaneSupported(platform: platform)) {
-          fail(
-            '$platform offers the stream transport without the obfuscated data '
-            'plane, so an obfuscated region could be started on a rung that cannot '
-            'carry it',
-          );
-        }
-      }
+    test('the stream rung does not require the obfuscated data plane', () {
+      // The node's bridge injects into its *stock* device, so a stream session
+      // carries stock datagrams whatever else the node serves. The stream gate
+      // therefore stands on its own, and must stay a separate predicate from
+      // `awgDataPlaneSupported`: coupling them would make the widest-reaching
+      // rung depend on the narrowest one's backend, which is the macOS case the
+      // two predicates exist to keep distinct.
+      //
+      // Today the two tables coincide. Pinning that keeps a future platform
+      // gaining one without the other a deliberate change this test surfaces,
+      // rather than something that only shows up as a missing rung.
+      expect(
+        TargetPlatform.values
+            .where((p) => streamTransportSupported(platform: p))
+            .toSet(),
+        TargetPlatform.values
+            .where((p) => awgDataPlaneSupported(platform: p))
+            .toSet(),
+      );
     });
   });
 }

@@ -33,13 +33,12 @@ String currentPlatformLabel() {
 /// Windows run the device in `boltmeshd`, while Android runs it in-process over
 /// the app's `VpnService` TUN. Apple remains on the Network Extension plugin.
 ///
-/// An obfuscated region's node runs the AmneziaWG device, so a stock datagram
-/// is illegible to it: on platforms without this data plane the region is
-/// unservable, and both the ladder (see `conn_obfuscation.dart`) and region
-/// selection (see `region_policy.dart`)
-/// refuse it rather than start native. The data-plane work is what closes that
-/// gap; this predicate is the single place it is decided. Parameters injectable
-/// for tests.
+/// A platform without it cannot start the obfuscated rung at all, so the rung
+/// never enters the ladder there: the ladder's floor is the cheapest rung the
+/// serving node *advertises* that this platform can run (see
+/// `conn_obfuscation.dart`), and a node advertising `native` alongside `awg` is
+/// therefore still reachable — on its stock device. This predicate is the single
+/// place the capability is decided. Parameters injectable for tests.
 ///
 /// Linux and Windows share the device, wire format, and config translation.
 /// Android uses the upstream Android TUN/backend integration with the same
@@ -65,10 +64,12 @@ bool awgDataPlaneSupported({TargetPlatform? platform, bool web = kIsWeb}) {
 /// too old to know the transport at all.
 ///
 /// Note this says nothing about the *inner* format. The transport carries
-/// whatever datagrams the tunnel produces, so on an obfuscated region it also
-/// needs the obfuscated data plane (see [awgDataPlaneSupported]); on a stock
-/// region the two are independent. `_streamRungAvailable` in the ladder
-/// requires both, so the gate here is not on its own enough to offer the rung.
+/// whatever datagrams the tunnel produces, and what the node can read is a
+/// property of the rung it runs on: the stream rung's inner datagrams are stock
+/// whatever else the node serves, because the node's bridge injects into its
+/// stock device. So the two predicates are independent, and neither is on its
+/// own enough to offer the rung — the ladder requires both the entry to be
+/// advertised with a usable credential and this gate to pass.
 bool streamTransportSupported({TargetPlatform? platform, bool web = kIsWeb}) {
   if (web) return false;
   final p = platform ?? defaultTargetPlatform;

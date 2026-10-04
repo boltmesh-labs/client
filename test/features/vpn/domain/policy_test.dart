@@ -7,20 +7,14 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart
 
 import '../../../support/vpn_harness.dart';
 
-/// The obfuscated descriptor the discovery projection stamps onto every server
-/// of an obfuscated region.
-final awgDescriptor = awgObfuscation();
-
-DiscoveryServer srv(String id, int peers, {Obfuscation? obfuscation}) =>
-    DiscoveryServer(
-      id: id,
-      name: id,
-      endpoint: 'e.example.com',
-      wgPort: 51820,
-      wgDns: '10.8.0.1',
-      activePeers: peers,
-      obfuscation: obfuscation,
-    );
+DiscoveryServer srv(String id, int peers) => DiscoveryServer(
+  id: id,
+  name: id,
+  endpoint: 'e.example.com',
+  wgPort: 51820,
+  wgDns: '10.8.0.1',
+  activePeers: peers,
+);
 
 /// A [DialParams] carrying [endpoint] and key [key], for the live-peer
 /// comparison.
@@ -373,56 +367,27 @@ void main() {
     expect(regionLoad(a), 10);
   });
 
-  test('autoPickRegion skips a region this build cannot serve', () {
-    // Fuchsia has no AWG backend, so an obfuscated region is not a candidate
-    // however light its load — dialing it could only end in a refused start.
+  test('autoPickRegion does not filter on format', () {
+    // The filter this replaced asked whether this build could produce a datagram
+    // for a node's *obfuscation* format, and on a platform with no obfuscated
+    // data plane that excluded regions whose stock device was readable right
+    // there. It could only ever exclude regions that would have worked. Now every
+    // region leads with `native`, so the only question left is capacity.
     debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final obfuscated = Region(
-      id: 'obf',
-      name: 'Obfuscated',
+    final light = Region(
+      id: 'light',
+      name: 'Light',
       countryCode: 'DE',
-      servers: [srv('s1', 1, obfuscation: awgDescriptor)],
+      servers: [srv('s1', 1)],
     );
-    final stock = Region(
-      id: 'stock',
-      name: 'Stock',
+    final heavy = Region(
+      id: 'heavy',
+      name: 'Heavy',
       countryCode: 'US',
       servers: [srv('s2', 9)],
     );
-    expect(autoPickRegion([obfuscated, stock])?.id, 'stock');
-    expect(autoPickRegion([obfuscated]), isNull);
-  });
-
-  test('regionServable needs a data plane this build can run', () {
-    debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    expect(regionServable(Region(id: 'a', servers: [srv('s1', 0)])), isTrue);
-    expect(
-      regionServable(
-        Region(
-          id: 'b',
-          servers: [srv('s1', 0, obfuscation: awgDescriptor)],
-        ),
-      ),
-      isFalse,
-    );
-    // No servers is not "servable": there is nothing to dial.
-    expect(regionServable(const Region(id: 'c')), isFalse);
-    // A region is servable if any of its servers is, so a mixed list is not
-    // collapsed to whichever server happened to be listed first.
-    expect(
-      regionServable(
-        Region(
-          id: 'd',
-          servers: [
-            srv('s1', 0, obfuscation: awgDescriptor),
-            srv('s2', 0),
-          ],
-        ),
-      ),
-      isTrue,
-    );
+    expect(autoPickRegion([heavy, light])?.id, 'light');
   });
 
   test('regionsVisible filters by query and sorts by load', () {

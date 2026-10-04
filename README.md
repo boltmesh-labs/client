@@ -456,7 +456,7 @@ plugin-bundled `wireguard_svc.exe`/`wireguard.dll`). It also stages the
 vendored `wintun.dll` the obfuscated AmneziaWG data plane needs: nothing
 embeds that driver, and the helper reads a hash-verified copy from beside
 itself and pins it into System32 before loading it, so a bundle without it
-fails every obfuscated connect at runtime while stock regions keep working.
+fails every obfuscated connect at runtime while stock connects keep working.
 `bash tool/verify_native.sh` asserts both that the vendored file still matches
 the Go hash pin and that the hook still stages it, because no test sees an
 installed bundle. Then
@@ -638,38 +638,50 @@ rest of the pipeline (which files, when, verify) is unchanged.
   kill escalates in ~15s rather than a full poll interval. There is no
   same-server config-refresh rung: a reboot-rotated server key is picked up
   by a server move or a manual reconnect.
-- Transport ladder: where it *starts* is the serving server's data plane, and a
-  path the health policy confirmed dead *locally* is rebuilt one rung lower per
-  heal, so an unobstructed network pays nothing. `native` (platform WireGuard) →
-  `awg` (in-process AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams
-  inside a TLS session to the node, Linux, Windows, and Android). A stock server's node
-  runs stock WireGuard, so its floor is `native`; a server serving the `awg` rung
-  runs a *second* device for it — the AmneziaWG one, on its own port and its own
-  overlay — so native stays valid there too and its floor is `native` as well. The
-  floor is the cheapest rung the server can actually serve, and the rung is only
-  offered when the server names all three of its ingredients: the obfuscation
-  descriptor, the port, and this device's address on the obfuscated overlay. A
-  server missing the last one has no device a conf could be built for, so its floor
-  falls back to `native` rather than sending an obfuscated conf aimed at a port
-  that cannot route it. The floor is re-derived on every
-  start, so a server move follows the new server's format and never keeps a
-  rung the new server cannot serve. A rung is only selected when the server can
-  serve it *and* this platform can run it *and* the data plane advertises
-  `stream-transport` — the `boltmeshd` daemon advertises that token only on
-  builds whose `up` would honour the spec, and the Android adapter advertises it
-  for its in-process native bridge, so an older helper or a macOS one keeps the
-  rung off the ladder instead of selecting a rung guaranteed to be refused.
+- Transport ladder: where it *starts* is the serving node's own floor, and a path
+  the health policy confirmed dead *locally* is rebuilt one rung lower per heal, so
+  an unobstructed network pays nothing. The server states which rungs it serves
+  rather than the client deriving them from which optional fields are set — see
+  *Transport list* below. `native` (platform WireGuard) → `awg` (in-process
+  AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams inside
+  a TLS session to the node, Linux, Windows, and Android).
+  - The floor rule, stated exactly: **the floor is the cheapest rung the server
+    advertises that this platform can run.** Not "the cheapest rung this platform
+    can run" — that is the derivation this replaced, and with every server
+    serving both formats it floored Apple to `awg` and made the product unusable
+    there. Scoped to the *advertised list*, a dual-format server floors every
+    platform to `native`, because `native` is in the list and every platform can
+    run it. A server serving only `awg` and `stream` floors an Apple device to
+    `stream`, which is the only thing it can start there.
+  - The floor is re-derived on every start, so a server move follows the new
+    node's advertised list and never keeps a rung the new node does not serve. A
+    move onto a node that *does* advertise the sticky rung keeps it, so a roam is
+    not charged for the walk again.
+  - A rung is selected only when the node advertises it, this platform can run it,
+    and (for `stream`) the data plane advertises the `stream-transport` token — the
+    `boltmeshd` daemon advertises it only on builds whose `up` would honour the
+    spec, and the Android adapter advertises it for its in-process native bridge,
+    so an older helper keeps the rung off the ladder instead of selecting a rung
+    guaranteed to be refused. An entry the client cannot assemble — an `awg` entry
+    with no address on the obfuscated overlay, a `stream` entry whose credential
+    fails the daemon's own size checks — counts as not advertised, because a
+    conf this build cannot build is indistinguishable on-device from a blocked
+    network.
+  - `_applyRung` refuses exactly one case now: a payload with no rung this build
+    can start at all, where any start would be a guess at what the node runs. It
+    is no longer the path a platform without an obfuscated data plane takes, since
+    such a node advertises `native` and is started on it.
   - Each rung has its own node port *and its own overlay address*. A server serving
     the `awg` rung runs two devices on one host, and they cannot share a network:
     both hold every peer's route, so the kernel would keep one and the other
     device's replies would leave on a link holding no session for that peer. So the
-    dial payload carries `awg_port` and `awg_assigned_ip`/`awg_dns` beside
-    `wg_port` and `assigned_ip`/`wg_dns`, all null on a server that does not offer
-    the rung, and the conf claims whichever pair the rung points at. Getting this
-    wrong is not a cosmetic mistake — a conf aimed at the wrong port puts a
-    handshake on the wire at a device that cannot read it, and one claiming the
-    wrong address handshakes and then blackholes every packet; both read to the
-    health ladder as a blocked network rather than a wrong setting.
+    dial payload carries `awg_assigned_ip`/`awg_dns` beside `assigned_ip`/`wg_dns`,
+    both null on a server that does not offer the rung, and the conf claims
+    whichever pair the rung points at. Getting this wrong is not a cosmetic
+    mistake — a conf aimed at the wrong port puts a handshake on the wire at a
+    device that cannot read it, and one claiming the wrong address handshakes and
+    then blackholes every packet; both read to the health ladder as a blocked
+    network rather than a wrong setting.
   - The two lower rungs have different platform reach. The **stream** transport
   is a bridge plus a way to keep the bridge's own egress off the tunnel it
   carries. The bridge is the same `boltmesh/stream` code everywhere; what
@@ -693,12 +705,15 @@ rest of the pipeline (which files, when, verify) is unchanged.
   runs as LocalSystem), and the tunnel route is installed with `INFINITE_LIFETIME`
   because a zero lifetime is an expiry of *now* — the route appears installed and
   the stack routes around it.
-  The two gates are independent by design, so the `awg` rung needs both. A
-  platform with neither — macOS — reaches such a server on `native` or `stream`,
-  both of which it can run; the `awg` rung stays off the ladder there. Region
-  selection still filters on the format the platform can produce, so an
-  obfuscated region is skipped on macOS until that filter is replaced by the
-  advertised transport list. Demotion rides the existing heal
+  The two gates are independent by design. The `stream` gate does *not* require
+  the obfuscated data plane — the node's bridge injects into its stock device, so
+  a stream session carries stock datagrams whatever else the node serves — which
+  is what makes the stream rung the widest-reaching one. A platform with neither
+  gate, macOS today, still reaches every server on `native`, and reaches a node
+  serving only `awg` and `stream` on `stream`. Region selection no longer filters
+  on format at all: every server advertises `native`, so every region is dialable
+  everywhere and a per-region filter could only ever exclude regions that would
+  have worked. Demotion rides the existing heal
   (no new budget, timer, or state) and is sticky across connects — a reconnect
   preserves a demotion but never causes one. The one exception is deliberate:
   after `rungPromotionHealthyFor` (24h) of positively healthy traffic the tick
@@ -710,11 +725,17 @@ rest of the pipeline (which files, when, verify) is unchanged.
   within `rungPromotionProbeTimeout` (45s), so a probe costs one controlled
   restart and one stale connection at worst.
   One rung at a time — a start runs on a single rung. The **stream** rung's inner
-  format is *always* stock, whatever the server's obfuscation settings are: the
-  node's bridge injects into its stock device, so a session's datagrams have to be
-  readable there. A conf carrying the AWG directives inside the TLS session would
-  reach a device that does not speak them. Only the `awg` rung builds an
-  obfuscated conf, and only against the address on the obfuscated overlay.
+  format is *always* stock, whatever else the node serves: its bridge injects
+  into the stock device, so a session's datagrams have to be readable there. A
+  conf carrying the AWG directives inside the TLS session would reach a device
+  that does not speak them. Only the `awg` rung builds an obfuscated conf, and
+  only against the address on the obfuscated overlay.
+  The rung step is the next entry in the advertised list, not the next value in a
+  fixed cost order: a node serving stock and stream demotes straight to stream,
+  and one whose `awg` entry this platform cannot run skips it. That also makes the
+  promotion probe structurally non-trivial — every entry carries the port and
+  payload its own rung needs, so a rung below can never build the identical conf
+  the rung above just proved dead.
   The rung step comes *before* the server move, because Layer 1 cannot tell a
   blocked transport from a dead node: a middlebox dropping this rung's traffic
   is indistinguishable from a powered-off server at the echo and the handshake.
@@ -781,12 +802,12 @@ rest of the pipeline (which files, when, verify) is unchanged.
       lifecycle, and is the only party that can keep the bridge's own egress out
       of the tunnel it carries.
     - The bridge injects into the node's **stock** tunnel device, so the inner
-      format is always stock WireGuard whatever the server's obfuscation settings
-      are, and the conf claims the stock overlay's address and resolver. This is
-      what makes the rung the most widely available one: a platform with no
-      obfuscated data plane (macOS) can still use it against every server, and a
-      conf carrying the AWG directives inside the session would reach a device that
-      does not speak them.
+      format is always stock WireGuard whatever else that node serves, and the
+      conf claims the stock overlay's address and resolver. This is what makes the
+      rung the most widely available one: a platform with no obfuscated data plane
+      (macOS) can still use it against a node serving it, and a conf carrying the
+      AWG directives inside the session would reach a device that does not speak
+      them.
     - The node is pinned, not discovered: a certificate SPKI pin plus a
       per-device PSK (below), so there is no CA chain to trust and no second
       protocol to speak. It is also deliberately not an anti-probing
@@ -797,36 +818,64 @@ rest of the pipeline (which files, when, verify) is unchanged.
     Wire format, the two-way authentication and the routing rules that keep the
     bridge out of its own tunnel: `boltmeshd/README.md` → *Stream transport*.
     Platform reach and the bypass-route mechanics: the sibling bullet above.
-  - Stream rung contract. `config` and every bind response carry a
-    per-device `stream` object; it is deliberately *not* on the region list,
-    because the PSK is a per-device secret and discovery is fetched by every
-    client of a region:
+  - Transport list. `config` and every bind response carry an ordered `transports`
+    array — one entry per rung this node serves this device on, cheapest first,
+    each carrying that rung's own port and the payload it needs:
 
     ```json
-    "stream": {
-      "server": "vpn.example.net:443",
-      "server_name": "vpn.example.net",
-      "spki_sha256": ["<base64 sha256 of the node's leaf SPKI>"],
-      "psk": "<base64, 32 bytes>",
-      "client_id": "<base64, 16 bytes>"
-    }
+    "transports": [
+      { "rung": "native", "port": 51820 },
+      { "rung": "awg", "port": 51821, "params": { "jc": 3, "h1": [115, 120] } },
+      {
+        "rung": "stream",
+        "port": 443,
+        "credential": {
+          "server": "vpn.example.net:443",
+          "server_name": "vpn.example.net",
+          "spki_sha256": ["<base64 sha256 of the node's leaf SPKI>"],
+          "psk": "<base64, 32 bytes>",
+          "client_id": "<base64, 16 bytes>"
+        }
+      }
+    ]
     ```
 
-    `server` is where to dial — the node's `endpoint`, or its public IP when it has
-    none — while `server_name` is what the handshake claims. They are usually the
-    same string, because the SNI is the node's `endpoint` too, but they have
-    different requirements and the difference is load-bearing: a dial target only
-    has to *resolve*, so an address is fine, while RFC 6066's SNI extension
-    carries a *hostname*, so a client sends no SNI at all for an IP literal — a
-    passively observable tell no browser produces. So a node with no DNS endpoint
-    gets no stream rung rather than an SNI-less one, and the control plane
-    withholds the `stream` object entirely instead of serving a credential whose
-    SNI cannot be sent. The SNI is never resolved by the node, so it needs no DNS
-    of its own.
+    This replaced three independently-present fields (`obfuscation`, `stream`, a
+    nullable `awg_port`) that a client could only read by *deriving* which rungs
+    existed from which of them were set — a private encoding of the same fact, and
+    one that had to be kept in step with the withholding rules on the control
+    plane's side. Order is the cost order, so "the next rung down" is the next
+    entry and a client walks the list instead of reconstructing a ladder it has to
+    agree with the server about separately. Absence is the single meaning of "not
+    served": a rung the control plane withheld and a rung the server never had are
+    the same thing to the client, which is exactly right, because on-device a
+    conf that cannot be built is indistinguishable from a blocked network. The
+    schema refuses an entry whose payload does not match its rung, so a credential
+    can never ride the `awg` entry and a `stream` entry can never be emitted
+    without one.
+
+    `native` always leads, because every node runs a stock device. That is what
+    makes the floor rule a lookup rather than a guess, and what makes every region
+    dialable on every platform.
+
+    The `stream` entry's `credential` is per-device — the PSK authenticates one
+    tunnel endpoint to one node — so `transports` stays on the dial payload and
+    *not* on the region list, which every client of a region fetches.
+  - Stream credential. `server` is where to dial — the node's `endpoint`, or its
+    public IP when it has none — while `server_name` is what the handshake claims.
+    They are usually the same string, because the SNI is the node's `endpoint` too,
+    but they have different requirements and the difference is load-bearing: a dial
+    target only has to *resolve*, so an address is fine, while RFC 6066's SNI
+    extension carries a *hostname*, so a client sends no SNI at all for an IP
+    literal — a passively observable tell no browser produces. So a node with no DNS
+    endpoint gets no stream rung rather than an SNI-less one, and the control plane
+    withholds the whole entry instead of serving a credential whose SNI cannot be
+    sent. The SNI is never resolved by the node, so it needs no DNS of its own.
 
     Every field is size-validated client-side against the same values the
     daemon enforces, so a malformed credential is never turned into a
-    transport — `isUsable` is the only gate. On this rung the client allocates
+    transport — `isUsable` is the only gate, and a failing entry is simply not an
+    offer. On this rung the client allocates
     two free loopback ports per start: the peer's `Endpoint` is rewritten to
     the bridge's listen address, and the conf pins `ListenPort` to the port the
     bridge delivers to (an interface left at `0` takes an ephemeral port

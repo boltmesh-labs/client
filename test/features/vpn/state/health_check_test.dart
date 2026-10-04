@@ -8,6 +8,7 @@ import 'package:boltmesh/features/vpn/data/gateway_probe.dart';
 import 'package:boltmesh/features/vpn/data/helper_client.dart';
 import 'package:boltmesh/features/vpn/data/helper_tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
+import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
 import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
@@ -196,16 +197,15 @@ void main() {
         {'id': 'r1', 'name': 'R1', 'country_code': null, 'servers': servers},
       ];
 
-  Map<String, dynamic> dialJsonSrv2() => {
-    'id': 'dev-1',
-    'assigned_ip': '10.8.0.6',
-    'server_id': 'srv-2',
-    'server_name': 'two',
-    'endpoint': '203.0.113.11',
-    'wg_port': 51820,
-    'wg_dns': '10.8.0.1',
-    'wg_public_key': 'SRV2',
-  };
+  /// The second node of [twoServers] as a dial payload — a stock-only node, so
+  /// its ladder is `native` alone.
+  Map<String, dynamic> dialJsonSrv2() => dialJson(
+    serverId: 'srv-2',
+    serverName: 'two',
+    assignedIp: '10.8.0.6',
+    endpoint: '203.0.113.11',
+    wgPublicKey: 'SRV2',
+  );
 
   test(
     'repeated transient polls raise a degraded banner, stay connected',
@@ -395,198 +395,234 @@ void main() {
     expect(state.message, 'Connected');
   });
 
-  // The obfuscated rung is a *response* to a dead tunnel path with a reachable
-  // control plane. These cases explicitly choose the probes and backend they
-  // exercise so host-platform defaults cannot silently change their outcome.
-  group('obfuscation ladder', () {
+  // The transport ladder. Every rung below the floor is a *response* to a dead
+  // tunnel path with a reachable control plane, so these cases explicitly choose
+  // the probes and platform they exercise — a host-platform default would
+  // otherwise change which rungs this build can even start.
+  group('transport ladder', () {
     void useLinuxDataPlane() {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
     }
 
-    // Both halves together, because a server that serves the awg rung has moved
-    // its whole tunnel onto `awg_port`: the descriptor says the format and the
-    // port says where to reach it, and a payload with only the first would have
-    // the client dialling a port nothing listens on.
-    Map<String, dynamic> obfDial() =>
-        dialJson(obfuscation: awgObfuscationJson(), awgPort: 51821);
+    /// A node serving stock *and* obfuscated, which is the shape every server has
+    /// now that `awg_enabled` defaults on: one device per rung, each on its own
+    /// port and its own overlay.
+    Map<String, dynamic> dualDial() => dialJson(awgPort: 51821);
 
-    Future<(ProviderContainer, FakeTunnel)> seedObfuscated() {
+    /// Heals once and re-arms the heal budget, so a suite can walk the ladder
+    /// one rung per incident the way separate outages would. The cap is what
+    /// makes each rung its own incident; re-arming between steps is what a
+    /// second outage does on its own.
+    Future<void> stepDown(ProviderContainer container) async {
+      final ctl = container.read(connectionProvider.notifier);
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
+      ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
+      ctl.debugHandshakeReader = () async => DateTime.now();
+    }
+
+    Future<(ProviderContainer, FakeTunnel)> seedDual() {
       final events = <String>[];
       return seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return obfDial();
+        if (o.path.endsWith('/config')) return dualDial();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });
     }
 
-    test('an obfuscated region starts on its own format, not native', () async {
+    test('a dual-format node starts on its cheapest rung, native', () async {
       useLinuxDataPlane();
-      final (container, tunnel) = await seedObfuscated();
+      final (container, tunnel) = await seedDual();
 
-      // The region's node runs the AmneziaWG device, so a stock datagram is
-      // illegible to it: native is not a cheap probe here but a guaranteed-
-      // failed attempt that would put a plaintext WireGuard handshake on the
-      // wire first — the fingerprint the rung exists to hide. The region's
-      // format is the floor, so the very first conf carries it.
-      expect(tunnel.configs.first, contains('Jc = 3'));
-      expect(tunnel.configs.first, contains('H1 = 115-120'));
+      // The floor is the cheapest rung the node advertises *and* this platform
+      // can run — scoped to what the node offers, not to what this build could
+      // run in general. Native is advertised by every node, so it is the floor
+      // everywhere, including on a platform with no obfuscated data plane. A
+      // stock start is not a cheap probe but the node's own stock device, reached
+      // on its own port, so it costs nothing on an unobstructed network.
+      expect(tunnel.configs.first, isNot(contains('Jc =')));
+      expect(tunnel.configs.first, contains('Endpoint = 203.0.113.10:51820'));
       expect(
-        container.read(connectionProvider.notifier).obfuscationRung,
-        ObfuscationRung.awg,
+        container.read(connectionProvider.notifier).transportRung,
+        TransportRung.native,
       );
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
     });
 
-    test('Android starts an obfuscated region on the AWG rung', () async {
+    test('Android starts a dual-format node on native too', () async {
+      // The floor rule reads the advertised list, not the platform's abilities
+      // in the abstract. Android can run the awg data plane, but `native` is
+      // cheaper and offered, so the awg rung is only ever reached by demotion.
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      final (container, tunnel) = await seedObfuscated();
+      final (container, tunnel) = await seedDual();
 
-      expect(tunnel.configs.first, contains('Jc = 3'));
+      expect(tunnel.configs.first, isNot(contains('Jc =')));
       expect(
-        container.read(connectionProvider.notifier).obfuscationRung,
-        ObfuscationRung.awg,
+        container.read(connectionProvider.notifier).transportRung,
+        TransportRung.native,
       );
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
     });
 
-    test('a confirmed local stall rebuilds the region format when nothing is below', () async {
+    test(
+      'a confirmed dead path steps to the obfuscated rung with its parameters',
+      () async {
+        useLinuxDataPlane();
+        final (container, tunnel) = await seedConnected(<String>[], (o) {
+          if (o.path.endsWith('/config')) return dualDial();
+          if (o.path.endsWith('/status')) throw networkTimeout(o);
+          throw StateError('unexpected ${o.path}');
+        }, controlProbe: support.FakeControlProbe(true));
+        final ctl = container.read(connectionProvider.notifier);
+
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+
+        // One rung down, carrying that rung's own port and the full parameter
+        // set verbatim, between DNS and [Peer] (see buildWgQuickConfig).
+        expect(ctl.transportRung, TransportRung.awg);
+        expect(tunnel.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(tunnel.lastConfig, isNot(contains('ListenPort = ')));
+        expect(
+          tunnel.lastConfig,
+          contains(
+            'Jc = 3\n'
+            'Jmin = 40\n'
+            'Jmax = 70\n'
+            'S1 = 15\n'
+            'S2 = 17\n'
+            'S3 = 10\n'
+            'S4 = 5\n'
+            'H1 = 115-120\n'
+            'H2 = 130-130\n'
+            'H3 = 150-160\n'
+            'H4 = 171-171',
+          ),
+        );
+        final state = container.read(connectionProvider);
+        expect(state.autoHealAttempts, 1);
+        expect(state.phase, ConnPhase.connected);
+      },
+    );
+
+    test('a blackout restart stays on the current rung', () async {
       useLinuxDataPlane();
-      final (container, tunnel) = await seedObfuscated();
+      final (container, tunnel) = await seedDual();
       final ctl = container.read(connectionProvider.notifier);
 
+      // No control plane (the seeded default), so a dead path cannot tell
+      // "this transport is blocked" from "the network is gone". The heal
+      // rebuilds; the rung must not move.
       staleHandshake(ctl);
       await ctl.checkHealthOnce();
 
-      // The region's floor is already AWG and it offers no stream credential,
-      // so there is no rung left to demote to: the heal still runs, and its
-      // rebuild carries the full parameter set, verbatim, between DNS and
-      // [Peer] (see buildWgQuickConfig).
-      expect(
-        tunnel.lastConfig,
-        contains(
-          'Jc = 3\n'
-          'Jmin = 40\n'
-          'Jmax = 70\n'
-          'S1 = 15\n'
-          'S2 = 17\n'
-          'S3 = 10\n'
-          'S4 = 5\n'
-          'H1 = 115-120\n'
-          'H2 = 130-130\n'
-          'H3 = 150-160\n'
-          'H4 = 171-171',
-        ),
-      );
-      final state = container.read(connectionProvider);
-      expect(state.autoHealAttempts, 1);
-      expect(state.phase, ConnPhase.connected);
+      expect(ctl.transportRung, TransportRung.native);
+      expect(tunnel.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+      expect(tunnel.lastConfig, isNot(contains('Jc =')));
+      expect(container.read(connectionProvider).autoHealAttempts, 1);
     });
 
-    test('a region without a descriptor never obfuscates', () async {
+    test('a node offering no obfuscated rung never obfuscates', () async {
       useLinuxDataPlane();
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
         if (o.path.endsWith('/config')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
-      });
+      }, controlProbe: support.FakeControlProbe(true));
       final ctl = container.read(connectionProvider.notifier);
 
-      staleHandshake(ctl);
-      await ctl.checkHealthOnce();
+      final before = tunnel.configs.length;
+      await stepDown(container);
 
-      // The heal still happened — the ladder adds a rung, it does not
-      // replace the existing one.
-      expect(container.read(connectionProvider).autoHealAttempts, 1);
+      // The heal still happened — the ladder adds rungs, it does not replace
+      // the one a node already serves. Counted from the confs rather than the
+      // heal counter, which [stepDown] re-arms between incidents.
+      expect(tunnel.configs.length, before + 1);
+      expect(ctl.transportRung, TransportRung.native);
       expect(tunnel.lastConfig, isNot(contains('Jc =')));
     });
 
-    test('a platform without the data plane refuses the region', () async {
-      // Fuchsia has no obfuscated data plane. The region's node runs the
-      // AmneziaWG device, so
-      // no conf this build could send it would be legible: the start is refused
-      // rather than sending the native one, which cannot connect and leaks the
-      // plaintext handshake doing it.
+    test('a platform without the data plane starts native and stays there', () async {
+      // Fuchsia has no obfuscated data plane, so the awg rung is not runnable
+      // here — but that no longer makes the node unreachable. Every node
+      // advertises its stock device, so the start succeeds and the rung simply
+      // never appears on the ladder.
       debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final (container, tunnel) = await seedDual();
+      final ctl = container.read(connectionProvider.notifier);
+
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(tunnel.configs.first, contains('Endpoint = 203.0.113.10:51820'));
+      expect(ctl.transportRung, TransportRung.native);
+
+      // And a confirmed dead path has nowhere to step to, so it rebuilds in
+      // place rather than selecting a rung this build cannot start.
+      (container.read(
+        controlPlaneProbeProvider,
+      ) as support.FakeControlProbe).reachable = true;
+      await stepDown(container);
+      expect(ctl.transportRung, TransportRung.native);
+      expect(tunnel.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+    });
+
+    test('a payload with no usable rung is refused, not guessed at', () async {
+      // The one thing `_applyRung` still refuses: a list with nothing in it this
+      // build can start. There is no entry to build a conf from, so any start
+      // would be a guess at what the node runs.
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return obfDial();
+        if (o.path.endsWith('/config')) {
+          final dial = dialJson()..['transports'] = <Map<String, Object>>[];
+          return dial;
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }, expectConnected: false);
 
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.error);
-      expect(state.message, contains('obfuscated WireGuard'));
+      expect(container.read(connectionProvider).phase, ConnPhase.error);
+      expect(
+        container.read(connectionProvider).message,
+        contains('offers no transport'),
+      );
       expect(tunnel.configs, isEmpty);
     });
 
-    test(
-      'a move onto an obfuscated region raises the rung to its format',
-      () async {
-        useLinuxDataPlane();
-        final events = <String>[];
-        final (container, tunnel) = await seedConnected(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
-          if (o.path.endsWith('/switch')) {
-            return dialJson(
-              serverId: 'srv-2',
-              serverName: 'two',
-              obfuscation: awgObfuscationJson(),
-              awgPort: 51821,
-            );
-          }
-          throw StateError('unexpected ${o.path}');
-        }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
-        final ctl = container.read(connectionProvider.notifier);
+    test('demotion is sticky: a later manual connect stays on the lower rung', () async {
+      useLinuxDataPlane();
+      final (container, tunnel) = await seedConnected(<String>[], (o) {
+        if (o.path.endsWith('/config')) return dualDial();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      }, controlProbe: support.FakeControlProbe(true));
+      final ctl = container.read(connectionProvider.notifier);
 
-        // A stock region's floor is native, so the first conf is stock.
-        expect(tunnel.configs.first, isNot(contains('Jc =')));
-        expect(ctl.obfuscationRung, ObfuscationRung.native);
+      await stepDown(container);
+      expect(ctl.transportRung, TransportRung.awg);
 
-        await ctl.switchServer(regionId: null, serverId: 'srv-2');
+      // Arm a fresh handshake for the reconnected session so the test observes
+      // the conf the connect builds, not a follow-on recovery cycle racing the
+      // assertion.
+      ctl.debugHandshakeReader = () async => DateTime.now();
+      await ctl.disconnect();
+      await ctl.connect();
 
-        // The new region's node runs the AmneziaWG device, so the start has to
-        // carry the region's format. Inheriting the previous region's native
-        // rung would send a plaintext handshake at a node that cannot read it.
-        expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        expect(tunnel.lastConfig, contains('Jc = 3'));
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
-      },
-    );
+      // One proven-blocked network re-pays the failed-probe cycle on every
+      // connect; the process stays on the rung it demoted to. Note this is not
+      // the node's floor — the node still advertises native — which is exactly
+      // what sticky means.
+      expect(tunnel.lastConfig, contains('Jc = 3'));
+      expect(container.read(connectionProvider).phase, ConnPhase.connected);
+      expect(container.read(connectionProvider).autoHealAttempts, 0);
+    });
 
-    test(
-      'demotion is sticky: a later manual connect stays obfuscated',
-      () async {
-        useLinuxDataPlane();
-        final (container, tunnel) = await seedObfuscated();
-        final ctl = container.read(connectionProvider.notifier);
-
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
-        expect(tunnel.lastConfig, contains('Jc = 3'));
-
-        // Arm a fresh handshake for the reconnected session so the test
-        // observes the conf the connect builds, not a follow-on recovery
-        // cycle racing the assertion.
-        ctl.debugHandshakeReader = () async => DateTime.now();
-        await ctl.disconnect();
-        await ctl.connect();
-
-        // One proven-blocked network re-pays the failed-probe cycle on every
-        // connect; the process stays on the rung it demoted to.
-        expect(tunnel.lastConfig, contains('Jc = 3'));
-        expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        expect(container.read(connectionProvider).autoHealAttempts, 0);
-      },
-    );
     group('stream rung', () {
-      // The stream rung sits below AWG, so these start from a region that
-      // offers both and walk all the way down — which is the only way to
-      // prove the walk visits stream at all rather than skipping it.
+      // The stream rung is the last one, so these start from a node offering the
+      // whole ladder and walk all the way down — which is the only way to prove
+      // the walk visits stream at all rather than skipping over it.
       Map<String, dynamic> streamDial({
         String serverId = 'srv-1',
         String serverName = 'one',
@@ -597,13 +633,12 @@ void main() {
         serverName: serverName,
         endpoint: endpoint,
         wgPublicKey: wgPublicKey,
-        obfuscation: awgObfuscationJson(),
         awgPort: 51821,
         stream: streamTransportJson(),
       );
 
-      /// [dialJson] with the stream credential but no obfuscation descriptor:
-      /// a region whose only rung below native is the stream transport.
+      /// [dialJson] with the stream credential but no obfuscated rung: a node
+      /// whose only rung below native is the stream transport.
       Map<String, dynamic> streamOnlyDial() =>
           dialJson(stream: streamTransportJson());
 
@@ -659,127 +694,122 @@ void main() {
         return (container, socket);
       }
 
-      /// Arms one heal with a stale handshake.
-      Future<void> healOnce(ProviderContainer container) async {
+      /// Walks the ladder down to [target], one rung per healed incident.
+      Future<void> stepDownTo(
+        ProviderContainer container,
+        TransportRung target,
+      ) async {
         final ctl = container.read(connectionProvider.notifier);
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
+        while (ctl.transportRung.index < target.index) {
+          await stepDown(container);
+        }
       }
 
-      test('an obfuscated region starts on AWG, with stream below it', () async {
+      test('a node offering the whole ladder starts on native', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream();
 
-        // The server's floor is AWG, so the first start is already obfuscated
-        // and points straight at the node — on the obfuscated port, which is
-        // where a server offering that rung moved its whole tunnel. The stream
-        // rung is below it and is only reached on evidence, not on the first
-        // try.
-        expect(socket.lastConfig, contains('Jc = 3'));
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        // The stream rung is the most expensive and is only reached on evidence,
+        // so the first start points straight at the node's stock device on its
+        // own port with a stock body.
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
         expect(socket.lastTransport, isNull);
         expect(
-          container.read(connectionProvider.notifier).obfuscationRung,
-          ObfuscationRung.awg,
+          container.read(connectionProvider.notifier).transportRung,
+          TransportRung.native,
         );
       });
 
-      test(
-        'Android keeps AWG as the floor even when the region offers stream',
-        () async {
-          debugDefaultTargetPlatformOverride = TargetPlatform.android;
-          addTearDown(() => debugDefaultTargetPlatformOverride = null);
-          final (container, socket) = await seedStream();
-
-          expect(socket.lastConfig, contains('Jc = 3'));
-          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
-          expect(socket.lastTransport, isNull);
-          expect(
-            container.read(connectionProvider.notifier).obfuscationRung,
-            ObfuscationRung.awg,
-          );
-        },
-      );
-
-      test('a blackout restart stays on the current AWG rung', () async {
-        useLinuxDataPlane();
+      test('Android also starts a dual-format node on native', () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
         final (container, socket) = await seedStream();
-        await healOnce(container);
 
-        // A dead in-tunnel probe during a control-plane blackout justifies
-        // restarting the config, but does not tell us this transport is blocked.
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
-        expect(socket.lastConfig, isNot(contains('ListenPort = ')));
-        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastTransport, isNull);
         expect(
-          container.read(connectionProvider.notifier).obfuscationRung,
-          ObfuscationRung.awg,
+          container.read(connectionProvider.notifier).transportRung,
+          TransportRung.native,
         );
       });
 
-      test(
-        'a confirmed dead path steps the ladder before spending a move',
-        () async {
-          // The production-timing case, and the one that used to fail. A
-          // confirmed dead echo (`echoShortens` latched at 2 strikes) plus a
-          // stale handshake fast-tracked straight to failover, because Layer 1
-          // cannot tell a blocked transport from a dead node. The heal now
-          // takes the rung step first; only a stall that survives it escalates
-          // to a server move.
-          //
-          // Two ticks are required, and the first must be the one that banks a
-          // strike: `echoProbeAfter` = 30s opens the probe window long before
-          // `handshakeStaleAfter` = 150s makes a heal eligible, so in
-          // production `echoStallStrikes` = 2 is always already satisfied by
-          // the time the ladder becomes reachable. A single-tick test cannot
-          // cover that, which is why the first-stall test above does not.
-          useLinuxDataPlane();
-          final (container, socket) = await seedStream(
-            controlProbe: support.FakeControlProbe(true),
-          );
-          final ctl = container.read(connectionProvider.notifier);
+      test('a confirmed dead path steps the ladder before spending a move', () async {
+        // The production-timing case, and the one that used to fail. A
+        // confirmed dead echo (`echoShortens` latched at 2 strikes) plus a
+        // stale handshake used to fast-track straight to failover, because
+        // Layer 1 cannot tell a blocked transport from a dead node. The heal
+        // now takes the rung step first; only a stall that survives it
+        // escalates to a server move.
+        //
+        // Two ticks are required, and the first must be the one that banks a
+        // strike: `echoProbeAfter` = 30s opens the probe window long before
+        // `handshakeStaleAfter` = 150s makes a heal eligible, so in
+        // production `echoStallStrikes` = 2 is always already satisfied by
+        // the time the ladder becomes reachable. A single-tick test cannot
+        // cover that.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
 
-          // Tick 1: old enough to probe (>= 30s) but not stale enough to act.
-          // Banks strike 1 and returns without healing, so nothing resets it.
-          ctl.debugHandshakeReader = () async =>
-              DateTime.now().subtract(const Duration(seconds: 40));
-          await ctl.checkHealthOnce();
-          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        // Tick 1: old enough to probe (>= 30s) but not stale enough to act.
+        // Banks strike 1 and returns without healing, so nothing resets it.
+        ctl.debugHandshakeReader = () async =>
+            DateTime.now().subtract(const Duration(seconds: 40));
+        await ctl.checkHealthOnce();
+        expect(ctl.transportRung, TransportRung.native);
 
-          // Tick 2: same as `staleHandshake`, now with strikes at 2.
-          ctl.debugHandshakeReader = () async => DateTime.now().subtract(
-            ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
-          );
-          await ctl.checkHealthOnce();
+        // Tick 2: same as `staleHandshake`, now with strikes at 2. The step is
+        // to the rung immediately below — awg, the node's second device — so
+        // the first step is what this asserts, not the bottom of the ladder.
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
 
-          // The rung steps and the tunnel is rebuilt on it, on the same server
-          // and with the move budget untouched.
-          expect(ctl.obfuscationRung, ObfuscationRung.stream);
-          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-          expect(socket.lastConfig, contains('ListenPort = '));
-          expect(socket.lastTransport, isNotNull);
-          // The stream rung's inner format is stock even on a server that also
-          // serves the obfuscated one: the node's bridge injects into its stock
-          // device, so obfuscated directives here would be a handshake into a
-          // device that does not speak them.
-          expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(ctl.transportRung, TransportRung.awg);
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastTransport, isNull);
 
-          final state = container.read(connectionProvider);
-          expect(state.phase, ConnPhase.connected);
-          expect(state.dial?.serverId, 'srv-1');
-          expect(state.autoHealAttempts, 1);
-          expect(state.autoFailoverAttempts, 0);
-          expect(state.recoveryAction, RecoveryAction.tryingStream);
-          expect(state.recoveryReason, RecoveryReason.gatewayUnreachable);
-          expect(state.recoveryDetail, contains('echo dead'));
-        },
-      );
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.connected);
+        expect(state.dial?.serverId, 'srv-1');
+        expect(state.autoHealAttempts, 1);
+        expect(state.autoFailoverAttempts, 0);
+        expect(state.recoveryAction, RecoveryAction.tryingAwg);
+        expect(state.recoveryReason, RecoveryReason.gatewayUnreachable);
+        expect(state.recoveryDetail, contains('echo dead'));
+      });
+
+      test('the walk reaches the stream rung on a second incident', () async {
+        // One rung per incident, because the heal budget is what buys the step
+        // and it is one restart per incident by design. The second step is where
+        // the inner format inverts: the node's bridge injects into its *stock*
+        // device, so a stream session carries stock datagrams whatever the node
+        // also serves. An obfuscated conf inside the TLS session would reach a
+        // device that does not speak them.
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDownTo(container, TransportRung.stream);
+
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastConfig, contains('ListenPort = '));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastTransport, isNotNull);
+      });
 
       test('a backend-confirmed dead node moves servers without stepping a rung', () async {
         // The rungs exist for a transport the network blocks; a node the
         // backend has given up on is not that. So the ladder is skipped even
-        // though this region serves one below — the `!serverDown` half of the
-        // rung-step gate, which no stock-region suite can reach.
+        // though this node serves one below — the `!serverDown` half of the
+        // rung-step gate, which no stock-node suite can reach.
         //
         // `serverConfirmedDown` is normally the status poll's verdict (see the
         // poll suite); seeding it keeps this row about the ladder decision.
@@ -803,16 +833,17 @@ void main() {
         await ctl.checkHealthOnce();
 
         final state = container.read(connectionProvider);
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
-        // No heal is spent and no rebuild happens: the heal budget is not
+        expect(ctl.transportRung, TransportRung.native);
+        // No heal is spent and no rung step happens: the heal budget is not
         // what this stall needs.
         expect(state.autoHealAttempts, 0);
         expect(state.autoFailoverAttempts, 1);
         expect(state.dial?.serverId, 'srv-2');
         expect(state.recoveryAction, RecoveryAction.switchingServer);
         expect(state.recoveryReason, RecoveryReason.serverOffline);
-        // The move kept the region's format on the rung it was already on.
-        expect(socket.lastConfig, contains('Jc = 3'));
+        // The move kept the rung, and the new node advertises it.
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.11:51820'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
         expect(socket.lastTransport, isNull);
       });
 
@@ -842,20 +873,21 @@ void main() {
         await ctl.checkHealthOnce();
 
         // The same heal, spent on the rung instead of a pointless rebuild: the
-        // region serves stream below its AWG floor, and no server was touched.
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
-        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-        expect(socket.lastTransport, isNotNull);
+        // node advertises a rung below, and no server was touched.
+        expect(ctl.transportRung, TransportRung.awg);
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastTransport, isNull);
         final state = container.read(connectionProvider);
         expect(state.autoHealAttempts, 1);
         expect(state.autoFailoverAttempts, 0);
         expect(state.dial?.serverId, 'srv-1');
-        expect(state.recoveryAction, RecoveryAction.tryingStream);
+        expect(state.recoveryAction, RecoveryAction.tryingAwg);
         expect(state.recoveryReason, RecoveryReason.staleHandshake);
         expect(state.recoveryDetail, contains('never completed'));
       });
 
-      test('a long-healthy stream session probes one cheaper rung', () async {
+      test('a long-healthy session probes one cheaper rung', () async {
         useLinuxDataPlane();
         final clock = support.FakeClock();
         final controlProbe = support.FakeControlProbe(true);
@@ -868,7 +900,7 @@ void main() {
           ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
         );
         await ctl.checkHealthOnce();
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(ctl.transportRung, TransportRung.awg);
         ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
 
         ctl.debugHandshakeReader = () async => clock.now();
@@ -876,25 +908,28 @@ void main() {
         clock.advance(ConnectionTuning.rungPromotionHealthyFor);
         await ctl.checkHealthOnce();
 
-        // The probe is one step only: stream -> AWG, with no stream bridge.
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        // The probe is one step only: awg -> native, on the stock port and with
+        // a stock body. Because the floor is the node's own cheapest rung, a
+        // probe can never be a no-op that rebuilds the identical conf — the
+        // candidate always carries a different port and format.
+        expect(ctl.transportRung, TransportRung.native);
         expect(
           container.read(connectionProvider).recoveryAction,
-          RecoveryAction.tryingAwg,
+          RecoveryAction.tryingNative,
         );
-        // On the obfuscated port, which is where the server moved its tunnel.
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
         expect(socket.lastTransport, isNull);
 
         // A fresh handshake on the candidate confirms it. A later outage must
-        // not revert to stream as though this probe had failed.
+        // not revert to the expensive rung as though this probe had failed.
         ctl.debugHandshakeReader = () async => clock.now();
         await ctl.checkHealthOnce();
         ctl.debugHandshakeReader = () async => null;
         controlProbe.reachable = false;
         clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
         await ctl.checkHealthOnce();
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(ctl.transportRung, TransportRung.native);
       });
 
       test(
@@ -912,27 +947,28 @@ void main() {
             ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
           );
           await ctl.checkHealthOnce();
-          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(ctl.transportRung, TransportRung.awg);
           ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
 
           ctl.debugHandshakeReader = () async => clock.now();
 
           clock.advance(ConnectionTuning.rungPromotionHealthyFor);
           await ctl.checkHealthOnce();
-          expect(ctl.obfuscationRung, ObfuscationRung.awg);
+          expect(ctl.transportRung, TransportRung.native);
 
           ctl.debugHandshakeReader = () async => null;
           controlProbe.reachable = false;
           clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
           await ctl.checkHealthOnce();
 
-          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+          expect(ctl.transportRung, TransportRung.awg);
           expect(
             container.read(connectionProvider).recoveryAction,
-            RecoveryAction.tryingStream,
+            RecoveryAction.tryingAwg,
           );
-          expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-          expect(socket.lastTransport, isNotNull);
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+          expect(socket.lastConfig, contains('Jc = 3'));
+          expect(socket.lastTransport, isNull);
         },
       );
 
@@ -943,7 +979,7 @@ void main() {
           // spent from the heal budget that already existed. Once that budget
           // is spent, a confirmed dead path moves servers instead — so the
           // ladder trades a move budget for a rung rather than granting an
-          // unbounded retry on the bottom rung.
+          // unbounded retry on the same rung.
           //
           // The budget is spent in-session rather than by healing first: a
           // reconnect resets it by design, so waiting for a real heal to spend
@@ -961,7 +997,7 @@ void main() {
           await ctl.checkHealthOnce();
 
           // Strike 2 makes the path confirmed-dead. `canHeal` is now false, so
-          // `ladderStepAvailable` is false too and the evidence fast-tracks.
+          // `rungStepAvailable` is false too and the evidence fast-tracks.
           staleHandshake(ctl);
           await ctl.checkHealthOnce();
 
@@ -969,21 +1005,20 @@ void main() {
           // instead. `autoHealAttempts` is not asserted — the fallback restart
           // re-asserts it to 0 by design (conn_recovery.dart:753).
           final state = container.read(connectionProvider);
-          expect(ctl.obfuscationRung, ObfuscationRung.awg);
-          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+          expect(ctl.transportRung, TransportRung.native);
           expect(socket.lastTransport, isNull);
           expect(state.autoFailoverAttempts, 1);
         },
       );
 
       test(
-        'a region with no lower rung keeps the old move-first escalation',
+        'a node with no lower rung keeps the old move-first escalation',
         () async {
-          // The fix is scoped by whether a rung actually exists below. A stock
-          // region serves nothing but native, so there is nowhere to step and
-          // a confirmed dead path must still go straight to failover: a heal
-          // would rebuild the same config on the same rung, so spending the
-          // heal budget in place of the move would only delay recovery.
+          // The fix is scoped by whether a rung actually exists below. A
+          // stock-only node serves nothing but native, so there is nowhere to
+          // step and a confirmed dead path must still go straight to failover:
+          // a heal would rebuild the same config on the same rung, so spending
+          // the heal budget in place of the move would only delay recovery.
           final events = <String>[];
           final (container, _) = await seedConnected(
             events,
@@ -1020,26 +1055,33 @@ void main() {
         },
       );
 
-      test('an unprobeable echo reaches the ladder too', () async {
-        // The other route in: a null echo never latches `echoShortens`, so
-        // nothing fast-tracks and the heal runs. Kept because it needs no rung
-        // ordering to hold, and a future refactor must not lose it.
+      test('an unprobeable echo rebuilds without spending a rung', () async {
+        // The distinction the ladder is graded by. A null echo is *unknown*, not
+        // dead, so nothing here fast-tracks and the heal runs — but a stale
+        // handshake alone is not `tunnelPathDead` either, so the rung stays put
+        // and the rebuild is on the current rung. Only a positively dead path
+        // while the control plane answers buys a rung (the rows above), because
+        // that is the one signature of a blocked transport rather than a busy or
+        // unprobeable network.
         useLinuxDataPlane();
-        final (container, socket) = await seedStream();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
         final ctl = container.read(connectionProvider.notifier);
 
         (container.read(
           gatewayProbeProvider,
         ) as support.FakeGatewayProbe).alive = null;
 
-        // Two ticks, so this cannot pass merely by being the first one.
-        for (var i = 0; i < 2; i++) {
-          staleHandshake(ctl);
-          await ctl.checkHealthOnce();
-        }
+        // A second tick with a fresh handshake in between, so this cannot pass
+        // merely by being the first one after the connect.
+        await stepDown(container);
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
 
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(ctl.transportRung, TransportRung.native);
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
         expect(socket.lastTransport, isNull);
         expect(container.read(connectionProvider).autoHealAttempts, 1);
       });
@@ -1051,12 +1093,7 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
 
-        await healOnce(container);
-        ctl.debugHandshakeReader = () async => DateTime.now();
-        await ctl.disconnect();
-        await ctl.connect();
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
+        await stepDownTo(container, TransportRung.stream);
 
         // The spec the helper receives is what makes the bridge real: the
         // credential passes through from the control plane, and the two
@@ -1077,28 +1114,35 @@ void main() {
         final deliverPort = (spec['deliver'] as String).split(':').last;
         expect(socket.lastConfig, contains('Endpoint = $listen'));
         expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
-        // And the tunnel the bridge carries is *stock*, whatever this server's
-        // obfuscation settings are. The node's bridge injects into its stock
-        // device, so a session's datagrams have to be stock to be readable there;
-        // applying the awg directives would hand an obfuscated conf to a device
-        // that does not speak them. This is the inversion from the single-device
+        // And the tunnel the bridge carries is *stock*, whatever this node also
+        // serves. The node's bridge injects into its stock device, so a
+        // session's datagrams have to be stock to be readable there; applying
+        // the awg directives would hand an obfuscated conf to a device that
+        // does not speak them. This is the inversion from the single-device
         // node, whose only tunnel was the AmneziaWG one.
         expect(socket.lastConfig, isNot(contains('Jc =')));
         // Which is also why the stock overlay's address and resolver are the
         // right ones here, not the obfuscated pair the awg rung claims.
         expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
         expect(socket.lastConfig, contains('DNS = 10.8.0.1'));
+        // Which the branch below reads the rung off, so it is not dead.
+        expect(ctl.transportRung, TransportRung.stream);
       });
 
-      // The port the rung is reached on is the property most easily lost in a
-      // refactor and most expensive when it is: a client that dialled wg_port at
-      // a server serving the awg rung would put a plaintext WireGuard handshake
-      // on the wire first — the exact fingerprint the rung exists to hide — and
-      // then fail to connect, which reads to the health ladder as a blocked
-      // network rather than a wrong port.
+      // The port a rung is reached on is the property most easily lost in a
+      // refactor and most expensive when it is: a client that dialled wg_port on
+      // the awg rung would put a plaintext WireGuard handshake on the wire first
+      // — the exact fingerprint the rung exists to hide — and then fail to
+      // connect, which reads to the health ladder as a blocked network rather
+      // than a wrong port.
       test('the awg rung dials the obfuscated port, never wg_port', () async {
         useLinuxDataPlane();
-        final (container, socket) = await seedStream();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
 
         expect(socket.lastConfig, contains('Jc = 3'));
         expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
@@ -1106,30 +1150,22 @@ void main() {
           socket.lastConfig,
           isNot(contains('Endpoint = 203.0.113.10:51820')),
         );
-        expect(
-          container.read(connectionProvider.notifier).obfuscationRung,
-          ObfuscationRung.awg,
-        );
+        expect(ctl.transportRung, TransportRung.awg);
       });
 
-      // The awg rung needs three things from the server: the format (the
-      // descriptor), the port to bind, and the address its device's overlay
-      // contains. A payload missing the third is asking for a conf whose every
-      // packet the node cannot route — a tunnel that handshakes and then goes
-      // nowhere, which reads to the ladder as a blocked network and demotes the
-      // rung that was working. So the rung is treated as not offered.
-      //
-      // This replaces a fallback to the stock port that made the shape tolerable
-      // when the node had one device; with two devices it would apply the awg
-      // directives to a conf aimed at the wrong one.
-      test('a server offering no obfuscated address does not offer the rung', () async {
+      // The awg rung needs an address on the node's obfuscated overlay as well as
+      // the rung's own port and parameters. A payload missing the address is
+      // asking for a conf whose every packet the node cannot route — a tunnel
+      // that handshakes and then goes nowhere, which reads to the ladder as a
+      // blocked network and demotes the rung that was working. So the rung is
+      // treated as not offered, and the walk skips straight past it.
+      test('a node offering no obfuscated address does not offer the rung', () async {
         useLinuxDataPlane();
         final (container, socket) = await seedStream(
           dial: () => dialJson(
-            obfuscation: awgObfuscationJson(),
             awgPort: 51821,
             // No address on the obfuscated overlay: the field absent, which is
-            // what a server claiming the rung without one sends.
+            // what a node claiming the rung without one sends.
             awgAssignedIp: '',
             stream: streamTransportJson(),
           ),
@@ -1137,22 +1173,16 @@ void main() {
           // is blocked" and steps the ladder rather than moving servers.
           controlProbe: support.FakeControlProbe(true),
         );
-
-        // It starts on native, because that is the cheapest rung this server can serve
-        // — and it reaches the node directly on the stock port, with a stock
-        // body and the stock address.
         final ctl = container.read(connectionProvider.notifier);
-        expect(ctl.obfuscationRung, ObfuscationRung.native);
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
-        expect(socket.lastConfig, isNot(contains('Jc =')));
-        expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
 
-        // And the stream rung below it is still reachable on a heal, carrying a
-        // stock conf for the same reason.
-        await healOnce(container);
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        // It starts on native, and the awg rung is not on the ladder at all, so
+        // the single step below lands on the stream rung.
+        await stepDown(container);
+
+        expect(ctl.transportRung, TransportRung.stream);
         expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
         expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
         expect(socket.lastTransport, isNotNull);
       });
 
@@ -1162,75 +1192,91 @@ void main() {
       // device has no route to a stock address.
       test('the awg rung claims the obfuscated overlay address', () async {
         useLinuxDataPlane();
-        final (container, socket) = await seedStream();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
 
         expect(socket.lastConfig, contains('Address = 10.9.0.5/32'));
         expect(socket.lastConfig, contains('DNS = 10.9.0.1'));
         expect(socket.lastConfig, isNot(contains('Address = 10.8.0.5/32')));
-        expect(
-          container.read(connectionProvider.notifier).obfuscationRung,
-          ObfuscationRung.awg,
-        );
+        expect(ctl.transportRung, TransportRung.awg);
       });
 
-      // The mirror on a dual-format server is the stream case above: it asserts
-      // the stock address and resolver there, on a server that *does* carry the
+      // The mirror on a dual-format node is the stream case above: it asserts
+      // the stock address and resolver there, on a node that *does* carry the
       // obfuscated pair, which is the assertion that catches a conf picking the
-      // wrong overlay. The native rung needs no suite of its own — on a stock
-      // server it is the only rung, and every native suite already asserts the
-      // stock address.
+      // wrong overlay. The native rung needs no suite of its own — every node
+      // serves it, and every native suite already asserts the stock address.
 
       test(
-        'a region offering only the stream credential reaches it at once',
+        'a node offering only the stream credential reaches it in one step',
         () async {
           useLinuxDataPlane();
-          // No AWG descriptor at all, so the walk has nowhere to go but stream
-          // on the *first* heal — no second cycle needed.
+          // No obfuscated rung at all, so the walk has nowhere to go but stream
+          // on the *first* heal.
           final (container, socket) = await seedStream(
             dial: streamOnlyDial,
             controlProbe: support.FakeControlProbe(true),
           );
 
-          await healOnce(container);
+          await stepDown(container);
 
           expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
-          // A stock region's node runs stock WireGuard, so the stream carries
-          // stock datagrams: no obfuscation directives.
+          // The node's bridge injects into its stock device, so the stream
+          // carries stock datagrams: no obfuscation directives.
           expect(socket.lastConfig, isNot(contains('Jc =')));
           expect(socket.lastTransport, isNotNull);
           expect(
-            container.read(connectionProvider.notifier).obfuscationRung,
-            ObfuscationRung.stream,
+            container.read(connectionProvider.notifier).transportRung,
+            TransportRung.stream,
           );
         },
       );
 
-      test('a daemon without the capability never offers the rung', () async {
+      test('a daemon without the capability never offers the stream rung', () async {
         // An older Linux helper knows nothing about transports, so its missing
-        // token has to keep the rung off the ladder entirely.
+        // token has to keep the rung off the ladder entirely — while leaving the
+        // rungs it *can* serve alone.
         useLinuxDataPlane();
-        final (container, socket) = await seedStream(caps: const {});
+        final (container, socket) = await seedStream(
+          caps: const {},
+          controlProbe: support.FakeControlProbe(true),
+        );
         final ctl = container.read(connectionProvider.notifier);
 
-        await healOnce(container);
+        await stepDown(container);
         staleHandshake(ctl);
         await ctl.checkHealthOnce();
 
         expect(socket.lastConfig, contains('Jc = 3'));
         expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(ctl.transportRung, TransportRung.awg);
       });
 
-      test('a platform without the data plane refuses the region', () async {
-        // Fuchsia has neither an AWG data plane nor the stream bridge, so there
-        // is no rung capable of carrying this region's format.
-        debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
-        addTearDown(() => debugDefaultTargetPlatformOverride = null);
-        final (container, socket) = await seedStream(expectConnected: false);
+      test(
+        'a platform without either data plane starts native and stops',
+        () async {
+          // Fuchsia has neither an obfuscated data plane nor the stream bridge, so
+          // the only rung it can run is the node's stock device. It connects there
+          // rather than refusing — which is the whole point of the floor rule
+          // being scoped to the advertised list.
+          debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          final (container, socket) = await seedStream();
 
-        expect(container.read(connectionProvider).phase, ConnPhase.error);
-        expect(socket.lastConfig, isNull);
-      });
+          expect(container.read(connectionProvider).phase, ConnPhase.connected);
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastConfig, isNot(contains('Jc =')));
+          expect(socket.lastTransport, isNull);
+          expect(
+            container.read(connectionProvider.notifier).transportRung,
+            TransportRung.native,
+          );
+        },
+      );
 
       test('the walk stops at the last rung rather than inventing one', () async {
         useLinuxDataPlane();
@@ -1239,97 +1285,99 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
 
-        await healOnce(container);
-        ctl.debugHandshakeReader = () async => DateTime.now();
-        await ctl.disconnect();
-        await ctl.connect();
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        await stepDownTo(container, TransportRung.stream);
 
-        // One more cycle on the bottom rung. There is nothing below stream, so
-        // the rung must not move and the rebuild must stay a stream rebuild —
+        // One more incident on the bottom rung. There is nothing below stream,
+        // so the rung must not move and the rebuild must stay a stream rebuild —
         // this is where a missing `null` case would invent a fourth rung.
-        ctl.debugHandshakeReader = () async => DateTime.now();
-        await ctl.disconnect();
-        await ctl.connect();
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
+        await stepDown(container);
 
-        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(ctl.transportRung, TransportRung.stream);
         expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
         expect(socket.lastTransport, isNotNull);
       });
 
-      test(
-        'a move to a region with no stream credential drops the rung',
-        () async {
-          useLinuxDataPlane();
-          final (container, socket) = await seedStream(
-            controlProbe: support.FakeControlProbe(true),
-            // The move lands on a stock region whose dial carries no stream
-            // credential, so the sticky stream rung has nothing to run there.
-            onSwitch: () => dialJson(serverId: 'srv-2', serverName: 'two'),
-          );
-          final ctl = container.read(connectionProvider.notifier);
+      test('a move to a node with no stream credential drops the rung', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+          // The move lands on a stock node whose dial carries no stream
+          // credential, so the sticky stream rung has nothing to run there.
+          onSwitch: () => dialJson(serverId: 'srv-2', serverName: 'two'),
+        );
+        final ctl = container.read(connectionProvider.notifier);
 
-          await healOnce(container);
-          expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        await stepDownTo(container, TransportRung.stream);
+        expect(ctl.transportRung, TransportRung.stream);
 
-          ctl.debugHandshakeReader = () async => DateTime.now();
-          await ctl.switchServer(regionId: null, serverId: 'srv-2');
+        await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
-          // Keeping the stream rung would only throw — there is no credential
-          // to build a bridge from — so the start drops to the new region's
-          // floor: native, the only rung a stock region can serve here.
-          expect(container.read(connectionProvider).phase, ConnPhase.connected);
-          expect(ctl.obfuscationRung, ObfuscationRung.native);
-          expect(socket.lastTransport, isNull);
-          expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
-        },
-      );
+        // Keeping the stream rung would only throw — there is no credential to
+        // build a bridge from — so the start drops to the new node's floor:
+        // native, the only rung a stock node serves.
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        expect(ctl.transportRung, TransportRung.native);
+        expect(socket.lastTransport, isNull);
+        expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
+      });
 
-      test(
-        'a region without a stream credential never demotes to it',
-        () async {
-          useLinuxDataPlane();
-          final (container, socket) = await seedStream(
-            dial: () =>
-                dialJson(obfuscation: awgObfuscationJson(), awgPort: 51821),
-          );
-          final ctl = container.read(connectionProvider.notifier);
+      test('a move onto a dual-format node keeps the sticky rung', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
 
-          await healOnce(container);
-          staleHandshake(ctl);
-          await ctl.checkHealthOnce();
+        await stepDownTo(container, TransportRung.stream);
 
-          // AWG is the only rung the region can serve, so the walk stops there
-          // and the heal keeps rebuilding the same conf.
-          expect(ctl.obfuscationRung, ObfuscationRung.awg);
-          expect(socket.lastConfig, contains('Jc = 3'));
-        },
-      );
+        // The new node advertises the whole ladder, so a sticky rung it also
+        // serves is kept — a server move must not silently pay for the walk
+        // again. This is the rung floor never re-probing on a move.
+        await ctl.switchServer(regionId: null, serverId: 'srv-1');
+        await ctl.switchServer(regionId: null, serverId: 'srv-2');
+
+        expect(container.read(connectionProvider).phase, ConnPhase.connected);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(socket.lastTransport, isNotNull);
+      });
+
+      test('a node without a stream credential never demotes to it', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          dial: () => dialJson(awgPort: 51821),
+          controlProbe: support.FakeControlProbe(true),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
+        await stepDown(container);
+
+        // The awg rung is the last one this node advertises, so the walk stops
+        // there and the heal keeps rebuilding the same conf.
+        expect(ctl.transportRung, TransportRung.awg);
+        expect(socket.lastConfig, contains('Jc = 3'));
+      });
 
       test('a malformed credential is never selected as a rung', () async {
-        // A PSK of the wrong size is exactly what the daemon refuses, so
-        // the ladder must not build a transport from it.
+        // A PSK of the wrong size is exactly what the daemon refuses, so the
+        // ladder must not build a transport from it. The entry decodes; it is
+        // just not an offer.
         useLinuxDataPlane();
         final (container, socket) = await seedStream(
           dial: () => dialJson(
-            obfuscation: awgObfuscationJson(),
             awgPort: 51821,
             stream: streamTransportJson(
               psk: base64Encode(List<int>.filled(16, 0xbb)),
             ),
           ),
+          controlProbe: support.FakeControlProbe(true),
         );
         final ctl = container.read(connectionProvider.notifier);
 
-        await healOnce(container);
-        staleHandshake(ctl);
-        await ctl.checkHealthOnce();
+        await stepDown(container);
+        await stepDown(container);
 
-        expect(ctl.obfuscationRung, ObfuscationRung.awg);
+        expect(ctl.transportRung, TransportRung.awg);
         expect(socket.lastConfig, isNot(contains('Endpoint = 127.0.0.1:')));
       });
     });
@@ -2507,16 +2555,15 @@ void main() {
     expect(events, contains('tunnel:start'));
   });
 
-  Map<String, dynamic> dialJsonSrv9() => {
-    'id': 'dev-1',
-    'assigned_ip': '10.8.0.9',
-    'server_id': 'srv-9',
-    'server_name': 'nine',
-    'endpoint': '203.0.113.19',
-    'wg_port': 51820,
-    'wg_dns': '10.8.0.1',
-    'wg_public_key': 'SRV9',
-  };
+  /// A third stock-only node, for the roaming suites. Its ladder is `native`
+  /// alone, so a move onto it always lands on the floor.
+  Map<String, dynamic> dialJsonSrv9() => dialJson(
+    serverId: 'srv-9',
+    serverName: 'nine',
+    assignedIp: '10.8.0.9',
+    endpoint: '203.0.113.19',
+    wgPublicKey: 'SRV9',
+  );
 
   Map<String, dynamic> serverJson(String id, String name, int peers) => {
     'id': id,

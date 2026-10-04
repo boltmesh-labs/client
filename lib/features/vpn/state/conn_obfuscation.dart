@@ -1,48 +1,14 @@
 part of 'connection_controller.dart';
 
-/// The transport rungs, in cost order: the order [_demoteRung] walks.
+/// The transport ladder.
 ///
-/// Native costs an unobstructed network nothing. AmneziaWG is the middle rung:
-/// obfuscated datagrams, no extra moving parts. Stream is the last: the tunnel
-/// rides a TLS session to the node, which is what defeats a network that blocks
-/// or fingerprints WireGuard's own UDP, and costs the most when it fails.
-///
-/// The order is the walk order, but where the walk *starts* is the serving
-/// server's, not the process's: a stock server's node runs stock WireGuard, so
-/// native is its floor, while an obfuscated server's node runs the AmneziaWG
-/// device, so a stock datagram is illegible to it — native is not a cheap probe
-/// there but a guaranteed-failed attempt that would put a plaintext WireGuard
-/// handshake on the wire first. See [_rungFor].
-///
-/// The rungs are alternatives — one at a time, never stacked — but the *inner*
-/// WireGuard format follows the server, not the rung: an obfuscated server's
-/// node runs the AmneziaWG device, so the datagrams it receives must carry the
-/// obfuscation directives whether they arrive directly (AWG) or inside a stream
-/// transport. The stream's TLS session is the outer camouflage; the inner
-/// format still has to match the node's device.
-enum ObfuscationRung {
-  /// The kernel WireGuard data plane, pointed straight at the node.
-  native,
-
-  /// The in-process AmneziaWG device.
-  awg,
-
-  /// The tunnel's datagrams carried inside a TLS session to the node — the same
-  /// WireGuard tunnel, wrapped so a network that blocks or fingerprints
-  /// WireGuard's own UDP sees ordinary HTTPS. Not a second VPN: the conf is a
-  /// normal one pointed at a loopback bridge the privileged helper runs for the
-  /// tunnel's lifetime, so every local health signal reads the same as on the
-  /// rungs below it. It is last because it is the most expensive and most
-  /// breakable; see the README's *What the stream rung actually is* for the
-  /// wire format and what the client has to already have to select it.
-  stream,
-}
-
-/// The obfuscation ladder. Where it *starts* is the serving server's data plane
-/// — a stock server starts on native, an obfuscated one on AmneziaWG, because
-/// its node cannot read a stock datagram (see [_rungFor]) — and every rung below
-/// that is reached only when the health policy sees a dead tunnel path while
-/// the control plane is reachable (see [_demoteRung]).
+/// The serving node advertises which rungs it runs, in cost order (see
+/// `TransportOption`), and where the walk *starts* is the cheapest rung on that
+/// list this platform can run (see [_rungFor]). So a node serving both stock and
+/// obfuscated starts stock and demotes, rather than being treated as a
+/// single-format node with one option — and a node that serves only `awg` and
+/// `stream` floors a platform with no obfuscated data plane to `stream` rather
+/// than refusing it.
 ///
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
@@ -56,49 +22,39 @@ extension ConnectionObfuscation on ConnectionController {
   /// avoid re-paying for a failed path. The health tick may probe one cheaper
   /// rung after [ConnectionTuning.rungPromotionHealthyFor]; it returns to the
   /// known-working rung if liveness is not confirmed within
-  /// [ConnectionTuning.rungPromotionProbeTimeout]. Region changes also move the
-  /// rung to the new floor or the highest rung that server can serve.
-  ObfuscationRung get obfuscationRung => _obfuscationRung;
+  /// [ConnectionTuning.rungPromotionProbeTimeout]. A server move also moves the
+  /// rung to the new node's floor, or to the highest rung that node advertises.
+  TransportRung get transportRung => _transportRung;
 
   /// The obfuscation parameters to build a conf for [dial] with, or null when
   /// this start's tunnel is stock WireGuard.
   ///
-  /// Only the obfuscated rung applies them, because it is the only one pointed at
-  /// the node's obfuscated device. The other two are stock: the native rung by
-  /// definition, and the stream rung because the node's bridge injects into its
-  /// *stock* device no matter what that server's obfuscation settings are — so a
-  /// stream session carries stock datagrams inside its TLS session.
-  ///
-  /// That is the difference from the single-device node this replaced, where an
-  /// obfuscated server's only tunnel was the AmneziaWG device and the stream rung
-  /// had to carry obfuscated datagrams into it.
-  ObfuscationParams? _obfuscationParamsFor(DialParams dial) {
-    if (_obfuscationRung != ObfuscationRung.awg) return null;
-    final obf = dial.obfuscation;
-    return obf != null && obf.isAwg ? obf.params : null;
-  }
+  /// Only the obfuscated rung carries them, because it is the only one pointed at
+  /// the node's obfuscated device — and only that entry has a `params` field at
+  /// all. The other two are stock: the native rung by definition, and the stream
+  /// rung because the node's bridge injects into its *stock* device whatever else
+  /// that node serves, so a stream session carries stock datagrams inside its TLS
+  /// session.
+  ObfuscationParams? _obfuscationParamsFor(DialParams dial) =>
+      _transportFor(dial).params;
 
-  /// The node's own UDP port for the rung this start is on.
+  /// The advertised entry for the rung this start is on.
   ///
-  /// `awgPort` on the obfuscated rung, `wgPort` on stock. The two are not
-  /// interchangeable in either direction, because the node runs a *separate device*
-  /// per transport: a stock device cannot read obfuscation directives, and an
-  /// obfuscated device cannot read a stock handshake.
+  /// The one place a rung's advertisement is read, so the port, the parameters
+  /// and the credential used to build a start can never come from a rung other
+  /// than the one being started. Non-null by construction: [_applyRung] has
+  /// already refused a rung this node does not advertise or this build cannot
+  /// assemble, and nothing between it and here changes the rung.
+  TransportOption _transportFor(DialParams dial) =>
+      dial.transportFor(_transportRung)!;
+
+  /// The node's own port for the rung this start is on.
   ///
-  /// Falls back to `wgPort` when the descriptor is AWG but no `awg_port` came with
-  /// it. That is the shape of a backend predating the field, and dialling the one
-  /// port such a backend knows about is the only thing left to try; the rung is
-  /// never selected for it anyway, since a server that cannot name the port is not
-  /// offering the rung.
-  int _tunnelPortFor(DialParams dial) {
-    if (_obfuscationRung == ObfuscationRung.awg) {
-      final obf = dial.obfuscation;
-      if (obf != null && obf.isAwg && dial.awgPort != null) {
-        return dial.awgPort!;
-      }
-    }
-    return dial.wgPort;
-  }
+  /// The rung's advertised port, which is that rung's own device: the node runs a
+  /// separate device per transport, so a stock device cannot read obfuscation
+  /// directives and an obfuscated device cannot read a stock handshake, and
+  /// neither port is interchangeable with the other in either direction.
+  int _tunnelPortFor(DialParams dial) => _transportFor(dial).port;
 
   /// The overlay address this start must claim.
   ///
@@ -108,17 +64,16 @@ extension ConnectionObfuscation on ConnectionController {
   /// blackholes every packet — which reads as a blocked network and demotes the
   /// rung that was working.
   ///
-  /// Only the obfuscated rung has a second address. The stream rung is stock
-  /// because the node's bridge injects into its *stock* device: a stream session
-  /// carries stock WireGuard datagrams whatever the server's obfuscation settings
-  /// say, and handing those to the obfuscated device is a handshake into a void.
-  String _overlayAddressFor(DialParams dial) {
-    if (_obfuscationRung == ObfuscationRung.awg) {
-      final awgAddress = dial.awgAssignedIp;
-      if (awgAddress != null && awgAddress.isNotEmpty) return awgAddress;
-    }
-    return dial.assignedIp;
-  }
+  /// Only the obfuscated rung has a second address, and it is exactly the case
+  /// [_awgRungRunnable] gates on, so there is nothing to fall back to here. The
+  /// stream rung is stock because the node's bridge injects into its *stock*
+  /// device: a stream session carries stock WireGuard datagrams whatever else
+  /// that node serves, and handing those to the obfuscated device is a handshake
+  /// into a void.
+  String _overlayAddressFor(DialParams dial) =>
+      _transportRung == TransportRung.awg
+      ? dial.awgAssignedIp!
+      : dial.assignedIp;
 
   /// The in-tunnel resolver for this start.
   ///
@@ -126,52 +81,38 @@ extension ConnectionObfuscation on ConnectionController {
   /// interface, so the resolver has to be the one on the device this start's
   /// traffic reaches. Pushing the stock stub's address onto the obfuscated rung
   /// would send every DNS query to a device with no route for it.
-  String _overlayDnsFor(DialParams dial) {
-    if (_obfuscationRung == ObfuscationRung.awg) {
-      final awgDns = dial.awgDns;
-      if (awgDns != null && awgDns.isNotEmpty) return awgDns;
-    }
-    return dial.wgDns;
-  }
+  String _overlayDnsFor(DialParams dial) =>
+      _transportRung == TransportRung.awg ? dial.awgDns! : dial.wgDns;
 
-  /// Whether the obfuscated rung has everything it needs to be built.
+  /// Whether the obfuscated rung is something this start could actually build.
   ///
-  /// The port alone is no longer enough: the rung also needs an address on the
-  /// node's obfuscated overlay. A server advertising the descriptor without one is
-  /// asking for a conf whose every packet the node cannot route — so the rung is
-  /// treated as not offered rather than offered and broken, which is what the
-  /// control plane's withholding on its side is for.
-  bool _awgRungAvailable(DialParams dial) {
-    final obf = dial.obfuscation;
-    if (obf == null || !obf.isAwg || !awgDataPlaneSupported()) return false;
-    final hasAddress =
-        dial.awgAssignedIp != null && dial.awgAssignedIp!.isNotEmpty;
-    return hasAddress && dial.awgPort != null;
-  }
+  /// The advertised entry carries the port and the parameter set; what it cannot
+  /// carry is the *peer's* address on the obfuscated overlay, because that belongs
+  /// to the device and is the same for every session. A rung without one is a
+  /// conf whose every packet the node's second device cannot route — a tunnel
+  /// that handshakes and then goes nowhere, which reads to the health ladder as a
+  /// blocked network and demotes the rung that was working. So the rung counts as
+  /// not offered rather than offered and broken, which is what the control
+  /// plane's withholding on its own side is for.
+  /// Both fields, because the pair is emitted together or not at all (see the
+  /// backend factory) — checking one and then asserting the other would be a
+  /// check of an invariant, not of input.
+  bool _awgRungRunnable(DialParams dial) =>
+      dial.transportFor(TransportRung.awg) != null &&
+      (dial.awgAssignedIp?.isNotEmpty ?? false) &&
+      (dial.awgDns?.isNotEmpty ?? false);
 
   /// The stream transport for this start, or null unless this process is on the
   /// stream rung.
   ///
-  /// Returns null when the server offers no credential, and throws when the rung
-  /// is selected but the platform or daemon cannot run it: those are different
-  /// problems, and silently falling back to the native rung would defeat the
-  /// heal that put us here by retrying the path just proven dead.
+  /// Total by construction now: [_rungRunnableHere] is what admits the stream
+  /// rung onto the ladder, and it requires both a usable credential from the
+  /// advertised entry and a data plane that can run it. So there is nothing left
+  /// to check here — every value below is the one that gate accepted, and the
+  /// rung below can neither be silently substituted nor invented.
   Future<TunnelTransport?> _streamTransportFor(DialParams dial) async {
-    if (_obfuscationRung != ObfuscationRung.stream) return null;
-    final credential = dial.stream;
-    if (credential == null || !credential.isUsable) {
-      throw StateError('Stream rung selected without a usable credential.');
-    }
-    if (!streamTransportSupported()) {
-      throw UnsupportedError(
-        'Stream transport is not available on this platform.',
-      );
-    }
-    if (!_daemonCapabilities.contains(capStreamTransport)) {
-      throw UnsupportedError(
-        'The installed helper cannot run a stream transport.',
-      );
-    }
+    if (_transportRung != TransportRung.stream) return null;
+    final credential = _transportFor(dial).credential!;
     final ports = await allocateLoopbackPorts();
     return TunnelTransport(
       listen: '${TunnelTransport.loopbackHost}:${ports.listen}',
@@ -180,13 +121,17 @@ extension ConnectionObfuscation on ConnectionController {
     );
   }
 
-  /// Moves the process one rung down when [dial]'s region can serve the next
-  /// one. Idempotent: a process already on the last usable rung reports false,
-  /// so the heal that demotes is also the only one that can.
+  /// Moves the process one rung down when [dial]'s node advertises one below.
+  /// Idempotent: a process already on the last advertised rung reports false, so
+  /// the heal that demotes is also the only one that can.
   ///
-  /// The walk is a single step, not a jump: a heal that moves native directly
-  /// to stream would skip the cheaper rung and, if the stream failed, leave no
-  /// evidence about whether AWG would have worked.
+  /// The walk is a single step, not a jump: a heal that moved straight to the
+  /// bottom rung would skip the cheaper one and, if that failed, leave no evidence
+  /// about whether the rung in between would have worked. With the advertised
+  /// list there is no cheaper rung *unless the node says it runs one*, so the
+  /// skip concern only ever arises on a node that serves two rungs below the floor
+  /// — which the one-heal-per-incident budget does not yet walk through (see the
+  /// plan's Phase 4).
   ///
   /// [why] is the health reason that triggered the heal, so the log names the
   /// evidence the demotion acted on.
@@ -194,30 +139,28 @@ extension ConnectionObfuscation on ConnectionController {
     final next = _nextRungFor(dial);
     if (next == null) return false;
     AppLog.info(
-      'transport demoted ($why) ${_obfuscationRung.name} -> ${next.name}',
+      'transport demoted ($why) ${_transportRung.name} -> ${next.name}',
     );
-    _obfuscationRung = next;
+    _transportRung = next;
     return true;
   }
 
-  /// The next cheaper rung this server can run, or null at its floor.
-  ObfuscationRung? _cheaperRungFor(DialParams dial) {
-    final obf = dial.obfuscation;
-    final floor = obf != null && obf.isAwg
-        ? ObfuscationRung.awg
-        : ObfuscationRung.native;
-    for (
-      var index = _obfuscationRung.index - 1;
-      index >= floor.index;
-      index--
-    ) {
-      final candidate = ObfuscationRung.values[index];
-      if (candidate == ObfuscationRung.native ||
-          (candidate == ObfuscationRung.awg && _awgRungAvailable(dial))) {
-        return candidate;
-      }
-    }
-    return null;
+  /// The rung immediately above the current one on [dial]'s ladder, or null at
+  /// the floor.
+  ///
+  /// Read off the advertised list rather than the process-wide cost order, so the
+  /// candidate is always a rung the serving node really offers. That is also what
+  /// makes the probe structurally non-trivial: every entry in the list carries the
+  /// port and payload its own rung needs, so the rung below can never build the
+  /// same conf as the one above it.
+  TransportRung? _cheaperRungFor(DialParams dial) {
+    final rungs = _runnableRungs(dial);
+    final at = rungs.indexOf(_transportRung);
+    // Index 0 is the floor, so nothing cheaper exists below it; a negative index
+    // means the current rung is not advertised at all, which [_applyRung] rejects
+    // before any start.
+    if (at <= 0) return null;
+    return rungs[at - 1];
   }
 
   /// Probe one cheaper rung after a long, positively healthy session. The
@@ -269,17 +212,17 @@ extension ConnectionObfuscation on ConnectionController {
       }
 
       final sessionEpoch = _sessionEpoch;
-      final previousRung = _obfuscationRung;
+      final previousRung = _transportRung;
       final previousHealAttempts = snap.autoHealAttempts;
       final previousFailoverAttempts = snap.autoFailoverAttempts;
       final previousPollFailures = snap.pollFailures;
       _promotionFallbackRung = previousRung;
       _promotionFallbackDial = dial;
-      _obfuscationRung = candidate;
+      _transportRung = candidate;
       final recoveryAction = switch (candidate) {
-        ObfuscationRung.native => RecoveryAction.tryingNative,
-        ObfuscationRung.awg => RecoveryAction.tryingAwg,
-        ObfuscationRung.stream => RecoveryAction.tryingStream,
+        TransportRung.native => RecoveryAction.tryingNative,
+        TransportRung.awg => RecoveryAction.tryingAwg,
+        TransportRung.stream => RecoveryAction.tryingStream,
       };
       AppLog.info(
         'transport promotion probe ${previousRung.name} -> ${candidate.name} '
@@ -317,7 +260,7 @@ extension ConnectionObfuscation on ConnectionController {
       } catch (e) {
         if (sessionEpoch != _sessionEpoch) return;
         AppLog.error('cheaper transport probe failed to start', e);
-        _obfuscationRung = previousRung;
+        _transportRung = previousRung;
         _promotionFallbackRung = null;
         _promotionFallbackDial = null;
         snap = snap.copyWith(
@@ -374,117 +317,119 @@ extension ConnectionObfuscation on ConnectionController {
     final previous = _promotionFallbackRung;
     if (previous == null) return;
     AppLog.info(
-      'transport promotion confirmed ${previous.name} -> ${_obfuscationRung.name}',
+      'transport promotion confirmed ${previous.name} -> ${_transportRung.name}',
     );
     _promotionFallbackRung = null;
     _promotionFallbackDial = null;
   }
 
-  /// The rung one step below the current one that [dial] can actually serve,
-  /// or null when there is nothing below to walk onto.
+  /// The rung one step below the current one that [dial]'s node actually
+  /// advertises, or null when there is nothing below to walk onto.
+  ///
+  /// The next entry in the advertised list, not the next value in the cost order:
+  /// a node that serves only stock and stream must demote straight to stream, and
+  /// one whose awg entry this platform cannot run must skip it. Reading the list
+  /// is what makes both work without a per-server special case.
   ///
   /// Split out of [_demoteRung] so the health tick can ask whether a heal
   /// would lower the rung *before* spending one, without mutating it: the
   /// ladder is only worth a restart when there is a rung underneath it.
-  ObfuscationRung? _nextRungFor(DialParams dial) => switch (_obfuscationRung) {
-    ObfuscationRung.native => _firstAvailableRung(dial),
-    ObfuscationRung.awg =>
-      _streamRungAvailable(dial) ? ObfuscationRung.stream : null,
-    // Nothing below stream: a heal here escalates through the existing
-    // failover instead of retrying a rung that does not exist.
-    ObfuscationRung.stream => null,
-  };
+  TransportRung? _nextRungFor(DialParams dial) {
+    final rungs = _runnableRungs(dial);
+    final at = rungs.indexOf(_transportRung);
+    if (at < 0 || at + 1 >= rungs.length) return null;
+    return rungs[at + 1];
+  }
 
   /// Whether a heal against [dial] would leave the rung lower. Pure: it reads
   /// the ladder without moving it, so a caller can gate on it and leave the
   /// ladder alone when the answer is no.
   bool _hasLowerRung(DialParams dial) => _nextRungFor(dial) != null;
 
-  /// The first rung below native that [dial]'s server and this platform can
-  /// actually run, preferring AWG because it is the cheaper one.
-  ObfuscationRung? _firstAvailableRung(DialParams dial) {
-    if (_awgRungAvailable(dial)) return ObfuscationRung.awg;
-    if (_streamRungAvailable(dial)) return ObfuscationRung.stream;
-    return null;
-  }
-
-  /// Whether the stream rung could run here at all: the server must offer a
-  /// usable credential, this platform must have a data plane for it, and the
-  /// installed daemon must advertise the capability. All three, because
-  /// selecting the rung without any of them can only fail.
+  /// The rungs [dial]'s node advertises that this platform can actually start,
+  /// cheapest first.
   ///
-  /// A node that also serves the obfuscated rung adds nothing here. The stream's
-  /// inner datagrams are stock regardless of that server's settings, because the
-  /// node's bridge injects them into its *stock* device — which is exactly why the
-  /// stream rung needs no obfuscated data plane on this side, and why a platform
-  /// without one can still reach such a server over TLS.
-  bool _streamRungAvailable(DialParams dial) {
-    final credential = dial.stream;
-    if (credential == null ||
-        !credential.isUsable ||
-        !streamTransportSupported() ||
-        !_daemonCapabilities.contains(capStreamTransport)) {
-      return false;
-    }
-    return true;
-  }
+  /// The advertised list, minus what this build cannot start. Ordered by the
+  /// *node*, so a walk down it is a walk down what that node really offers rather
+  /// than down a fixed cost order the node may not serve — the two diverge the
+  /// moment a node runs two devices and omits one, which is the case that used to
+  /// be unrepresentable on the wire.
+  List<TransportRung> _runnableRungs(DialParams dial) => [
+    for (final rung in dial.advertisedRungs)
+      if (_rungRunnableHere(dial, rung)) rung,
+  ];
+
+  /// Whether this build can start [rung] against [dial], given the node
+  /// advertises it.
+  ///
+  /// A rung this build cannot start is not on the ladder, so it is never
+  /// selected, never stepped onto, and never probed. This is the whole platform
+  /// gate, and scoping it to *this dial* rather than to the rung alone is what
+  /// lets the floor be a lookup: the answer differs per server (whether the node
+  /// serves it) and per platform (whether it can be run), and both have to hold.
+  bool _rungRunnableHere(DialParams dial, TransportRung rung) => switch (rung) {
+    TransportRung.native => true,
+    TransportRung.awg => awgDataPlaneSupported() && _awgRungRunnable(dial),
+    // Two halves: the platform needs a bridge to run at all, and the installed
+    // helper has to be one whose `up` would honour the spec. The credential's own
+    // usability is already settled by `TransportOption.isComplete`.
+    TransportRung.stream =>
+      streamTransportSupported() &&
+          _daemonCapabilities.contains(capStreamTransport),
+  };
 
   /// The rung to start [dial] on, given the process's current one.
   ///
-  /// Two rules, both about the serving server rather than the network:
+  /// The rule, stated exactly:
   ///
-  ///  * Never start below the server's floor, which is the cheapest rung that
-  ///    server can actually serve. A stock server's node runs stock WireGuard, so
-  ///    native is that rung. A server serving the obfuscated rung also keeps a
-  ///    stock device, on its own port — so a native start there is legitimate and
-  ///    does not leak a plaintext handshake at an obfuscated listener. A server
-  ///    advertising that rung *incompletely* (no port, or no address on the
-  ///    obfuscated overlay) has no such device, so its floor is native too; see
-  ///    [_awgRungAvailable].
-  ///  * Never keep a rung the server cannot serve. A server move can land on a
-  ///    server with no stream credential, where a sticky stream rung could only
-  ///    throw (see [_streamTransportFor]).
+  /// > floor = the cheapest rung **the node advertises** that **this platform can
+  /// > run**
   ///
-  /// The health policy's demotion survives both: this only raises to the floor
-  /// and lowers to the ceiling, so a walk down the ladder is never undone.
+  /// Not "the cheapest rung this platform can run" — that was the old derivation's
+  /// blind spot, and with every node serving both formats it floors Apple to `awg`
+  /// and makes the product unusable there. Scoped to the advertised list, a
+  /// dual-format node floors every platform to `native`, because `native` is in the
+  /// list and every platform can run it.
   ///
-  /// A server whose format this build cannot produce a datagram for — an
-  /// obfuscated server off Linux (see `platform_info.dart`) — has no rung at
-  /// all, and null says so. Selection keeps such a server out of Auto and out of
-  /// the failover candidates ([regionServable]), so this is reached only by a
-  /// target the user pinned or the control plane handed back; [_applyRung]
-  /// refuses rather than sending a native start the node cannot read.
-  ObfuscationRung? _rungFor(DialParams dial) {
-    final obf = dial.obfuscation;
-    if (!formatServable(obf)) return null;
-    // Floored at AWG only while this build can actually run the obfuscated data
-    // plane *and* the server has it properly configured. Where either is missing
-    // the native floor is not a cheap probe but the only rung a conf can be built
-    // for — and a conf pointed at the obfuscated port with a stock body, or with
-    // an address the obfuscated overlay does not contain, would fail in a way the
-    // health ladder reads as a blocked network.
-    final floor = _awgRungAvailable(dial)
-        ? ObfuscationRung.awg
-        : ObfuscationRung.native;
-    final ceiling = _streamRungAvailable(dial) ? ObfuscationRung.stream : floor;
-    if (_obfuscationRung.index < floor.index) return floor;
-    if (_obfuscationRung.index > ceiling.index) return ceiling;
-    return _obfuscationRung;
+  /// On top of the floor, two bounds, both about the serving node rather than the
+  /// network:
+  ///
+  ///  * Never start below it. A node serving only `awg` and `stream` floors here to
+  ///    `stream`, which is the right answer rather than a refusal.
+  ///  * Never keep a rung the node does not advertise. A server move can land on a
+  ///    node with no stream credential, where a sticky stream rung could only throw
+  ///    (see [_streamTransportFor]).
+  ///
+  /// The health policy's demotion survives both: this only raises to the floor and
+  /// lowers to the ceiling, so a walk down the ladder is never undone. A move onto a
+  /// node that *does* advertise the sticky rung leaves it alone, so a roam is not
+  /// charged for the walk again.
+  ///
+  /// Null means the node advertises no rung this build can start — a payload with no
+  /// usable entry at all, not a format this build lacks. [_applyRung] refuses rather
+  /// than inventing a start the node could not read.
+  TransportRung? _rungFor(DialParams dial) {
+    final runnable = _runnableRungs(dial);
+    if (runnable.isEmpty) return null;
+    final ceiling = runnable.last;
+    final floor = runnable.first;
+    if (_transportRung.index < floor.index) return floor;
+    if (_transportRung.index > ceiling.index) return ceiling;
+    return _transportRung;
   }
 
   /// Applies [_rungFor] before a start, logging the move, and refuses a server
-  /// whose format this build cannot run.
+  /// advertising no rung this build can produce a start for.
   ///
   /// Called at the top of every [_startWith] — the one point a connect, a
-  /// switch, a heal and a cold restore all pass through — so a move onto a
-  /// server with a different format can never start on the previous server's
-  /// rung, and an obfuscated server can never start native.
+  /// switch, a heal and a cold restore all pass through — so a move onto a server
+  /// with a different rung list can never start on the previous server's rung, and
+  /// can never start on a rung the new node does not serve.
   ///
-  /// Refusing is the point: the node would reject every datagram this side could
-  /// send, so a native start there cannot connect and leaks the plaintext
-  /// handshake doing it. Selection keeps these servers out of the automatic
-  /// paths, so reaching this names a target the user chose or the control plane
-  /// returned.
+  /// Refusing is the point, and now it means one narrow thing: there is no entry
+  /// here to build a conf from, so any start would be a guess. It is no longer the
+  /// path a platform without an obfuscated data plane takes on an obfuscated
+  /// region, because such a region advertises `native` and is started on it.
   void _applyRung(DialParams dial) {
     if (_promotionFallbackRung != null &&
         !identical(dial, _promotionFallbackDial)) {
@@ -494,15 +439,15 @@ extension ConnectionObfuscation on ConnectionController {
     final next = _rungFor(dial);
     if (next == null) {
       throw UnsupportedError(
-        'The server "${dial.serverName}" runs obfuscated WireGuard, '
-        'which this build cannot run. Choose a server with a stock data plane.',
+        'The server "${dial.serverName}" offers no transport this app build '
+        'can use. Choose another server.',
       );
     }
-    if (next == _obfuscationRung) return;
+    if (next == _transportRung) return;
     AppLog.info(
-      'transport rung set ${_obfuscationRung.name} -> ${next.name} '
+      'transport rung set ${_transportRung.name} -> ${next.name} '
       'server=${dial.serverName}',
     );
-    _obfuscationRung = next;
+    _transportRung = next;
   }
 }

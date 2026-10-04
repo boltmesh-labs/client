@@ -582,20 +582,15 @@ extension ConnectionConnect on ConnectionController {
         sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     final best = autoPickRegion(regions);
     if (best == null) {
-      // "Nothing is up" and "nothing this build can run" are different problems,
-      // and only the second is the user's to act on: reporting it as no capacity
-      // would name a cause that is not true.
-      final unsupported = regions.any(
-        (r) => r.hasCapacity && !regionServable(r),
-      );
-      AppLog.info(
-        'quick connect: no capacity${unsupported ? ' this build can serve' : ''}',
-      );
+      // Every region with capacity is a candidate, so this is genuinely "no
+      // capacity" and one message describes it. There used to be a second
+      // possibility here — no region this build could serve a conf for — and it
+      // is gone: every server advertises `native`, so there is no region a
+      // platform can be locked out of.
+      AppLog.info('quick connect: no capacity');
       snap = snap.copyWith(
         phase: ConnPhase.error,
-        message: unsupported
-            ? 'The available regions need a VPN mode this app build does not support.'
-            : 'No servers available right now.',
+        message: 'No servers available right now.',
       );
       return;
     }

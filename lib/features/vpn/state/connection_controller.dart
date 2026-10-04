@@ -152,12 +152,11 @@ class ConnectionController extends Notifier<ConnState> {
 
   /// The transport rung this app process is on (see `conn_obfuscation.dart`).
   ///
-  /// It starts where the *region* does: native for a region whose node runs
-  /// stock WireGuard, AmneziaWG for one whose node runs the obfuscated device —
-  /// a stock handshake is illegible to that node, so a native start there is a
-  /// guaranteed-failed attempt that leaks the plaintext fingerprint first.
-  /// [_applyRung] re-derives it on every start, so a server move follows the
-  /// new region's floor and never keeps a rung the new region cannot serve.
+  /// It starts at the serving node's floor: the cheapest rung that node
+  /// advertises and this platform can start, which is `native` on every platform
+  /// because every node advertises its stock device. [_applyRung] re-derives it on
+  /// every start, so a server move follows the new node's advertised list and
+  /// never keeps a rung the new node does not serve.
   ///
   /// Below the floor, a stall that looks like a dead tunnel path while the
   /// control plane is reachable escalates one rung at a time. A local stall
@@ -168,16 +167,15 @@ class ConnectionController extends Notifier<ConnState> {
   /// is dead, every later connect stays on the lower rung rather than re-paying
   /// the failed-probe cycle. After 24 hours of healthy operation, the client
   /// probes one cheaper rung; absent liveness within the probe window, it
-  /// returns to the rung that was working. A restart re-probes the region's
-  /// floor.
+  /// returns to the rung that was working. A restart re-probes the node's floor.
   ///
   /// Walked one rung per qualifying heal by [_demoteRung]; see
-  /// [ObfuscationRung] for the order and why the stream rung is last.
-  ObfuscationRung _obfuscationRung = ObfuscationRung.native;
+  /// [TransportRung] for the order and why the stream rung is last.
+  TransportRung _transportRung = TransportRung.native;
 
   /// Previous known-working rung while a controlled cheaper-rung probe is in
   /// flight. Cleared on positive liveness or restored on probe failure.
-  ObfuscationRung? _promotionFallbackRung;
+  TransportRung? _promotionFallbackRung;
   DialParams? _promotionFallbackDial;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was

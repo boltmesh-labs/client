@@ -59,13 +59,13 @@ void main() {
   // Every other error the VPN layer raises is already written for the user, so
   // flattening it into a generic sentence would throw away better copy. These
   // are the two guards in the VPN layer that rely on that: an identity mismatch
-  // and an unsupported region.
+  // and a server offering no rung this build can start.
   test('non-helper errors keep their own copy', () {
     for (final e in [
       StateError('Missing private key. Reprovision.'),
       UnsupportedError(
-        'The region serving "eu-1" runs obfuscated WireGuard, which this '
-        'build cannot run.',
+        'The server "eu-1" offers no transport this app build can use. '
+        'Choose another server.',
       ),
     ]) {
       expect(failureReason(null, e), e.toString());

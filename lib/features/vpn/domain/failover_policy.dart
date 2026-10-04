@@ -1,5 +1,4 @@
 import '../data/models.dart';
-import 'region_policy.dart';
 
 /// Pure dead-server failover policy extracted from [ConnectionController].
 ///
@@ -140,10 +139,10 @@ String? pickFailoverTarget({
   DiscoveryServer? bestGlobal;
   for (final r in regions) {
     if (!r.hasCapacity) continue;
-    // A region whose format this build cannot run is not a candidate: the switch
-    // would only reach a start that refuses, and the failover would surface that
-    // as a failure instead of moving on to a server that works.
-    if (!regionServable(r)) continue;
+    // No per-region format filter: every server advertises `native`, so every
+    // region with capacity is a legal place to move to. Whether a specific rung
+    // is buildable is decided at the new server's start, where the rung list is
+    // known.
     for (final s in r.servers) {
       if (s.id == currentServerId) continue;
       if (bestGlobal == null || s.activePeers < bestGlobal.activePeers) {

@@ -1,24 +1,19 @@
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/domain/failover_policy.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import '../../../support/vpn_harness.dart';
 
 Region region(String id, List<DiscoveryServer> servers) =>
     Region(id: id, name: id, servers: servers);
 
-DiscoveryServer server(String id, {int peers = 0, Obfuscation? obfuscation}) =>
-    DiscoveryServer(
-      id: id,
-      name: id,
-      endpoint: '203.0.113.1',
-      wgPort: 51820,
-      wgDns: '10.8.0.1',
-      wgPublicKey: 'K',
-      activePeers: peers,
-      obfuscation: obfuscation,
-    );
+DiscoveryServer server(String id, {int peers = 0}) => DiscoveryServer(
+  id: id,
+  name: id,
+  endpoint: '203.0.113.1',
+  wgPort: 51820,
+  wgDns: '10.8.0.1',
+  wgPublicKey: 'K',
+  activePeers: peers,
+);
 
 void main() {
   // The policy functions take their thresholds as required arguments so the
@@ -309,15 +304,16 @@ void main() {
       );
     });
 
-    test('skips a region this build cannot serve', () {
-      // Fuchsia has no AWG backend. The obfuscated region is the
-      // emptier one, so it would win on load — but a move there could only reach
-      // a start that refuses, so it is not a candidate.
-      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    test('a move is not filtered on format', () {
+      // The filter this replaced skipped regions whose node format this build
+      // could not produce a datagram for, on the reasoning that a move there
+      // could only reach a refused start. Every node advertises `native` and
+      // every node runs a stock device, so that state is unreachable now: the
+      // emptiest region in the fleet is still a legal place to land, and the new
+      // node's own rung list is what decides the start.
       final regions = [
         region('us', [server('dead')]),
-        region('eu', [server('obf', peers: 1, obfuscation: awgObfuscation())]),
+        region('eu', [server('light', peers: 1)]),
         region('ap', [server('c', peers: 8)]),
       ];
       expect(
@@ -326,16 +322,14 @@ void main() {
           currentRegionId: 'us',
           currentServerId: 'dead',
         ),
-        'c',
+        'light',
       );
     });
 
-    test('null when the only other capacity is unservable', () {
-      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    test('null when there is no other capacity anywhere', () {
       final regions = [
         region('us', [server('dead')]),
-        region('eu', [server('obf', obfuscation: awgObfuscation())]),
+        region('eu', []),
       ];
       expect(
         pickFailoverTarget(

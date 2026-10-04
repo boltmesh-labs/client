@@ -17,40 +17,55 @@ import 'package:flutter_test/flutter_test.dart';
 /// would not fail any unit test on either side: the client would simply decode
 /// `stream: null` and quietly never offer the rung.
 void main() {
-  group('the backend registration payload', () {
-    test('decodes the obfuscation descriptor into a usable AWG conf', () {
+  group('the backend dial payload', () {
+    test('decodes the rung list in order, one port and payload per rung', () {
+      // The list is the whole contract: index order is the cost order, and each
+      // entry carries the port its own device binds plus the parameters or
+      // credential that rung needs. A rename or a moved field shows up here and
+      // nowhere else, because the client's ladder reads only this.
       final dial = DialParams.fromJson(_dialPayload());
-      final obf = dial.obfuscation;
-      expect(obf, isNotNull);
-      expect(obf!.isAwg, isTrue);
-      expect(obf.params!.isComplete, isTrue);
-      expect(obf.params!.jc, 3);
-      expect(obf.params!.jmin, 40);
-      expect(obf.params!.h1, [10, 20]);
+      expect(dial.advertisedRungs, [
+        TransportRung.native,
+        TransportRung.awg,
+        TransportRung.stream,
+      ]);
+      expect(dial.transportFor(TransportRung.native)!.port, 51820);
+      expect(dial.transportFor(TransportRung.awg)!.port, 51821);
+      expect(dial.transportFor(TransportRung.stream)!.port, 443);
+    });
+
+    test('decodes the obfuscation parameters into a usable AWG conf', () {
+      final dial = DialParams.fromJson(_dialPayload());
+      final entry = dial.transportFor(TransportRung.awg)!;
+      expect(entry.isComplete, isTrue);
+      expect(entry.params!.isComplete, isTrue);
+      expect(entry.params!.jc, 3);
+      expect(entry.params!.jmin, 40);
+      expect(entry.params!.h1, [10, 20]);
     });
 
     test('decodes the stream credential at the sizes the daemon enforces', () {
       final dial = DialParams.fromJson(_dialPayload());
-      final stream = dial.stream;
-      expect(stream, isNotNull);
+      final credential = dial.transportFor(TransportRung.stream)!.credential;
+      expect(credential, isNotNull);
       // isUsable is the only gate the ladder consults, so it has to agree with
       // the daemon's own validation of these same fields.
-      expect(stream!.isUsable, isTrue);
-      expect(stream.server, 'node-1.us-east-1.vpn.example.com:443');
-      expect(stream.serverName, 'node-1.us-east-1.vpn.example.com');
-      expect(stream.spkiPins, hasLength(1));
+      expect(credential!.isUsable, isTrue);
+      expect(credential.server, 'node-1.us-east-1.vpn.example.com:443');
+      expect(credential.serverName, 'node-1.us-east-1.vpn.example.com');
+      expect(credential.spkiPins, hasLength(1));
       // Decoded sizes, so a change to the daemon's constants is caught here
       // rather than at connect time.
-      expect(base64.decode(stream.spkiPins.single), hasLength(32));
-      expect(base64.decode(stream.psk), hasLength(32));
-      expect(base64.decode(stream.clientId), hasLength(16));
+      expect(base64.decode(credential.spkiPins.single), hasLength(32));
+      expect(base64.decode(credential.psk), hasLength(32));
+      expect(base64.decode(credential.clientId), hasLength(16));
     });
 
     test('the stream credential rides the dial payload, not the region list', () {
       // The PSK is a per-device secret and discovery is fetched by every client
       // of a region. If the backend ever moved it, this is what would catch it.
       final discovery = DiscoveryServer.fromJson(_discoveryPayload());
-      expect(discovery.obfuscation?.isAwg, isTrue);
+      expect(discovery.id, isNotEmpty);
       expect(
         jsonEncode(_discoveryPayload()).contains('psk'),
         isFalse,
@@ -58,13 +73,18 @@ void main() {
       );
     });
 
-    test('a backend serving neither transport decodes to a native dial', () {
+    test('a backend serving only stock decodes to a native-only ladder', () {
+      // The withholding, as the client sees it: a rung the node cannot serve is
+      // simply absent from the list, which is the same thing as never having
+      // offered it.
       final native = _dialPayload();
-      native.remove('obfuscation');
-      native.remove('stream');
+      native['transports'] = [
+        {'rung': 'native', 'port': 51820},
+      ];
       final dial = DialParams.fromJson(native);
-      expect(dial.obfuscation, isNull);
-      expect(dial.stream, isNull);
+      expect(dial.advertisedRungs, [TransportRung.native]);
+      expect(dial.transportFor(TransportRung.awg), isNull);
+      expect(dial.transportFor(TransportRung.stream), isNull);
     });
   });
 
@@ -91,7 +111,6 @@ void main() {
 String _registrationPayload() => jsonEncode({
   'node_token': 'tok',
   'token_expires_in': 900,
-  'interface_name': 'wg0',
   'tunnel_ip': '10.254.0.1/16',
   'node_id': '72e5b789-7329-4867-9f4b-a5fa16d1ff42',
   'name': 'node-1',
@@ -103,7 +122,14 @@ String _registrationPayload() => jsonEncode({
   'endpoint': 'node-1.us-east-1.vpn.example.com',
   'wg_port': 51820,
   'wg_dns': '10.254.0.1',
-  'obfuscation': _awg,
+  'amnezia_port': 51821,
+  'amnezia_tunnel_ip': '10.255.0.1/16',
+  'tcp_port': 443,
+  // The node's own copy of the obfuscation descriptor. It keeps the mode/params
+  // shape even though the device-facing dial payload no longer has one: the agent
+  // reads it to decide which data plane to run, and a descriptor is not a rung
+  // list. The port and the overlay address are separate named fields beside it.
+  'obfuscation': {'mode': 'awg', 'params': _awgParams},
   'stream_ingress': {
     'enabled': true,
     'listen_port': 443,
@@ -129,23 +155,32 @@ String get _dialJson => jsonEncode({
   'peer_id': 'e6a75c53-7018-40d6-b579-69ceb979a2f2',
   'client_public_key': 'p' * 44,
   'assigned_ip': '10.254.0.2/32',
+  'awg_assigned_ip': '10.255.0.2/32',
+  'awg_dns': '10.255.0.1',
   'server_id': 'd75360bc-ba72-4cc0-86da-5ef25e3cda48',
   'server_name': 'node-1',
   'endpoint': 'node-1.us-east-1.vpn.example.com',
   'wg_port': 51820,
   'wg_dns': '10.254.0.1',
   'wg_public_key': 's' * 44,
-  'obfuscation': _awg,
-  'stream': {
-    'server': 'node-1.us-east-1.vpn.example.com:443',
-    'server_name': 'node-1.us-east-1.vpn.example.com',
-    // base64 of 32 × 0xAA
-    'spki_sha256': ['qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo='],
-    // base64 of bytes 0..31
-    'psk': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
-    // base64 of 16 zero bytes
-    'client_id': 'AAAAAAAAAAAAAAAAAAAAAA==',
-  },
+  'transports': [
+    {'rung': 'native', 'port': 51820},
+    {'rung': 'awg', 'port': 51821, 'params': _awgParams},
+    {
+      'rung': 'stream',
+      'port': 443,
+      'credential': {
+        'server': 'node-1.us-east-1.vpn.example.com:443',
+        'server_name': 'node-1.us-east-1.vpn.example.com',
+        // base64 of 32 × 0xAA
+        'spki_sha256': ['qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo='],
+        // base64 of bytes 0..31
+        'psk': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+        // base64 of 16 zero bytes
+        'client_id': 'AAAAAAAAAAAAAAAAAAAAAA==',
+      },
+    },
+  ],
 });
 
 Map<String, dynamic> _discoveryPayload() => {
@@ -157,22 +192,18 @@ Map<String, dynamic> _discoveryPayload() => {
   'wg_public_key': 's' * 44,
   'status': 'online',
   'active_peers': 3,
-  'obfuscation': _awg,
 };
 
-Map<String, dynamic> get _awg => {
-  'mode': 'awg',
-  'params': {
-    'jc': 3,
-    'jmin': 40,
-    'jmax': 70,
-    's1': 20,
-    's2': 25,
-    's3': 30,
-    's4': 35,
-    'h1': [10, 20],
-    'h2': [30, 40],
-    'h3': [50, 60],
-    'h4': [70, 80],
-  },
+Map<String, dynamic> get _awgParams => {
+  'jc': 3,
+  'jmin': 40,
+  'jmax': 70,
+  's1': 20,
+  's2': 25,
+  's3': 30,
+  's4': 35,
+  'h1': [10, 20],
+  'h2': [30, 40],
+  'h3': [50, 60],
+  'h4': [70, 80],
 };

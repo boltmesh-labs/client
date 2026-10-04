@@ -1,43 +1,27 @@
 import '../data/models.dart';
-import '../data/platform_info.dart';
 
 /// Pure region-selection policy extracted from the Regions tab.
 ///
 /// Total peers per region; lowest wins for Quick Connect.
 int regionLoad(Region r) => r.servers.fold<int>(0, (a, s) => a + s.activePeers);
 
-/// True when this build can produce a datagram the node carrying [obfuscation]
-/// can read.
+/// Lowest-load region with dialable capacity, or null when none qualifies.
 ///
-/// A stock node reads anything. An obfuscated region's node runs the AmneziaWG
-/// device, so it can only read obfuscated datagrams — and off Linux this build
-/// has no obfuscated data plane (see `platform_info.dart`), so there is nothing
-/// it could send that node.
-bool formatServable(Obfuscation? obfuscation) =>
-    obfuscation == null || !obfuscation.isAwg || awgDataPlaneSupported();
-
-/// True when this build can dial [r]: at least one of its servers runs a data
-/// plane this build can produce a datagram for.
-///
-/// A region's format is region-scoped — the discovery projection stamps the
-/// region's descriptor onto every server — so in practice this is one answer for
-/// the whole region. It is written per server so a mixed list, if one ever
-/// exists, is not collapsed to whichever server happened to be listed first.
-bool regionServable(Region r) =>
-    r.servers.any((s) => formatServable(s.obfuscation));
-
-/// Lowest-load region with dialable capacity that this build can actually
-/// serve, or null when none qualifies.
-///
-/// A region whose format this build cannot run is not a candidate: dialing it
-/// could only end in a start that refuses, and on the Auto path that would
-/// surface as a failure rather than a fallback to a region that works.
+/// There is no format filter here, and deliberately so. A region's servers each
+/// advertise a rung list, and every one of them leads with `native` — the stock
+/// device every node runs — so every region is dialable on every platform. The
+/// old filter asked the narrower question "can this build produce a datagram for
+/// this node's *obfuscation* format", which on a platform with no obfuscated
+/// data plane excluded the whole region even though its stock device was right
+/// there and readable; it was a filter that could only ever exclude regions that
+/// would have worked. Whether a *particular* rung is buildable is the ladder's
+/// question at start time (see `conn_obfuscation.dart`), where the answer differs
+/// per rung rather than per region.
 Region? autoPickRegion(List<Region> regions) {
   Region? best;
   var bestLoad = 1 << 30;
   for (final r in regions) {
     if (!r.hasCapacity) continue;
-    if (!regionServable(r)) continue;
     final load = regionLoad(r);
     if (load < bestLoad) {
       bestLoad = load;

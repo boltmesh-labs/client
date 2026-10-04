@@ -473,7 +473,7 @@ class AndroidTunnelAdapter implements TunnelAdapter {
 
   /// Android has no privileged daemon, but its in-process native bridge is a
   /// real stream data plane, so it advertises the token the ladder gates on.
-  /// Without it `_streamRungAvailable` would never offer the rung here even
+  /// Without it the ladder's stream gate would never offer the rung here even
   /// though the bridge can run it.
   @override
   Set<String> get daemonCapabilities => const <String>{capStreamTransport};

@@ -2,6 +2,11 @@ import 'package:boltmesh/core/env.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../support/vpn_harness.dart';
+
+/// The canonical complete AmneziaWG parameter set, as a wire object.
+final Map<String, Object?> _awgParams = awgObfuscationParamsJson();
+
 void main() {
   group('DialParams.fromJson', () {
     test('parses backend shape, defaults missing server_name', () {
@@ -19,24 +24,92 @@ void main() {
       expect(dial.serverId, 'srv-1');
       expect(dial.serverName, '');
       expect(dial.wgPort, 51820);
-      // Absent means the server does not offer the rung — which is a state the
-      // ladder reads, not a missing field it should default away.
-      expect(dial.awgPort, isNull);
+      // A payload with no rung list offers nothing, which is a state the ladder
+      // reads and refuses — not a missing field to default away into an offer.
+      expect(dial.transports, isEmpty);
+      expect(dial.advertisedRungs, isEmpty);
+      expect(dial.transportFor(TransportRung.native), isNull);
     });
 
-    test('parses the obfuscated listener port when the rung is offered', () {
+    test('reads the advertised rung list in order, port per rung', () {
       final dial = DialParams.fromJson({
         'id': 'dev-1',
         'assigned_ip': '10.8.0.5',
         'server_id': 'srv-1',
         'endpoint': '203.0.113.10',
         'wg_port': 51820,
-        'awg_port': 51821,
         'wg_dns': '10.8.0.1',
         'wg_public_key': 'SRV',
+        'transports': [
+          {'rung': 'native', 'port': 51820},
+          {'rung': 'awg', 'port': 51821, 'params': _awgParams},
+        ],
       });
-      expect(dial.wgPort, 51820);
-      expect(dial.awgPort, 51821);
+      // The order is the cost order and the ladder walks it, so it is read as
+      // sent rather than sorted client-side.
+      expect(dial.advertisedRungs, [TransportRung.native, TransportRung.awg]);
+      // Each rung carries its own port: the node runs a separate device per rung,
+      // so dialling another rung's port puts a plaintext handshake at a device
+      // that cannot read it.
+      expect(dial.transportFor(TransportRung.native)!.port, 51820);
+      expect(dial.transportFor(TransportRung.awg)!.port, 51821);
+      expect(dial.transportFor(TransportRung.stream), isNull);
+    });
+
+    test('a rung this build cannot assemble is not offered', () {
+      // The awg entry with no parameter set is a conf the client cannot build,
+      // and a stream entry with no credential is a bridge it cannot start. Both
+      // are indistinguishable on-device from a rung that was never advertised, so
+      // both are absent from what the ladder reads.
+      final incomplete = DialParams.fromJson({
+        'id': 'dev-1',
+        'assigned_ip': '10.8.0.5',
+        'server_id': 'srv-1',
+        'endpoint': '203.0.113.10',
+        'wg_port': 51820,
+        'wg_dns': '10.8.0.1',
+        'wg_public_key': 'SRV',
+        'transports': [
+          {'rung': 'native', 'port': 51820},
+          {'rung': 'awg', 'port': 51821},
+          {
+            'rung': 'stream',
+            'port': 443,
+            'credential': {
+              'server': 'a.example:443',
+              'server_name': 'a.example',
+            },
+          },
+        ],
+      });
+      expect(incomplete.advertisedRungs, [TransportRung.native]);
+      expect(incomplete.transportFor(TransportRung.awg), isNull);
+      expect(incomplete.transportFor(TransportRung.stream), isNull);
+      // The raw entries still decode, so a malformed one is a value to inspect
+      // rather than a payload that failed to parse.
+      expect(incomplete.transports, hasLength(3));
+    });
+
+    test('an unknown rung name is not offered, and does not break the list', () {
+      // A rung the backend adds later must degrade to "not offered" rather than
+      // be mistaken for one this build can start — and must not cost the rungs
+      // around it.
+      final dial = DialParams.fromJson({
+        'id': 'dev-1',
+        'assigned_ip': '10.8.0.5',
+        'server_id': 'srv-1',
+        'endpoint': '203.0.113.10',
+        'wg_port': 51820,
+        'wg_dns': '10.8.0.1',
+        'wg_public_key': 'SRV',
+        'transports': [
+          {'rung': 'native', 'port': 51820},
+          {'rung': 'quic', 'port': 443},
+          {'rung': 'awg', 'port': 51821, 'params': _awgParams},
+        ],
+      });
+      expect(dial.advertisedRungs, [TransportRung.native, TransportRung.awg]);
+      expect(dial.transports[1].rung, isNull);
     });
   });
 

@@ -82,7 +82,7 @@ extension ConnectionRecovery on ConnectionController {
       // every heal before the stall can escalate.
       final prevFailovers = snap.autoFailoverAttempts;
       final prevPollFailures = snap.pollFailures;
-      final previousRung = _obfuscationRung;
+      final previousRung = _transportRung;
       final reason =
           recoveryReason ?? snap.recoveryReason ?? RecoveryReason.unknown;
       // A lower transport is warranted only when the data path looks dead
@@ -90,7 +90,7 @@ extension ConnectionRecovery on ConnectionController {
       // restarting the cached config, but it is not evidence that this
       // transport specifically is blocked.
       if (promotionFallback != null) {
-        _obfuscationRung = promotionFallback;
+        _transportRung = promotionFallback;
         _promotionFallbackRung = null;
         _promotionFallbackDial = null;
         AppLog.info(
@@ -100,12 +100,12 @@ extension ConnectionRecovery on ConnectionController {
       } else if (demoteTransport) {
         _demoteRung(dial, why);
       }
-      final action = _obfuscationRung == previousRung
+      final action = _transportRung == previousRung
           ? RecoveryAction.restarting
-          : switch (_obfuscationRung) {
-              ObfuscationRung.native => RecoveryAction.restarting,
-              ObfuscationRung.awg => RecoveryAction.tryingAwg,
-              ObfuscationRung.stream => RecoveryAction.tryingStream,
+          : switch (_transportRung) {
+              TransportRung.native => RecoveryAction.restarting,
+              TransportRung.awg => RecoveryAction.tryingAwg,
+              TransportRung.stream => RecoveryAction.tryingStream,
             };
       AppLog.info('auto-heal start ($why) attempt=$attempt ${_healBudgets()}');
       snap = snap.copyWith(
