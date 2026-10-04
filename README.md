@@ -138,7 +138,7 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | stock plugin + in-process AWG/stream (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG and stream (stock + obfuscated inner) emulator proofs passed** |
+| **Android** | stock plugin + in-process AWG/stream (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG and stream emulator proofs passed** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
 | **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
@@ -643,11 +643,15 @@ rest of the pipeline (which files, when, verify) is unchanged.
   heal, so an unobstructed network pays nothing. `native` (platform WireGuard) →
   `awg` (in-process AmneziaWG, Linux, Windows, and Android) → `stream` (the tunnel's datagrams
   inside a TLS session to the node, Linux, Windows, and Android). A stock server's node
-  runs stock WireGuard, so its floor is `native`; an obfuscated server's node
-  runs the AmneziaWG device, so a stock datagram is illegible to it and its
-  floor is `awg` — starting native there would be a guaranteed-failed attempt
-  that put a plaintext WireGuard handshake on the wire first, which is exactly
-  the fingerprint the rung exists to hide. The floor is re-derived on every
+  runs stock WireGuard, so its floor is `native`; a server serving the `awg` rung
+  runs a *second* device for it — the AmneziaWG one, on its own port and its own
+  overlay — so native stays valid there too and its floor is `native` as well. The
+  floor is the cheapest rung the server can actually serve, and the rung is only
+  offered when the server names all three of its ingredients: the obfuscation
+  descriptor, the port, and this device's address on the obfuscated overlay. A
+  server missing the last one has no device a conf could be built for, so its floor
+  falls back to `native` rather than sending an obfuscated conf aimed at a port
+  that cannot route it. The floor is re-derived on every
   start, so a server move follows the new server's format and never keeps a
   rung the new server cannot serve. A rung is only selected when the server can
   serve it *and* this platform can run it *and* the data plane advertises
@@ -655,14 +659,17 @@ rest of the pipeline (which files, when, verify) is unchanged.
   builds whose `up` would honour the spec, and the Android adapter advertises it
   for its in-process native bridge, so an older helper or a macOS one keeps the
   rung off the ladder instead of selecting a rung guaranteed to be refused.
-  - Each rung has its own node port. A server serving the `awg` rung has moved its
-    whole tunnel onto `awg_port` and nothing listens on `wg_port`, so the rung
-    dials `awg_port`; a stock server dials `wg_port`. Getting this wrong is not a
-    cosmetic mistake — it puts a plaintext WireGuard handshake on the wire at a
-    node that cannot read it, which is the fingerprint the rung exists to hide,
-    and then fails to connect, which the health ladder reads as a blocked
-    network rather than a wrong port. The dial payload therefore carries
-    `awg_port` beside `wg_port`, null on a server that does not offer the rung.
+  - Each rung has its own node port *and its own overlay address*. A server serving
+    the `awg` rung runs two devices on one host, and they cannot share a network:
+    both hold every peer's route, so the kernel would keep one and the other
+    device's replies would leave on a link holding no session for that peer. So the
+    dial payload carries `awg_port` and `awg_assigned_ip`/`awg_dns` beside
+    `wg_port` and `assigned_ip`/`wg_dns`, all null on a server that does not offer
+    the rung, and the conf claims whichever pair the rung points at. Getting this
+    wrong is not a cosmetic mistake — a conf aimed at the wrong port puts a
+    handshake on the wire at a device that cannot read it, and one claiming the
+    wrong address handshakes and then blackholes every packet; both read to the
+    health ladder as a blocked network rather than a wrong setting.
   - The two lower rungs have different platform reach. The **stream** transport
   is a bridge plus a way to keep the bridge's own egress off the tunnel it
   carries. The bridge is the same `boltmesh/stream` code everywhere; what
@@ -672,8 +679,8 @@ rest of the pipeline (which files, when, verify) is unchanged.
   select), on Windows ahead of the tunnel service (where the longest-prefix
   match wins outright, so one route is enough). Android has no route to pin:
   `VpnService.protect` exempts the bridge's TLS socket from the tunnel, so the
-  rung reaches stock and obfuscated regions there too, and the bridge runs on the
-  AWG host's VpnService even for a stock inner config. The **AWG** data
+  rung reaches every server there, and the bridge runs on the host's VpnService. The
+  **AWG** data
   plane runs in-process on Linux and Windows, and through Android's VpnService
   TUN. Windows cannot use its stock kernel service for AWG because that service
   has no concept of the obfuscation directives. The desktop adapters are Linux
@@ -686,13 +693,12 @@ rest of the pipeline (which files, when, verify) is unchanged.
   runs as LocalSystem), and the tunnel route is installed with `INFINITE_LIFETIME`
   because a zero lifetime is an expiry of *now* — the route appears installed and
   the stack routes around it.
-  The two gates are independent by design and the ladder requires both for an
-  obfuscated region, so a platform with neither — macOS — cannot serve
-  one: region selection skips it, and a pinned or control-plane-returned one is
-  refused at the start rather than sent a native conf its node cannot read. The
-  Regions tab still lists
-  such a region (the list is discovery, not policy), so choosing one there
-  surfaces the refusal instead of hiding it. Demotion rides the existing heal
+  The two gates are independent by design, so the `awg` rung needs both. A
+  platform with neither — macOS — reaches such a server on `native` or `stream`,
+  both of which it can run; the `awg` rung stays off the ladder there. Region
+  selection still filters on the format the platform can produce, so an
+  obfuscated region is skipped on macOS until that filter is replaced by the
+  advertised transport list. Demotion rides the existing heal
   (no new budget, timer, or state) and is sticky across connects — a reconnect
   preserves a demotion but never causes one. The one exception is deliberate:
   after `rungPromotionHealthyFor` (24h) of positively healthy traffic the tick
@@ -703,9 +709,12 @@ rest of the pipeline (which files, when, verify) is unchanged.
   candidate proves live — a fresh handshake or a live gateway echo — and reverts
   within `rungPromotionProbeTimeout` (45s), so a probe costs one controlled
   restart and one stale connection at worst.
-  One rung at a time — a start runs on a single rung, and the transport carries
-  the server's own inner format: an obfuscated server's stream is the AmneziaWG
-  conf inside the TLS session, never a stock one.
+  One rung at a time — a start runs on a single rung. The **stream** rung's inner
+  format is *always* stock, whatever the server's obfuscation settings are: the
+  node's bridge injects into its stock device, so a session's datagrams have to be
+  readable there. A conf carrying the AWG directives inside the TLS session would
+  reach a device that does not speak them. Only the `awg` rung builds an
+  obfuscated conf, and only against the address on the obfuscated overlay.
   The rung step comes *before* the server move, because Layer 1 cannot tell a
   blocked transport from a dead node: a middlebox dropping this rung's traffic
   is indistinguishable from a powered-off server at the echo and the handshake.
@@ -765,12 +774,19 @@ rest of the pipeline (which files, when, verify) is unchanged.
       work.
     - The client does not assemble the bridge itself, which is why selecting the
       rung needs more than a credential: a data plane that can run it — the
-      privileged helper in-process on Linux and Windows, the AWG host's
-      VpnService on Android — the `stream-transport` capability token that data
+      privileged helper in-process on Linux and Windows, the host's VpnService on
+      Android — the `stream-transport` capability token that data
       plane advertises, and a usable credential. On the desktop the daemon owns
       the bridge for the tunnel's lifetime because it owns the tunnel's
       lifecycle, and is the only party that can keep the bridge's own egress out
       of the tunnel it carries.
+    - The bridge injects into the node's **stock** tunnel device, so the inner
+      format is always stock WireGuard whatever the server's obfuscation settings
+      are, and the conf claims the stock overlay's address and resolver. This is
+      what makes the rung the most widely available one: a platform with no
+      obfuscated data plane (macOS) can still use it against every server, and a
+      conf carrying the AWG directives inside the session would reach a device that
+      does not speak them.
     - The node is pinned, not discovered: a certificate SPKI pin plus a
       per-device PSK (below), so there is no CA chain to trust and no second
       protocol to speak. It is also deliberately not an anti-probing

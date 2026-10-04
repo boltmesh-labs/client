@@ -182,6 +182,17 @@ abstract class DialParams with _$DialParams {
   const factory DialParams({
     @JsonKey(name: 'id') required String deviceId,
     @JsonKey(name: 'assigned_ip') required String assignedIp,
+    // This peer's address on the node's *obfuscated* overlay, and the resolver
+    // that lives on it. Null when the server does not serve that rung.
+    //
+    // A second address rather than a second copy of [assignedIp]: the node runs
+    // two tunnel devices in two networks (the obfuscated one needs a network of
+    // its own, or both devices claim every peer's route and the kernel silently
+    // keeps one). So a client on the obfuscated rung must claim the address that
+    // device can route — [assignedIp] is unreachable there, and using it would
+    // produce a tunnel that handshakes and then drops every packet.
+    @JsonKey(name: 'awg_assigned_ip') String? awgAssignedIp,
+    @JsonKey(name: 'awg_dns') String? awgDns,
     @JsonKey(name: 'server_id') required String serverId,
     @JsonKey(name: 'server_name') @Default('') String serverName,
     required String endpoint,

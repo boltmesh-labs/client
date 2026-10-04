@@ -63,35 +63,90 @@ extension ConnectionObfuscation on ConnectionController {
   /// The obfuscation parameters to build a conf for [dial] with, or null when
   /// this start's tunnel is stock WireGuard.
   ///
-  /// The native rung is stock by definition, and it is only ever the floor of a
-  /// server whose node runs stock WireGuard. Every rung above it follows the
-  /// server: an obfuscated server's node runs the AmneziaWG device, so both the
-  /// AWG rung and the stream rung build an obfuscated conf, and the stream's
-  /// bridge then carries those obfuscated datagrams inside its TLS session. The
-  /// format is the server's, not the rung's.
+  /// Only the obfuscated rung applies them, because it is the only one pointed at
+  /// the node's obfuscated device. The other two are stock: the native rung by
+  /// definition, and the stream rung because the node's bridge injects into its
+  /// *stock* device no matter what that server's obfuscation settings are — so a
+  /// stream session carries stock datagrams inside its TLS session.
+  ///
+  /// That is the difference from the single-device node this replaced, where an
+  /// obfuscated server's only tunnel was the AmneziaWG device and the stream rung
+  /// had to carry obfuscated datagrams into it.
   ObfuscationParams? _obfuscationParamsFor(DialParams dial) {
-    if (_obfuscationRung == ObfuscationRung.native) return null;
+    if (_obfuscationRung != ObfuscationRung.awg) return null;
     final obf = dial.obfuscation;
     return obf != null && obf.isAwg ? obf.params : null;
   }
 
   /// The node's own UDP port for the rung this start is on.
   ///
-  /// `awgPort` when the descriptor is AWG, `wgPort` otherwise — and the two are
-  /// not interchangeable: a node serving the obfuscated rung binds `awgPort` and
-  /// nothing listens on `wgPort`, so dialling `wgPort` there puts a plaintext
-  /// WireGuard handshake on the wire first, which is the fingerprint the rung
-  /// exists to hide, and then fails to connect besides.
+  /// `awgPort` on the obfuscated rung, `wgPort` on stock. The two are not
+  /// interchangeable in either direction, because the node runs a *separate device*
+  /// per transport: a stock device cannot read obfuscation directives, and an
+  /// obfuscated device cannot read a stock handshake.
   ///
-  /// Falls back to `wgPort` when the descriptor is AWG but no `awg_port` came
-  /// with it. That is the shape of a backend predating the field, and dialling
-  /// the one port such a backend knows about is the only thing left to try; the
-  /// rung is never selected for it anyway, since a server that cannot name the
-  /// port is not offering the rung.
+  /// Falls back to `wgPort` when the descriptor is AWG but no `awg_port` came with
+  /// it. That is the shape of a backend predating the field, and dialling the one
+  /// port such a backend knows about is the only thing left to try; the rung is
+  /// never selected for it anyway, since a server that cannot name the port is not
+  /// offering the rung.
   int _tunnelPortFor(DialParams dial) {
-    final obf = dial.obfuscation;
-    if (obf != null && obf.isAwg && dial.awgPort != null) return dial.awgPort!;
+    if (_obfuscationRung == ObfuscationRung.awg) {
+      final obf = dial.obfuscation;
+      if (obf != null && obf.isAwg && dial.awgPort != null) {
+        return dial.awgPort!;
+      }
+    }
     return dial.wgPort;
+  }
+
+  /// The overlay address this start must claim.
+  ///
+  /// The node has one network per device, so the address follows the rung rather
+  /// than the server: the obfuscated device routes only the addresses its own
+  /// overlay contains, and a stock address sent there handshakes fine and then
+  /// blackholes every packet — which reads as a blocked network and demotes the
+  /// rung that was working.
+  ///
+  /// Only the obfuscated rung has a second address. The stream rung is stock
+  /// because the node's bridge injects into its *stock* device: a stream session
+  /// carries stock WireGuard datagrams whatever the server's obfuscation settings
+  /// say, and handing those to the obfuscated device is a handshake into a void.
+  String _overlayAddressFor(DialParams dial) {
+    if (_obfuscationRung == ObfuscationRung.awg) {
+      final awgAddress = dial.awgAssignedIp;
+      if (awgAddress != null && awgAddress.isNotEmpty) return awgAddress;
+    }
+    return dial.assignedIp;
+  }
+
+  /// The in-tunnel resolver for this start.
+  ///
+  /// Same rule as the address: the node runs one systemd-resolved stub per
+  /// interface, so the resolver has to be the one on the device this start's
+  /// traffic reaches. Pushing the stock stub's address onto the obfuscated rung
+  /// would send every DNS query to a device with no route for it.
+  String _overlayDnsFor(DialParams dial) {
+    if (_obfuscationRung == ObfuscationRung.awg) {
+      final awgDns = dial.awgDns;
+      if (awgDns != null && awgDns.isNotEmpty) return awgDns;
+    }
+    return dial.wgDns;
+  }
+
+  /// Whether the obfuscated rung has everything it needs to be built.
+  ///
+  /// The port alone is no longer enough: the rung also needs an address on the
+  /// node's obfuscated overlay. A server advertising the descriptor without one is
+  /// asking for a conf whose every packet the node cannot route — so the rung is
+  /// treated as not offered rather than offered and broken, which is what the
+  /// control plane's withholding on its side is for.
+  bool _awgRungAvailable(DialParams dial) {
+    final obf = dial.obfuscation;
+    if (obf == null || !obf.isAwg || !awgDataPlaneSupported()) return false;
+    final hasAddress =
+        dial.awgAssignedIp != null && dial.awgAssignedIp!.isNotEmpty;
+    return hasAddress && dial.awgPort != null;
   }
 
   /// The stream transport for this start, or null unless this process is on the
@@ -353,20 +408,16 @@ extension ConnectionObfuscation on ConnectionController {
     return null;
   }
 
-  bool _awgRungAvailable(DialParams dial) {
-    final obf = dial.obfuscation;
-    return obf != null && obf.isAwg && awgDataPlaneSupported();
-  }
-
   /// Whether the stream rung could run here at all: the server must offer a
   /// usable credential, this platform must have a data plane for it, and the
   /// installed daemon must advertise the capability. All three, because
   /// selecting the rung without any of them can only fail.
   ///
-  /// An obfuscated server adds a fourth: the stream's inner datagrams carry the
-  /// server's obfuscation directives, so this platform must also be able to run
-  /// the obfuscated data plane that produces them. On a stock server there is
-  /// no such requirement.
+  /// A node that also serves the obfuscated rung adds nothing here. The stream's
+  /// inner datagrams are stock regardless of that server's settings, because the
+  /// node's bridge injects them into its *stock* device — which is exactly why the
+  /// stream rung needs no obfuscated data plane on this side, and why a platform
+  /// without one can still reach such a server over TLS.
   bool _streamRungAvailable(DialParams dial) {
     final credential = dial.stream;
     if (credential == null ||
@@ -375,8 +426,6 @@ extension ConnectionObfuscation on ConnectionController {
         !_daemonCapabilities.contains(capStreamTransport)) {
       return false;
     }
-    final obf = dial.obfuscation;
-    if (obf != null && obf.isAwg && !awgDataPlaneSupported()) return false;
     return true;
   }
 
@@ -384,13 +433,14 @@ extension ConnectionObfuscation on ConnectionController {
   ///
   /// Two rules, both about the serving server rather than the network:
   ///
-  ///  * Never start below the server's floor. A stock server's node runs stock
-  ///    WireGuard, so native is the floor and the cheapest rung. An obfuscated
-  ///    server's node runs the AmneziaWG device, so a stock datagram is
-  ///    illegible to it: a native start there is not a cheap probe but a
-  ///    guaranteed-failed attempt that puts a plaintext WireGuard handshake on
-  ///    the wire first — the exact fingerprint the rung exists to hide. Its
-  ///    floor is AWG.
+  ///  * Never start below the server's floor, which is the cheapest rung that
+  ///    server can actually serve. A stock server's node runs stock WireGuard, so
+  ///    native is that rung. A server serving the obfuscated rung also keeps a
+  ///    stock device, on its own port — so a native start there is legitimate and
+  ///    does not leak a plaintext handshake at an obfuscated listener. A server
+  ///    advertising that rung *incompletely* (no port, or no address on the
+  ///    obfuscated overlay) has no such device, so its floor is native too; see
+  ///    [_awgRungAvailable].
   ///  * Never keep a rung the server cannot serve. A server move can land on a
   ///    server with no stream credential, where a sticky stream rung could only
   ///    throw (see [_streamTransportFor]).
@@ -407,8 +457,15 @@ extension ConnectionObfuscation on ConnectionController {
   ObfuscationRung? _rungFor(DialParams dial) {
     final obf = dial.obfuscation;
     if (!formatServable(obf)) return null;
-    final obfuscated = obf != null && obf.isAwg;
-    final floor = obfuscated ? ObfuscationRung.awg : ObfuscationRung.native;
+    // Floored at AWG only while this build can actually run the obfuscated data
+    // plane *and* the server has it properly configured. Where either is missing
+    // the native floor is not a cheap probe but the only rung a conf can be built
+    // for — and a conf pointed at the obfuscated port with a stock body, or with
+    // an address the obfuscated overlay does not contain, would fail in a way the
+    // health ladder reads as a blocked network.
+    final floor = _awgRungAvailable(dial)
+        ? ObfuscationRung.awg
+        : ObfuscationRung.native;
     final ceiling = _streamRungAvailable(dial) ? ObfuscationRung.stream : floor;
     if (_obfuscationRung.index < floor.index) return floor;
     if (_obfuscationRung.index > ceiling.index) return ceiling;

@@ -161,7 +161,10 @@ extension ConnectionTunnel on ConnectionController {
     debugLastTransport = transport;
     final conf = buildWgQuickConfig(
       privateKey: priv,
-      assignedIp: dial.assignedIp,
+      // The address (and below the resolver) follows the rung, because the node
+      // runs one overlay per device and each device routes only its own. See
+      // `conn_obfuscation.dart`.
+      assignedIp: _overlayAddressFor(dial),
       serverPublicKey: dial.wgPublicKey,
       // On the stream rung the peer endpoint is the bridge's loopback address,
       // not the node: the bridge is what reaches the node.
@@ -174,7 +177,7 @@ extension ConnectionTunnel on ConnectionController {
       // `wgPort` when the descriptor is AWG but the server names no port, which
       // is the shape of a backend predating the field.
       endpointPort: transport?.listenPort ?? _tunnelPortFor(dial),
-      dns: dial.wgDns,
+      dns: _overlayDnsFor(dial),
       allowLocal: allowLocal,
       obfuscation: _obfuscationParamsFor(dial),
       listenPort: transport?.deliverPort,

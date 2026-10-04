@@ -32,29 +32,50 @@ Map<String, dynamic> dialJson({
   String? clientPublicKey,
   Object? obfuscation,
   Object? stream,
-}) => {
-  'id': deviceId,
-  'assigned_ip': assignedIp,
-  'server_id': serverId,
-  'server_name': serverName,
-  'endpoint': endpoint,
-  'wg_port': wgPort,
-  // Omitted by default, matching a server that does not offer the awg rung —
-  // the native data plane. Obfuscation suites pass both this and
-  // [awgObfuscationJson], because a server that serves the rung has moved its
-  // tunnel onto this port and the client must dial it.
-  'awg_port': ?awgPort,
-  'wg_dns': wgDns,
-  'wg_public_key': wgPublicKey,
-  // Omitted when null: existing suites assert the pre-field behavior. A suite
-  // exercising key reconciliation supplies the server-side peer key.
-  'client_public_key': ?clientPublicKey,
-  // Same: omitted by default so existing suites exercise the native
-  // data plane. Obfuscation suites pass [awgObfuscationJson], and the
-  // stream-transport suites pass a `stream` credential object.
-  'obfuscation': ?obfuscation,
-  'stream': ?stream,
-};
+  // The obfuscated overlay's address. Derived from [awgPort] rather than passed:
+  // a node serving the awg rung has to name all three of the rung's ingredients
+  // (descriptor, port, address) or the client treats the rung as not offered,
+  // which is the point of the withholding. Deriving keeps the awg suites from
+  // restating it and keeps the native suites (no awgPort) on the absent path they
+  // mean to exercise.
+  //
+  // Pass `''` for the *incomplete* shapes the withholding has to survive — a
+  // server advertising the port with no address on the overlay it would need.
+  String? awgAssignedIp,
+  String awgDns = '10.9.0.1',
+}) {
+  final servesAwg = awgPort != null;
+  final address = awgAssignedIp ?? '10.9.0.5';
+  return {
+    'id': deviceId,
+    'assigned_ip': assignedIp,
+    // Omitted unless the awg rung is served, matching a server that does not offer
+    // it. A second address rather than a second copy of `assigned_ip`: the node
+    // runs one overlay per device, and a stock address is unreachable on the
+    // obfuscated one.
+    'awg_assigned_ip': ?(servesAwg && address.isNotEmpty ? address : null),
+    'awg_dns': ?(servesAwg && address.isNotEmpty ? awgDns : null),
+    'server_id': serverId,
+    'server_name': serverName,
+    'endpoint': endpoint,
+    'wg_port': wgPort,
+    // Omitted by default, matching a server that does not offer the awg rung —
+    // the native data plane. Obfuscation suites pass both this and
+    // [awgObfuscationJson], because the node runs a separate device for that rung
+    // on its own port and the client must dial it.
+    'awg_port': ?awgPort,
+    'wg_dns': wgDns,
+    'wg_public_key': wgPublicKey,
+    // Omitted when null: existing suites assert the pre-field behavior. A suite
+    // exercising key reconciliation supplies the server-side peer key.
+    'client_public_key': ?clientPublicKey,
+    // Same: omitted by default so existing suites exercise the native
+    // data plane. Obfuscation suites pass [awgObfuscationJson], and the
+    // stream-transport suites pass a `stream` credential object.
+    'obfuscation': ?obfuscation,
+    'stream': ?stream,
+  };
+}
 
 /// Canonical per-device stream-transport credential (backend `stream` object):
 /// the node's TLS address, a certificate pin, and this device's PSK and id.

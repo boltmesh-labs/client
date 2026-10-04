@@ -758,9 +758,11 @@ void main() {
           expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
           expect(socket.lastConfig, contains('ListenPort = '));
           expect(socket.lastTransport, isNotNull);
-          // The region's inner format is unchanged: the stream carries AWG
-          // datagrams inside TLS, because the node still runs the AWG device.
-          expect(socket.lastConfig, contains('Jc = 3'));
+          // The stream rung's inner format is stock even on a server that also
+          // serves the obfuscated one: the node's bridge injects into its stock
+          // device, so obfuscated directives here would be a handshake into a
+          // device that does not speak them.
+          expect(socket.lastConfig, isNot(contains('Jc =')));
 
           final state = container.read(connectionProvider);
           expect(state.phase, ConnPhase.connected);
@@ -1075,12 +1077,17 @@ void main() {
         final deliverPort = (spec['deliver'] as String).split(':').last;
         expect(socket.lastConfig, contains('Endpoint = $listen'));
         expect(socket.lastConfig, contains('ListenPort = $deliverPort'));
-        // And the tunnel the bridge carries is the server's obfuscated one: the
-        // node's AmneziaWG device would drop stock datagrams. The bridge
-        // reaches the node itself, so the obfuscated port is the node's to
-        // answer on — the conf's peer endpoint is the local bridge and says
-        // nothing about which node port the bridge dials.
-        expect(socket.lastConfig, contains('Jc = 3'));
+        // And the tunnel the bridge carries is *stock*, whatever this server's
+        // obfuscation settings are. The node's bridge injects into its stock
+        // device, so a session's datagrams have to be stock to be readable there;
+        // applying the awg directives would hand an obfuscated conf to a device
+        // that does not speak them. This is the inversion from the single-device
+        // node, whose only tunnel was the AmneziaWG one.
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        // Which is also why the stock overlay's address and resolver are the
+        // right ones here, not the obfuscated pair the awg rung claims.
+        expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
+        expect(socket.lastConfig, contains('DNS = 10.8.0.1'));
       });
 
       // The port the rung is reached on is the property most easily lost in a
@@ -1105,22 +1112,73 @@ void main() {
         );
       });
 
-      test('a server offering no awg port keeps the WireGuard port', () async {
+      // The awg rung needs three things from the server: the format (the
+      // descriptor), the port to bind, and the address its device's overlay
+      // contains. A payload missing the third is asking for a conf whose every
+      // packet the node cannot route — a tunnel that handshakes and then goes
+      // nowhere, which reads to the ladder as a blocked network and demotes the
+      // rung that was working. So the rung is treated as not offered.
+      //
+      // This replaces a fallback to the stock port that made the shape tolerable
+      // when the node had one device; with two devices it would apply the awg
+      // directives to a conf aimed at the wrong one.
+      test('a server offering no obfuscated address does not offer the rung', () async {
         useLinuxDataPlane();
-        // A backend predating the field, or a server whose row lost the port: the
-        // descriptor still says AWG, so there is nothing else to try but the one
-        // port the payload names.
         final (container, socket) = await seedStream(
-          dial: () => dialJson(obfuscation: awgObfuscationJson()),
+          dial: () => dialJson(
+            obfuscation: awgObfuscationJson(),
+            awgPort: 51821,
+            // No address on the obfuscated overlay: the field absent, which is
+            // what a server claiming the rung without one sends.
+            awgAssignedIp: '',
+            stream: streamTransportJson(),
+          ),
+          // Reachable control plane, so the heal below reads as "this transport
+          // is blocked" and steps the ladder rather than moving servers.
+          controlProbe: support.FakeControlProbe(true),
         );
 
-        expect(socket.lastConfig, contains('Jc = 3'));
+        // It starts on native, because that is the cheapest rung this server can serve
+        // — and it reaches the node directly on the stock port, with a stock
+        // body and the stock address.
+        final ctl = container.read(connectionProvider.notifier);
+        expect(ctl.obfuscationRung, ObfuscationRung.native);
         expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
+
+        // And the stream rung below it is still reachable on a heal, carrying a
+        // stock conf for the same reason.
+        await healOnce(container);
+        expect(ctl.obfuscationRung, ObfuscationRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastTransport, isNotNull);
+      });
+
+      // The counterpart: with the address present, the awg rung claims *it* and
+      // not the stock one. Getting this backwards produces a tunnel that
+      // handshakes and then blackholes every packet, because the obfuscated
+      // device has no route to a stock address.
+      test('the awg rung claims the obfuscated overlay address', () async {
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream();
+
+        expect(socket.lastConfig, contains('Address = 10.9.0.5/32'));
+        expect(socket.lastConfig, contains('DNS = 10.9.0.1'));
+        expect(socket.lastConfig, isNot(contains('Address = 10.8.0.5/32')));
         expect(
           container.read(connectionProvider.notifier).obfuscationRung,
           ObfuscationRung.awg,
         );
       });
+
+      // The mirror on a dual-format server is the stream case above: it asserts
+      // the stock address and resolver there, on a server that *does* carry the
+      // obfuscated pair, which is the assertion that catches a conf picking the
+      // wrong overlay. The native rung needs no suite of its own — on a stock
+      // server it is the only rung, and every native suite already asserts the
+      // stock address.
 
       test(
         'a region offering only the stream credential reaches it at once',

@@ -72,6 +72,8 @@ Map<String, dynamic> _$StreamTransportToJson(_StreamTransport instance) =>
 _DialParams _$DialParamsFromJson(Map<String, dynamic> json) => _DialParams(
   deviceId: json['id'] as String,
   assignedIp: json['assigned_ip'] as String,
+  awgAssignedIp: json['awg_assigned_ip'] as String?,
+  awgDns: json['awg_dns'] as String?,
   serverId: json['server_id'] as String,
   serverName: json['server_name'] as String? ?? '',
   endpoint: json['endpoint'] as String,
@@ -92,6 +94,8 @@ Map<String, dynamic> _$DialParamsToJson(_DialParams instance) =>
     <String, dynamic>{
       'id': instance.deviceId,
       'assigned_ip': instance.assignedIp,
+      'awg_assigned_ip': instance.awgAssignedIp,
+      'awg_dns': instance.awgDns,
       'server_id': instance.serverId,
       'server_name': instance.serverName,
       'endpoint': instance.endpoint,
