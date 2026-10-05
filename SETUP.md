@@ -291,22 +291,16 @@ Install it once per helper change with step 4 below.
 security model.
 
 On a host with no hardware 3D acceleration — a VM, a remote desktop, or a bare
-Raspberry Pi — the window renders, but moving the mouse over it makes the whole
-UI blank out and come back on each frame. Nothing in the app reacts to the
-pointer; the fault is the renderer. Flutter defaults to Impeller, whose OpenGLES
-backend misbehaves against Mesa's `llvmpipe` software rasterizer. Confirm it with
-`glxinfo -B`, which reports `Accelerated: no` and a `SVGA3D`/`llvmpipe` renderer
-string, and the engine log line `Using the Impeller rendering backend
-(OpenGLESSDF)`. Fall back to Skia, which is correct on software GL:
+Raspberry Pi — the window renders, but moving the mouse over it can make the
+whole UI blank out and come back on each frame. Nothing in the app reacts to the
+pointer; the fault is the renderer. Confirm the host with `glxinfo -B`, which
+reports `Accelerated: no` and an `SVGA3D`/`llvmpipe` renderer string when Mesa
+has fallen back to its software rasterizer.
 
-```bash
-flutter run -d linux
-```
-
-This is a host property, so the flag stays on the command line rather than in the
-tree. The real fix is 3D acceleration on the host: enable the hypervisor's 3D
-adapter, or attach the VM's display to a `virtio-gpu` device, where Mesa's virtio
-driver provides a genuine Vulkan/GL stack and Impeller can stay on.
+The real fix is 3D acceleration on the host: enable the hypervisor's 3D
+adapter, or attach the VM's display to a `virtio-gpu` device, where Mesa's
+virtio driver provides a genuine Vulkan/GL stack. That is a property of the
+host, so it is fixed outside the tree rather than by a flag in it.
 
 ### 4. Install `boltmeshd` (dev loop)
 
