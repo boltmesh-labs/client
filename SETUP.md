@@ -300,7 +300,7 @@ string, and the engine log line `Using the Impeller rendering backend
 (OpenGLESSDF)`. Fall back to Skia, which is correct on software GL:
 
 ```bash
-flutter run -d linux --no-enable-impeller
+flutter run -d linux
 ```
 
 This is a host property, so the flag stays on the command line rather than in the

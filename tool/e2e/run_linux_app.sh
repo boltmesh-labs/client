@@ -8,9 +8,6 @@
 # it is part of the app:
 #
 #   Xvfb            a display, because XDG_SESSION_TYPE=tty has none
-#   --no-enable-impeller
-#                   Mesa's llvmpipe is a software rasterizer, and Impeller's
-#                   OpenGLES backend misbehaves against it (SETUP.md §3)
 #   a private keyring
 #                   the app persists its session through libsecret, which
 #                   needs an unlocked collection; isolating XDG_DATA_HOME keeps
@@ -155,7 +152,6 @@ BOLTMESH_E2E_API_PASSWORD="$api_password" \
 BOLTMESH_E2E_SHOT_DIR="$shot_dir" \
   flutter test integration_test/linux_app_e2e.dart \
     -d linux \
-    --no-enable-impeller \
     --dart-define-from-file="$env_file"
 
 log "e2e PASSED — screenshots in $shot_dir"

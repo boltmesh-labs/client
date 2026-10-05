@@ -18,6 +18,11 @@
 // Credentials come from the environment, never from a checked-in file:
 // BOLTMESH_E2E_API_USER / BOLTMESH_E2E_API_PASSWORD (same convention as
 // tool/e2e/run.sh).
+//
+// The four tests run in order and build on each other: sign in, connect,
+// switch server, log out. Each calls `app.main()` for a fresh widget tree,
+// but the keyring persists across tests in a run, so the session is restored
+// between them — which is itself the restore path being exercised.
 
 library;
 
@@ -45,21 +50,18 @@ const _tunnelInterface = 'boltmesh0';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('signs in, connects, and moves real WireGuard bytes', (
-    tester,
-  ) async {
+  testWidgets('signs in', (tester) async {
     final user = _requireEnv('BOLTMESH_E2E_API_USER');
     final password = _requireEnv('BOLTMESH_E2E_API_PASSWORD');
 
-    await app.main();
-    await tester.pump(const Duration(milliseconds: 500));
+    await _launch(tester);
+    await _signIn(tester, user, password);
+    await _shot('01-signed-in');
+  });
 
-    // The app's own container: main() builds the ProviderScope, so this is
-    // the same state the widgets render from, not a parallel test double.
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(app.BoltMeshApp)),
-      listen: false,
-    );
+  testWidgets('connects and moves real WireGuard bytes', (tester) async {
+    await _launch(tester);
+    final container = _container(tester);
     ConnState state() => container.read(connectionProvider);
 
     // The tunnel lives in the host namespace, not in this process, so a failed
@@ -77,21 +79,11 @@ void main() {
       }
     });
 
-    await _signIn(tester, user, password);
+    await _ensureSignedIn(tester);
     await _shot('02-home');
 
     // --- connect ---------------------------------------------------------
-    final power = find.descendant(
-      of: find.byType(PowerButton),
-      matching: find.byType(FilledButton),
-    );
-    expect(
-      power,
-      findsOneWidget,
-      reason:
-          'the Home tab must offer the power '
-          'control',
-    );
+    final power = _powerButton(tester);
     await tester.tap(power);
     await tester.pump();
 
@@ -191,6 +183,224 @@ void main() {
     );
     await _shot('05-disconnected');
   });
+
+  testWidgets('switches server', (tester) async {
+    await _launch(tester);
+    final container = _container(tester);
+    ConnState state() => container.read(connectionProvider);
+
+    addTearDown(() async {
+      await _disconnect(container);
+      if (_interfaceExists()) {
+        // ignore: avoid_print
+        print(
+          'WARNING: $_tunnelInterface is still up after this run. Tear it down '
+          'with:\n'
+          '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
+          'sudo ip link del $_tunnelInterface',
+        );
+      }
+    });
+
+    await _ensureSignedIn(tester);
+
+    // Connect first so there is a server to switch away from.
+    await tester.tap(_powerButton(tester));
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      'the tunnel to reach the connected phase',
+      () => state().phase == ConnPhase.connected,
+      timeout: _connectTimeout,
+      diagnose: state,
+    );
+    final originalServer = state().dial?.serverName;
+    expect(originalServer, isNotNull);
+    // ignore: avoid_print
+    print('e2e: connected to $originalServer');
+
+    // --- switch to a different server via the Regions tab -----------------
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(NavigationBar)),
+    );
+    await tester.tap(find.text(l10n.navRegions));
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      'the regions list to load',
+      () => find.byType(ExpansionTile).evaluate().isNotEmpty,
+      timeout: _signInTimeout,
+    );
+
+    // Read the regions from the provider to find a server to switch to.
+    final regions = container.read(regionsProvider).value ?? [];
+    final currentServerId = state().serverId;
+    String? targetServerId;
+    String? targetServerName;
+    for (final region in regions) {
+      for (final server in region.servers) {
+        if (server.id != currentServerId) {
+          targetServerId = server.id;
+          targetServerName = server.name;
+          break;
+        }
+      }
+      if (targetServerId != null) break;
+    }
+
+    if (targetServerId == null) {
+      // Only one server available; switch to Quick Connect instead.
+      // ignore: avoid_print
+      print('e2e: only one server available; testing Quick Connect switch');
+      await tester.tap(find.text(l10n.regionsQuickConnect));
+      await tester.pump();
+    } else {
+      // ignore: avoid_print
+      print('e2e: switching from $originalServer to $targetServerName');
+      // Find the ListTile for the target server and tap it.
+      final targetTile = find.descendant(
+        of: find.byType(ExpansionTile),
+        matching: find.widgetWithText(ListTile, targetServerName!),
+      );
+      await tester.tap(targetTile);
+      await tester.pump();
+    }
+
+    // Wait for the switch to complete: either the server name changes or
+    // Quick Connect re-picks.
+    await _pumpUntil(
+      tester,
+      'the server switch to complete',
+      () {
+        final s = state();
+        if (targetServerId != null) {
+          return s.dial?.serverId == targetServerId &&
+              s.phase == ConnPhase.connected;
+        }
+        // Quick Connect: server may stay the same if it re-picks the same one,
+        // but the phase must be connected and the pin must be cleared.
+        return s.phase == ConnPhase.connected && s.serverId == null;
+      },
+      timeout: _connectTimeout,
+      diagnose: state,
+    );
+    await _shot('06-switched');
+
+    // Verify the UI reflects the new server.
+    final newServerName = state().dial?.serverName;
+    expect(newServerName, isNotNull);
+    // ignore: avoid_print
+    print('e2e: now on $newServerName (was $originalServer)');
+
+    // Disconnect to leave the host clean.
+    await tester.tap(
+      find.text(
+        AppLocalizations.of(tester.element(find.byType(NavigationBar)))
+            .navConnect,
+      ),
+    );
+    await tester.pump();
+    await tester.tap(_powerButton(tester));
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      'the tunnel to go down',
+      () => state().phase == ConnPhase.idle && !_interfaceExists(),
+      timeout: _connectTimeout,
+      diagnose: state,
+    );
+  });
+
+  testWidgets('logs out', (tester) async {
+    await _launch(tester);
+    final container = _container(tester);
+    ConnState state() => container.read(connectionProvider);
+
+    addTearDown(() async {
+      await _disconnect(container);
+      if (_interfaceExists()) {
+        // ignore: avoid_print
+        print(
+          'WARNING: $_tunnelInterface is still up after this run. Tear it down '
+          'with:\n'
+          '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
+          'sudo ip link del $_tunnelInterface',
+        );
+      }
+    });
+
+    await _ensureSignedIn(tester);
+
+    // Connect first so logout has to tear down a live tunnel.
+    await tester.tap(_powerButton(tester));
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      'the tunnel to reach the connected phase',
+      () => state().phase == ConnPhase.connected,
+      timeout: _connectTimeout,
+      diagnose: state,
+    );
+
+    // --- log out via the Settings tab -------------------------------------
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(NavigationBar)),
+    );
+    await tester.tap(find.text(l10n.navSettings));
+    await tester.pump();
+    await _pumpUntil(
+      tester,
+      'the settings screen',
+      () => find.text(l10n.settingsLogOut).evaluate().isNotEmpty,
+      timeout: _signInTimeout,
+    );
+
+    await tester.tap(find.text(l10n.settingsLogOut));
+    await tester.pump();
+
+    // The auth gate should flip back to the login screen.
+    await _pumpUntil(
+      tester,
+      'the login screen',
+      () =>
+          find.byType(TextField).evaluate().isNotEmpty &&
+          find.text(l10n.loginTitle).evaluate().isNotEmpty,
+      timeout: _signInTimeout,
+    );
+    await _shot('07-logged-out');
+
+    // The tunnel should be gone.
+    expect(
+      _interfaceExists(),
+      isFalse,
+      reason: 'logout must tear down the tunnel',
+    );
+    expect(state().phase, ConnPhase.idle);
+  });
+}
+
+// --- helpers ---------------------------------------------------------------
+
+/// Launches the app and returns once the first frame is drawn.
+Future<void> _launch(WidgetTester tester) async {
+  await app.main();
+  await tester.pump(const Duration(milliseconds: 500));
+}
+
+/// The app's own ProviderContainer.
+ProviderContainer _container(WidgetTester tester) {
+  return ProviderScope.containerOf(
+    tester.element(find.byType(app.BoltMeshApp)),
+    listen: false,
+  );
+}
+
+/// The power button on the Home tab.
+Finder _powerButton(WidgetTester tester) {
+  return find.descendant(
+    of: find.byType(PowerButton),
+    matching: find.byType(FilledButton),
+  );
 }
 
 /// Signs in, unless a stored session already restored one.
@@ -239,7 +449,28 @@ Future<void> _signIn(WidgetTester tester, String user, String password) async {
     await _shot('signin-failed');
     rethrow;
   }
-  await _shot('01-signed-in');
+}
+
+/// Ensures the app is signed in, signing in if necessary.
+///
+/// Waits for the auth gate to settle before checking: the session restore is
+/// async, so the NavigationBar may not be present immediately after launch
+/// even when a valid session exists.
+Future<void> _ensureSignedIn(WidgetTester tester) async {
+  // Wait for either the VPN tabs (session restored) or the login form
+  // (no session) to appear.
+  await _pumpUntil(
+    tester,
+    'the auth gate to settle',
+    () =>
+        find.byType(NavigationBar).evaluate().isNotEmpty ||
+        find.byType(TextField).evaluate().isNotEmpty,
+    timeout: _signInTimeout,
+  );
+  if (find.byType(NavigationBar).evaluate().isNotEmpty) return;
+  final user = _requireEnv('BOLTMESH_E2E_API_USER');
+  final password = _requireEnv('BOLTMESH_E2E_API_PASSWORD');
+  await _signIn(tester, user, password);
 }
 
 /// Pumps real frames until [done] holds, or fails with [diagnose] attached.

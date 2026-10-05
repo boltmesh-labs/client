@@ -145,7 +145,6 @@ script sets up because they are lab facts rather than app behaviour:
 | | Why |
 | --- | --- |
 | `Xvfb` on `:99` | a headless box has no display; `BOLTMESH_E2E_DISPLAY` overrides |
-| `--no-enable-impeller` | Mesa's llvmpipe is software GL, which Impeller's OpenGLES backend mishandles (`SETUP.md` §3) |
 | `XDG_DATA_HOME` + `gnome-keyring-daemon --unlock` | the app persists its session and device keys through libsecret, which needs an unlocked collection. Isolating it means a lab run cannot read or rewrite the operator's real login keyring, and it can never leave one locked |
 
 Credentials come from the environment like `run.sh`'s. `.env` supplies the
