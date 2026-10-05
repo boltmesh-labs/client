@@ -27,7 +27,7 @@ secrets and the test suite, see [README.md](README.md).
     git clone https://github.com/boltmesh-labs/client
     cd client
     flutter pub get
-    flutter run -d windows
+    flutter run -d windows --dart-define-from-file=.env
     ```
 
 3. Install the `boltmeshd` helper (dev loop):
@@ -104,7 +104,7 @@ Remote:
 
 ```bash
 adb connect 127.0.0.1:5555
-flutter run -d 127.0.0.1:5555
+flutter run -d 127.0.0.1:5555 --dart-define-from-file=.env
 ```
 
 ## macOS
@@ -172,8 +172,7 @@ flutter config --enable-macos-desktop
 flutter pub get
 
 flutter run -d macos \
-  --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel \
-  --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
+  --dart-define-from-file=.env
 ```
 
 Accept the system VPN consent prompt on first connect. OAuth uses the system
@@ -226,9 +225,7 @@ Mac — everything here needs one.
 4. **Run**:
 
     ```bash
-    flutter run -d <device-id> \
-      --dart-define=VPN_PROVIDER_BUNDLE_ID=com.boltmesh.boltmesh.tunnel \
-      --dart-define=VPN_APP_GROUP=group.com.boltmesh.boltmesh
+    flutter run -d <device-id> --dart-define-from-file=.env
     ```
 
 There is no helper path on iOS: the app sandbox forbids the privileged daemon
@@ -281,7 +278,7 @@ flutter doctor
 git clone https://github.com/boltmesh-labs/client
 cd client
 flutter pub get
-flutter run -d linux
+flutter run -d linux --dart-define-from-file=.env --no-enable-impeller
 ```
 
 Tunnel actions go through the privileged `boltmeshd` helper; without it the
