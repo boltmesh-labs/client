@@ -358,6 +358,28 @@ extension ConnectionConnect on ConnectionController {
     } catch (e) {
       if (superseded()) return;
       final vpnErr = asVpnError(e);
+      if (vpnErr?.kind == ApiErrorKind.notFound) {
+        // Stale local id (revoked/foreign device): the backend has no
+        // ownership oracle, so treat 404 as "reprovision" — wipe the
+        // identity and reprovision in the same tap so the power button works
+        // on first press (unlike _connectOp, which wipes and surfaces for a
+        // second tap). _connectBody re-reads the store, sees a null id, and
+        // provisions a fresh device bound to [best].
+        AppLog.info(
+          'quick connect missing device=${AppLog.redact(id)} -> reprovision',
+        );
+        try {
+          await _wipeDevice();
+        } catch (e) {
+          AppLog.error('quick connect clear device failed', e);
+        }
+        if (superseded()) return;
+        await _connectOp(
+          oneShotRegionId: best.id,
+          expectedTeardown: teardownEpoch,
+        );
+        return;
+      }
       AppLog.error('quick connect probe failed', vpnErr?.message ?? e);
       final wait = _noteRateLimit(vpnErr);
       snap = snap.copyWith(

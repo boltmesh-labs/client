@@ -1592,6 +1592,54 @@ void main() {
       expect(state.serverId, isNull);
     });
 
+    test('stale device on 404 reprovisions and connects in one tap', () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('stale-dev');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/vpn-regions')) {
+            return [regionJson('r-best', 'srv-b', 1)];
+          }
+          // The stored id is gone server-side (revoked/foreign): the probe
+          // 404s, the identity must be wiped, and the same tap reprovisions
+          // a fresh device bound to the picked region.
+          if (o.path.endsWith('/config')) throw missingDevice(o);
+          if (o.path == '/vpn-devices') {
+            return dialJson(
+              deviceId: 'dev-new',
+              serverId: 'srv-b',
+              serverName: 'b',
+            );
+          }
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys([const Keypair('FRESH-PRIV', 'FRESH-PUB')]),
+        api: api,
+      );
+      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+        events,
+      );
+
+      await container.read(connectionProvider.notifier).quickConnect();
+
+      expect(events, [
+        'GET:/vpn-regions',
+        'GET:/vpn-devices/stale-dev/config',
+        'POST:/vpn-devices',
+        'tunnel:start',
+      ]);
+      expect(await store.deviceId(), 'dev-new');
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-b');
+      expect(state.serverId, isNull);
+    });
+
     test('fresh device provisions onto the best region one-shot', () async {
       final events = <String>[];
       final store = FakeStore();
