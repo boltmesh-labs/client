@@ -500,7 +500,7 @@ else
   # how to bootstrap by whether it has a credential at all: with
   # NODE_BOOTSTRAP_SECRET empty it takes the "no credentials" branch and validates
   # itself as an already-registered node, failing with a runtime-mode error about
-  # missing node_token/private_key/tunnel_ip — which reads like a stub answering
+  # missing server_token/private_key/tunnel_ip — which reads like a stub answering
   # the wrong shape, and is nothing of the kind. The stub ignores Authorization
   # entirely, so the value is never checked.
   bootstrap_secret="vpn_node_harness_secret"

@@ -62,8 +62,8 @@ class State:
         self.wg_port = wg_port
         self.tunnel_ip = "10.254.0.1/16"
         self.interface = "wg0"
-        self.node_id = "11111111-2222-3333-4444-555555555555"
-        self.node_token = "vpn_node_harness_token"
+        self.server_id = "11111111-2222-3333-4444-555555555555"
+        self.server_token = "vpn_node_harness_token"
         # The node's reported identity. Empty until the first heartbeat that
         # carries one; the harness waits for this before asserting anything.
         self.stream_spki_sha256: str | None = None
@@ -83,11 +83,11 @@ class State:
 
     def registration(self) -> dict[str, Any]:
         return {
-            "node_token": self.node_token,
+            "server_token": self.server_token,
             "token_expires_in": 900,
             "interface_name": self.interface,
             "tunnel_ip": self.tunnel_ip,
-            "node_id": self.node_id,
+            "server_id": self.server_id,
             "name": "harness-node",
             "region": "harness",
             "region_name": "Harness",
@@ -221,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             # chain aborts before the first heartbeat. The agent treats empty as
             # "no absolute expiry", so an empty string is both valid and honest.
             self._send(200, {
-                "node_token": self.state.node_token,
+                "server_token": self.state.server_token,
                 "token_expires_in": 900,
                 "expires_at": "",
             })
