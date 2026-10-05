@@ -46,8 +46,11 @@ enum RecoveryStep {
   probeControlPlane,
 
   /// Restart the tunnel one rung cheaper. The only step that demotes a
-  /// transport, and only reachable on positive evidence that *this* transport
-  /// is blocked: the path looks dead while the control plane answers.
+  /// transport. Licensed by positive *local* evidence that this path is dead
+  /// (a performed-dead echo run, the hard handshake ceiling, or a handshake
+  /// that never completed past its grace) when a rung below is affordable; it
+  /// does not wait for the control plane, which is routed through the very rung
+  /// under test and so cannot corroborate a blocked transport.
   stepTransportRung,
 
   /// Restart the tunnel on its current rung. A blackout or an unattributed
@@ -101,8 +104,8 @@ bool rungStepAvailable({
 ///
 /// Returns [RecoveryStep.probeControlPlane] for every cell that only Layer 3
 /// can settle — including the ones that will later heal or demote, because a
-/// transport step is defined by the control plane answering ([RecoveryStep.
-/// stepTransportRung]) and cannot be decided without it.
+/// restart or a rung step is decided after the probe so a live control plane
+/// can still suppress it.
 ///
 /// [lowerRungAvailable] is the pure capability question ("would a heal lower
 /// the rung?"), not the budget-aware one; see [rungStepAvailable].
@@ -147,11 +150,12 @@ RecoveryStep decideLocalRecovery({
   return RecoveryStep.probeControlPlane;
 }
 
-/// The decision once the control plane has answered.
+/// The decision once the Layer 3 probe has been read.
 ///
 /// The caller must already have a usable link — [decideLocalRecovery] pauses
 /// otherwise, and nothing here may act on a down link. A null [apiReachable]
-/// is a probe that errored: unknown, which can never license a move.
+/// is a probe that errored: unknown, which can never license a move (the cheap
+/// rung step is licensed by local path-death evidence instead).
 ///
 /// [escalateToMove] is `shouldEscalateToFailover`'s verdict for this tick (the
 /// heal threshold, the move budget and the backend-quiet gate). It is a separate
@@ -219,14 +223,18 @@ RecoveryStep decideRecoveryStep({
     // on a stall that may not be a dead server.
     return RecoveryStep.verifyTunnel;
   }
-  // The demotion gate: this transport is suspected only when its path looks
-  // dead *while the control plane answers*. A blackout can still justify the
-  // restart above, but a node answering the API while its tunnel path is dead
-  // is the signature of a blocked transport, and that is the only evidence
-  // that distinguishes "this rung is blocked" from "the network is gone".
-  return canStepRung &&
-          apiReachable == true &&
-          cause == ConnectionFailureCause.tunnelPathDead
+  // The cheap rung step is licensed by *local* path-death evidence alone: a
+  // performed-dead echo run, the hard handshake ceiling, or a handshake that
+  // never completed past its grace. The control plane is deliberately not
+  // required here. It is routed through the very rung under test — in a full
+  // tunnel a blocked transport kills the probe too — so requiring it made the
+  // step unreachable exactly when it is needed, while the uncorroborated
+  // [RecoveryStep.moveServer] above already acts on the same evidence. Only the
+  // cheap action is widened: the move keeps its `cause == tunnelPathDead`
+  // criterion, so a bare single dead echo still only restarts.
+  final locallyDead =
+      cause == ConnectionFailureCause.tunnelPathDead || neverHandshookPastGrace;
+  return canStepRung && locallyDead
       ? RecoveryStep.stepTransportRung
       : RecoveryStep.restartTunnel;
 }

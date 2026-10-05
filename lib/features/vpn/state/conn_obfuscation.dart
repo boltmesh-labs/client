@@ -12,10 +12,12 @@ part of 'connection_controller.dart';
 ///
 /// The demotion rides the existing heal rung — [_autoHeal] already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
-/// should be retried on a lower rung — but only when the control plane is
-/// reachable, so a general blackout does not demote the transport. It costs no
-/// polling timer and no budget of its own: [ConnectionTuning.maxHealsPerIncident]
-/// is what bounds the walk. After a long healthy period, the health tick may
+/// should be retried on a lower rung. It is licensed by local path-death
+/// evidence alone, not the control plane: in a full tunnel the probe is routed
+/// through the very rung that is dead, so requiring it made the step
+/// unreachable exactly when it is needed. It costs no polling timer and no
+/// budget of its own: [ConnectionTuning.maxHealsPerIncident] is what bounds the
+/// walk. After a long healthy period, the health tick may
 /// probe one cheaper rung; the last known-working rung remains the rollback
 /// target until the candidate proves live.
 extension ConnectionObfuscation on ConnectionController {

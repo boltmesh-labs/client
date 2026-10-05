@@ -22,10 +22,10 @@ extension ConnectionRecovery on ConnectionController {
   /// the data path healthy when the handshake is hard-dead.
   ///
   /// [demoteTransport] is the ladder policy's verdict, not a re-derivation
-  /// here: it is true only when the path looked dead while the control plane
-  /// answered, which is the only evidence that this transport is blocked rather
-  /// than the network being gone. Keeping it a parameter means this method
-  /// cannot decide on its own to change rungs.
+  /// here: it is true only on positive local evidence that this path is dead (a
+  /// performed-dead echo run, the hard handshake ceiling, or a never-completed
+  /// handshake past its grace). Keeping it a parameter means this method cannot
+  /// decide on its own to change rungs.
   Future<void> _autoHeal(
     String why, {
     bool hardStalled = false,
@@ -85,10 +85,10 @@ extension ConnectionRecovery on ConnectionController {
       final previousRung = _transportRung;
       final reason =
           recoveryReason ?? snap.recoveryReason ?? RecoveryReason.unknown;
-      // A lower transport is warranted only when the data path looks dead
-      // while the control plane is reachable. A blackout can still justify
-      // restarting the cached config, but it is not evidence that this
-      // transport specifically is blocked.
+      // A lower transport is warranted on local evidence that the data path
+      // looks dead, whether or not the control plane answers — in a full
+      // tunnel the probe shares the dead rung's route, so it cannot be the
+      // gate. A bare single dead echo still only rebuilds the current rung.
       if (promotionFallback != null) {
         _transportRung = promotionFallback;
         _promotionFallbackRung = null;

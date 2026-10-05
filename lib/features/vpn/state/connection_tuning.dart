@@ -33,10 +33,10 @@ abstract final class ConnectionTuning {
   ///
   /// Two roles, both of them about acting *cheaply*. It is the corroboration
   /// gate for detecting a stall, and it is the never-handshook threshold at
-  /// which the ladder may change transport — because a rung step is a
-  /// same-server restart that the control plane's answer has licensed (see
-  /// `ladder_policy.dart`), which is the corroboration this window lacks on
-  /// its own. A peer that has not completed a handshake in six retry
+  /// which the ladder may change transport — a rung step is a cheap same-server
+  /// restart, so it is licensed on this local evidence alone (see
+  /// `ladder_policy.dart`); the *move* keeps its later uncorroborated ceiling.
+  /// A peer that has not completed a handshake in six retry
   /// intervals is not slow, and there is nothing for it to be idle about.
   ///
   /// It is deliberately *not* enough for an uncorroborated server move; that
@@ -71,7 +71,7 @@ abstract final class ConnectionTuning {
   /// through it. 45s (≈9 WireGuard retries) is ample even on a slow link, and
   /// still short enough that a filtered first connect is diagnosed well inside
   /// a minute. Compare [firstHandshakeGrace], which is enough for the cheap
-  /// actions — detection, and a rung step the control plane has licensed.
+  /// actions — detection, and a rung step.
   ///
   /// Independent of recovery restarts by construction: this measures from the
   /// tunnel-start anchor (`connectedAt`), which every start resets. An earlier

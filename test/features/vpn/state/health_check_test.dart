@@ -524,6 +524,41 @@ void main() {
       expect(container.read(connectionProvider).autoHealAttempts, 1);
     });
 
+    test('a confirmed dead echo run steps a rung with the probe unreachable', () async {
+      // The regression: in a full tunnel the control probe is routed through
+      // the very rung that is dead, so once the app is connected the probe
+      // cannot corroborate a blocked transport. A performed-dead echo run is
+      // positive local path-death evidence, so it must license the cheap rung
+      // step on its own — before spending the move budget, and without the
+      // API answering.
+      useLinuxDataPlane();
+      final events = <String>[];
+      final (container, tunnel) = await seedConnected(events, (o) {
+        if (o.path.endsWith('/config')) return dualDial();
+        if (o.path.endsWith('/status')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      }, controlProbe: support.FakeControlProbe(false));
+      final ctl = container.read(connectionProvider.notifier);
+
+      // Tick 1 banks strike 1 without acting: 40s opens the echo probe (>=
+      // echoProbeAfter) but is not yet a stale handshake.
+      ctl.debugHandshakeReader = () async =>
+          DateTime.now().subtract(const Duration(seconds: 40));
+      await ctl.checkHealthOnce();
+      expect(ctl.transportRung, TransportRung.native);
+
+      // Tick 2: a stale handshake with the run latched -> confirmed dead path,
+      // control probe down.
+      staleHandshake(ctl);
+      await ctl.checkHealthOnce();
+
+      expect(ctl.transportRung, TransportRung.awg);
+      expect(tunnel.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+      expect(tunnel.lastConfig, contains('Jc = 3'));
+      expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+      expect(container.read(connectionProvider).autoHealAttempts, 1);
+    });
+
     test('a node offering no obfuscated rung never obfuscates', () async {
       useLinuxDataPlane();
       final events = <String>[];
@@ -925,6 +960,41 @@ void main() {
         );
       });
 
+      test('one incident walks both rungs even with the probe unreachable', () async {
+        // The user-visible regression: a blocked first connect never
+        // handshakes, and the control probe — routed through the dead rung —
+        // goes dark after at most one lucky answer. A never-completed handshake
+        // past its grace is positive local evidence, so the whole ladder must
+        // still be walked in one incident, one rung per heal, before any server
+        // move.
+        useLinuxDataPlane();
+        final clock = support.FakeClock();
+        final (container, socket) = await seedStream(
+          clock: clock,
+          gatewayProbe: support.FakeGatewayProbe(null),
+          controlProbe: support.FakeControlProbe(false),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        // A supported reader reporting no handshake at all, ever.
+        ctl.debugHandshakeReader = () async => null;
+        final walked = <TransportRung>[];
+        for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
+          clock.advance(ConnectionTuning.firstHandshakeGrace);
+          await ctl.checkHealthOnce();
+          walked.add(ctl.transportRung);
+        }
+
+        expect(walked, [TransportRung.awg, TransportRung.stream]);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+        // The stream rung's own shape: a loopback peer, a pinned listen port
+        // and a stock body inside the TLS session.
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastConfig, contains('ListenPort = '));
+        expect(socket.lastConfig, isNot(contains('Jc =')));
+        expect(socket.lastTransport, isNotNull);
+      });
+
       test('a backend-confirmed dead node moves servers without stepping a rung', () async {
         // The rungs exist for a transport the network blocks; a node the
         // backend has given up on is not that. So the ladder is skipped even
@@ -1042,10 +1112,15 @@ void main() {
         expect(socket.lastTransport, isNull);
 
         // A fresh handshake on the candidate confirms it. A later outage must
-        // not revert to the expensive rung as though this probe had failed.
+        // not revert to the expensive rung as though this probe had failed. The
+        // evidence here is a merely stale observed handshake (not the
+        // never-handshake that now steps a rung), so the only thing this outage
+        // can do is rebuild in place.
         ctl.debugHandshakeReader = () async => clock.now();
         await ctl.checkHealthOnce();
-        ctl.debugHandshakeReader = () async => null;
+        ctl.debugHandshakeReader = () async => clock.now().subtract(
+          ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
+        );
         controlProbe.reachable = false;
         clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
         await ctl.checkHealthOnce();

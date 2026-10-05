@@ -336,30 +336,43 @@ void main() {
       );
     });
 
-    test(
-      'a rung step needs a reachable control plane, cheap heal and a rung',
-      () {
-        for (final r in allRows()) {
-          for (final api in [true, false, null]) {
-            for (final lowerRung in [true, false]) {
-              for (final canHeal in [true, false]) {
-                final step = decided(
+    test('a rung step needs a cheap heal and a rung, not a control plane', () {
+      // The cheap action is licensed by the same local path-death evidence that
+      // licenses the uncorroborated move at the hard ceiling, so the only gates
+      // are the rung's availability, the node verdict and the heal budget.
+      for (final r in allRows()) {
+        for (final api in [true, false, null]) {
+          for (final lowerRung in [true, false]) {
+            for (final canHeal in [true, false]) {
+              for (final verdict in [
+                decided(
                   pin(r, lowerRung: lowerRung, canHeal: canHeal),
                   api: api,
-                );
-                if (step != RecoveryStep.stepTransportRung) continue;
-                expect(api, isTrue, reason: 'row=$r lower=$lowerRung');
+                  echoRun: true,
+                ),
+                decided(
+                  pin(r, lowerRung: lowerRung, canHeal: canHeal),
+                  api: api,
+                  hardStale: true,
+                ),
+                decided(
+                  pin(r, lowerRung: lowerRung, canHeal: canHeal),
+                  api: api,
+                  neverHandshake: true,
+                ),
+              ]) {
+                if (verdict != RecoveryStep.stepTransportRung) continue;
                 expect(
                   canHeal && lowerRung && !r.serverDown,
                   isTrue,
-                  reason: 'row=$r lower=$lowerRung canHeal=$canHeal',
+                  reason: 'api=$api row=$r lower=$lowerRung canHeal=$canHeal',
                 );
               }
             }
           }
         }
-      },
-    );
+      }
+    });
 
     test('the backend dead-node verdict never steps a rung', () {
       // The rung exists for a *transport* the network blocks. A node the
@@ -420,34 +433,44 @@ void main() {
       }
     });
 
-    test(
-      'an unreachable control plane never licenses a move or a demotion',
-      () {
-        // Discovery and the switch POST would only fail, and a demotion would
-        // change transport on evidence that cannot tell blocked from gone.
-        // `escalate` is pinned off because it is `shouldEscalateToFailover`'s
-        // verdict, which already requires the control plane to have answered.
-        for (final r in allRowsWith(escalate: false)) {
-          for (final api in [false, null]) {
-            for (final verdict in [
-              decided(r, api: api),
-              decided(r, api: api, echoRun: true),
-            ]) {
-              expect(
-                verdict,
-                isNot(
-                  anyOf(
-                    RecoveryStep.stepTransportRung,
-                    RecoveryStep.escalateToServer,
-                  ),
-                ),
-                reason: 'api=$api row=$r',
-              );
-            }
-          }
+    test('an unreachable control plane still licenses the cheap rung step', () {
+      // The move needs a control-plane answer, because its discovery and
+      // switch POST would only fail without one. The rung step does not: it is
+      // the cheaper action, and the same local path-death evidence already
+      // licenses an uncorroborated move at the hard ceiling. In a full tunnel
+      // the probe is routed through the dead rung, so requiring it made the
+      // step unreachable exactly when it exists for.
+      // `escalate` is pinned off because it is `shouldEscalateToFailover`'s
+      // verdict, which already requires the control plane to have answered.
+      for (final r in allRowsWith(escalate: false, serverDown: false)) {
+        for (final api in [false, null]) {
+          // No local path-death evidence: nothing but a same-rung restart.
+          expect(
+            decided(r, api: api),
+            isNot(
+              anyOf(
+                RecoveryStep.stepTransportRung,
+                RecoveryStep.moveServer,
+                RecoveryStep.escalateToServer,
+              ),
+            ),
+            reason: 'api=$api row=$r',
+          );
+          if (r.gateway == true) continue; // a live echo suppresses
+          // A performed-dead echo run with a rung and a heal available is a
+          // step, whether or not the control plane answered.
+          expect(
+            decided(
+              pin(r, canHeal: true, lowerRung: true),
+              api: api,
+              echoRun: true,
+            ),
+            RecoveryStep.stepTransportRung,
+            reason: 'api=$api row=$r',
+          );
         }
-      },
-    );
+      }
+    });
 
     test(
       'a terminal step needs both budgets spent and a live control plane',
@@ -507,14 +530,16 @@ void main() {
       );
     });
 
-    test('the same evidence during a blackout restarts on the same rung', () {
-      // The control plane not answering is not evidence about *this*
-      // transport, so the cheap restart still runs — in place.
+    test('a confirmed dead path steps the rung even when the probe is dark', () {
+      // A performed-dead echo run is positive local path-death evidence. The
+      // control probe is routed through the dead rung in a full tunnel, so it
+      // must not gate the cheap step: the step comes before any move whether or
+      // not the API answered.
       expect(local(row(), echoRun: true), RecoveryStep.probeControlPlane);
-      for (final api in [false, null]) {
+      for (final api in [false, null, true]) {
         expect(
           decided(row(), api: api, echoRun: true),
-          RecoveryStep.restartTunnel,
+          RecoveryStep.stepTransportRung,
           reason: 'api=$api',
         );
       }
@@ -535,8 +560,9 @@ void main() {
 
     test('a hard-stale handshake substitutes for an unprobeable echo', () {
       // The echo could not be performed at all (null), so the handshake ceiling
-      // is the positive evidence. A blackout cannot demote on it; a reachable
-      // control plane makes it a rung step.
+      // is the positive evidence. It steps a rung with or without a
+      // control-plane answer; a bare never-handshook only reaches the hard
+      // ceiling here when the grace has passed.
       final unprobeable = row(gateway: null);
       expect(
         local(unprobeable, hardStale: true),
@@ -544,7 +570,7 @@ void main() {
       );
       expect(
         decided(unprobeable, api: false, hardStale: true),
-        RecoveryStep.restartTunnel,
+        RecoveryStep.stepTransportRung,
       );
       expect(
         decided(unprobeable, api: true, hardStale: true),

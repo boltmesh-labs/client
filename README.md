@@ -744,19 +744,22 @@ rest of the pipeline (which files, when, verify) is unchanged.
   cheap local retry first. Where the server serves no lower rung there is
   nothing to step to, so a heal would only rebuild the same config on the same
   rung and the old move-first escalation is kept unchanged.
-  A rung step additionally requires the control plane to *answer*: a blackout or
-  an unknown probe justifies restarting the cached config, but it says nothing
-  about this transport specifically, so a restart during an outage stays on the
-  current rung. Evidence is graded by the cost of the action it buys. A
-  handshake that never completed at all — past `firstHandshakeGrace` (30s), not
-  merely stale — is real local evidence, because a peer that never answered six
-  WireGuard handshake retries is not idle, and with the control plane reachable
-  that licenses a rung step at 30s. The same evidence with nobody to corroborate
-  it does not: a fast-track server move stops the tunnel and spends the move
-  budget without asking anyone, so it waits for `hardFirstHandshakeCeiling`
-  (45s), which measures from the tunnel's start and is deliberately independent
-  of how many times the tunnel has been restarted. That distinction is the whole
-  of the ladder's ordering, and it lives in one pure decision
+  A rung step is licensed by *local* path-death evidence, not by the control
+  plane: a performed-dead echo run, a hard-stale handshake, or a handshake that
+  never completed past `firstHandshakeGrace` (30s). The control-plane probe is
+  deliberately not required, because in a full tunnel it is routed through the
+  very rung under test — a blocked transport kills the probe too — so requiring
+  it left the ladder unable to walk exactly when it exists for. Evidence is
+  graded by the cost of the action it buys. A handshake that never completed at
+  all is real local evidence, because a peer that never answered six WireGuard
+  handshake retries is not idle, and that licenses the cheap rung step at 30s.
+  The same evidence does *not* license an uncorroborated server move: a
+  fast-track move stops the tunnel and spends the move budget without asking
+  anyone, so it waits for `hardFirstHandshakeCeiling` (45s), which measures from
+  the tunnel's start and is deliberately independent of how many times the
+  tunnel has been restarted. Only a bare single dead echo still needs the
+  control plane to answer before it acts. That distinction is the whole of the
+  ladder's ordering, and it lives in one pure decision
   (`domain/ladder_policy.dart`) with the evidence table in
   `test/features/vpn/domain/ladder_policy_test.dart`.
   The heal budget is two restarts per incident (`maxHealsPerIncident`), one rung

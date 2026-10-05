@@ -158,12 +158,12 @@ class ConnectionController extends Notifier<ConnState> {
   /// every start, so a server move follows the new node's advertised list and
   /// never keeps a rung the new node does not serve.
   ///
-  /// Below the floor, a stall that looks like a dead tunnel path while the
-  /// control plane is reachable escalates one rung at a time. A local stall
-  /// during a control-plane blackout only gets a same-rung restart: that is
-  /// absence of evidence that this transport is blocked.
+  /// Below the floor, a stall that looks like a dead tunnel path escalates one
+  /// rung at a time on local path-death evidence, whether or not the control
+  /// plane answers: in a full tunnel the probe shares the dead rung's route, so
+  /// requiring it would leave the ladder unable to walk when it is needed.
   ///
-  /// Demotion is sticky: once the control plane answers while the tunnel path
+  /// Demotion is sticky: once the ladder has stepped while the tunnel path
   /// is dead, every later connect stays on the lower rung rather than re-paying
   /// the failed-probe cycle. After 24 hours of healthy operation, the client
   /// probes one cheaper rung; absent liveness within the probe window, it
