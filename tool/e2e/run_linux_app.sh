@@ -138,6 +138,28 @@ done
   || die "the scratch keyring stayed locked; see $workdir/keyring.log"
 XDG_DATA_HOME="$workdir/xdg" secret-tool clear service boltmesh-e2e-probe >/dev/null 2>&1 || true
 
+# --- clear the account's devices --------------------------------------------
+
+# A run that fails part-way leaves its device row behind even though the
+# interface is gone, and the subscription caps how many can be active. The next
+# run then cannot provision, and it reports a device limit that the run
+# reporting it never caused. Resetting the count up front keeps a red run from
+# poisoning the next one.
+#
+# `BOLTMESH_E2E_KEEP_DEVICES=1` skips this, for when the account's other
+# devices matter more than a clean count.
+if [[ ${BOLTMESH_E2E_KEEP_DEVICES:-0} == 1 ]]; then
+  log "keeping existing devices (BOLTMESH_E2E_KEEP_DEVICES=1)"
+else
+  log "clearing the account's devices"
+  clear_args=(--clear-devices --api-base "$(sed -n 's/^API_BASE_URL=//p' "$env_file" | tail -1)")
+  if [[ ${BOLTMESH_E2E_DRY_RUN:-0} == 1 ]]; then
+    clear_args+=(--dry-run)
+  fi
+  python3 "$here/client.py" "${clear_args[@]}" \
+    --api-user "$api_user" --api-password "$api_password"
+fi
+
 # --- run the app ------------------------------------------------------------
 
 log "running the Linux app end to end"

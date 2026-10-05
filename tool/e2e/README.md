@@ -151,6 +151,34 @@ them — which is also what puts the restore path inside what is covered.
 4. **logs out** — connects first, so logout has a live tunnel to tear down, then
    signs out and asserts the login screen is back and the interface is gone.
 
+### Clearing devices first
+
+The subscription caps how many devices can be active, and a run that fails
+part-way leaves its row behind: the interface is gone, the row is not. The *next*
+run then cannot provision and reports a device limit that the run reporting it
+never caused — a bad way to fail, because the run that broke is long gone.
+
+So `run_linux_app.sh` deletes the account's devices before the app starts, and
+`tool/e2e/client.py` can do it on its own:
+
+```sh
+python3 tool/e2e/client.py --clear-devices \
+  --api-base "$API_BASE_URL" \
+  --api-user "$BOLTMESH_E2E_API_USER" --api-password "$BOLTMESH_E2E_API_PASSWORD"
+
+# see what it would remove, delete nothing
+python3 tool/e2e/client.py --clear-devices --dry-run ...
+```
+
+It disconnects each row before deleting it (the backend refuses to drop a row
+with a live tunnel bound), names every row as it goes, and keeps going past one
+that fails — a half-cleared account is the exact state this exists to prevent.
+`BOLTMESH_E2E_KEEP_DEVICES=1` skips it and `BOLTMESH_E2E_DRY_RUN=1` lists
+without deleting.
+
+**This is destructive.** It is a lab harness aimed at a test account; nothing
+here should be pointed at an account whose devices matter.
+
 ### Two failure modes worth knowing
 
 Both cost real time here, so both are guarded in the test rather than left as

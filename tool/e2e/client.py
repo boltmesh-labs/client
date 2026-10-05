@@ -102,10 +102,14 @@ class Helper:
 
 def _api_call(base: str, path: str, *, token: str | None = None, method: str = "GET",
               body: dict | None = None, form: dict | None = None) -> object:
-    """One authenticated JSON call, retrying only a 429.
+    """One authenticated JSON call, retrying only what is worth retrying.
 
     The real API rate-limits even `/auth/login`, so a harness that cannot back off
-    cannot run against it at all. Everything else is a real answer and propagates.
+    cannot run against it at all. The same is true of the gateway in front of it:
+    a 502/503/504 is the proxy failing to reach the app, not the app answering,
+    and it clears on its own. Both are retried; every other status is a real
+    answer and propagates, so a genuinely wrong request still fails fast instead
+    of being retried into a slower failure.
     """
     headers = {"Accept": "application/json"}
     data = None
@@ -127,9 +131,11 @@ def _api_call(base: str, path: str, *, token: str | None = None, method: str = "
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             payload = exc.read().decode("utf-8", "replace")
-            if exc.code == 429 and attempt < 5:
+            transient = exc.code == 429 or exc.code in (502, 503, 504)
+            if transient and attempt < 5:
                 delay = 5 * (attempt + 1)
-                print(f"  rate limited on {path}; retrying in {delay}s", flush=True)
+                why = "rate limited" if exc.code == 429 else f"gateway {exc.code}"
+                print(f"  {why} on {path}; retrying in {delay}s", flush=True)
                 time.sleep(delay)
                 continue
             raise StagingError(f"HTTP {exc.code} on {path}: {payload[:300]}") from None
@@ -367,19 +373,69 @@ def free_udp_port() -> int:
         sock.close()
 
 
+def clear_devices(base: str, token: str, *, dry_run: bool = False) -> int:
+    """Deletes every device on the account, so a run starts from a known count.
+
+    The subscription caps how many devices can be active, and a run that fails
+    part-way leaves its device behind: the interface is gone but the row is not,
+    so the *next* run cannot provision. That is a bad way to fail -- the run
+    that broke is long gone and the one reporting the limit never touched it --
+    so the count is reset up front instead.
+
+    Destructive by design, which is why it names every row before removing it
+    and takes --dry-run.
+    """
+    devices = _api_call(base, "/vpn-devices", token=token) or []
+    rows = devices.get("data", devices) if isinstance(devices, dict) else devices
+    if not rows:
+        print("no devices to clear", flush=True)
+        return 0
+
+    print(f"{len(rows)} device(s) on the account:", flush=True)
+    for row in rows:
+        print(f"  {row.get('id')}  {row.get('name')}  ({row.get('platform')})",
+              flush=True)
+    if dry_run:
+        print("dry run: nothing deleted", flush=True)
+        return len(rows)
+
+    for row in rows:
+        device_id = row.get("id")
+        if not device_id:
+            continue
+        try:
+            # Disconnect first where the harness can: the server refuses to drop
+            # a row that still has a live tunnel bound to it.
+            try:
+                _api_call(base, f"/vpn-devices/{device_id}/disconnect",
+                          token=token, method="POST")
+            except StagingError as exc:
+                print(f"  {device_id}: disconnect reported {exc}; deleting anyway",
+                      flush=True)
+            _api_call(base, f"/vpn-devices/{device_id}", token=token,
+                      method="DELETE")
+            print(f"  deleted {device_id}", flush=True)
+        except StagingError as exc:
+            # One stuck row must not leave the rest behind: that is the exact
+            # half-cleared state this function exists to prevent.
+            print(f"  {device_id}: {exc}", flush=True)
+    return len(rows)
+
+
 # --- entry point -----------------------------------------------------------
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--socket", required=True, help="boltmeshd's unix socket path")
+    ap.add_argument("--socket", help="boltmeshd's unix socket path")
     ap.add_argument("--state",
                     help="state file holding this run's device keypair and region, "
                          "written by run.sh. The device itself is created through the "
                          "API, so nothing here needs to pre-exist on the backend")
     ap.add_argument("--api-user", help="API user")
     ap.add_argument("--api-password", help="API password")
+    ap.add_argument("--api-base", help="API base URL, for the modes that read no state file")
 
     ap.add_argument("--state-out",
                     help="where to write the chosen keys and ports, for the assertions")
@@ -393,7 +449,30 @@ def main() -> int:
                          "kernel's `wg show` cannot read a userspace AmneziaWG device, "
                          "so this is the equivalent read when the region is obfuscated. "
                          "Needs only --socket")
+    ap.add_argument("--clear-devices", action="store_true",
+                    help="delete every device on the account and exit, so a run starts "
+                         "from a known count. A run that fails part-way leaves its "
+                         "device behind and the next one cannot provision. Destructive: "
+                         "this is a lab harness, not something to point at a real account")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --clear-devices, list what would be deleted and stop")
     args = ap.parse_args()
+
+    if args.clear_devices:
+        missing = [flag for flag, value in (
+            ("--api-base", args.api_base),
+            ("--api-user", args.api_user),
+            ("--api-password", args.api_password),
+        ) if not value]
+        if missing:
+            ap.error("--clear-devices requires: " + ", ".join(missing))
+        base = args.api_base
+        clear_devices(base, login(base, args.api_user, args.api_password),
+                      dry_run=args.dry_run)
+        return 0
+
+    if not args.socket:
+        ap.error("--socket is required")
 
     if args.down or args.status:
         if args.status:

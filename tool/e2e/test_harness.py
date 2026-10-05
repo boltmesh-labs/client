@@ -338,5 +338,72 @@ class FreePortTest(unittest.TestCase):
         self.assertNotEqual(client.free_udp_port(), client.free_udp_port())
 
 
+class ClearDevicesTest(unittest.TestCase):
+    """The device-clearing step, against a stand-in for the API.
+
+    Worth covering offline because its failure mode is invisible: a device left
+    behind does not break the run that left it, it breaks the *next* one, with a
+    device-limit error that names the wrong run.
+    """
+
+    def _harness(self, devices, failing: set[str] | None = None):
+        """Records calls and answers with `devices`, raising for `failing` ids."""
+        calls: list[tuple[str, str]] = []
+        failing = failing or set()
+
+        def fake(base, path, *, token=None, method="GET", body=None, form=None):
+            calls.append((method, path))
+            for bad in failing:
+                if path.endswith(bad):
+                    raise client.StagingError(f"HTTP 409 on {path}")
+            if path == "/vpn-devices":
+                return devices
+            return None
+
+        original = client._api_call
+        client._api_call = fake
+        self.addCleanup(setattr, client, "_api_call", original)
+        return calls
+
+    def test_deletes_every_device_after_disconnecting_it(self) -> None:
+        devices = [{"id": "a", "name": "one", "platform": "linux"},
+                   {"id": "b", "name": "two", "platform": "linux"}]
+        calls = self._harness(devices)
+
+        self.assertEqual(client.clear_devices("https://api", "tok"), 2)
+
+        methods = {path: method for method, path in calls}
+        # Disconnect before delete, or the backend refuses to drop a live row.
+        self.assertEqual(methods["/vpn-devices/a/disconnect"], "POST")
+        self.assertEqual(methods["/vpn-devices/a"], "DELETE")
+        self.assertEqual(methods["/vpn-devices/b"], "DELETE")
+
+    def test_dry_run_deletes_nothing(self) -> None:
+        calls = self._harness([{"id": "a", "name": "one", "platform": "linux"}])
+
+        self.assertEqual(client.clear_devices("https://api", "tok", dry_run=True), 1)
+        self.assertEqual([c for c in calls if c[0] in ("DELETE", "POST")], [])
+
+    def test_one_stuck_row_does_not_abandon_the_rest(self) -> None:
+        # The half-cleared state is the exact one this exists to prevent, so one
+        # failure must not stop the loop.
+        calls = self._harness(
+            [{"id": "a", "name": "one", "platform": "linux"},
+             {"id": "b", "name": "two", "platform": "linux"},
+             {"id": "c", "name": "three", "platform": "linux"}],
+            failing={"/vpn-devices/a"},
+        )
+
+        client.clear_devices("https://api", "tok")
+
+        deleted = {path for method, path in calls if method == "DELETE"}
+        self.assertEqual(deleted, {"/vpn-devices/a", "/vpn-devices/b", "/vpn-devices/c"})
+
+    def test_no_devices_is_not_an_error(self) -> None:
+        calls = self._harness([])
+        self.assertEqual(client.clear_devices("https://api", "tok"), 0)
+        self.assertEqual([c for c in calls if c[0] in ("DELETE", "POST")], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
