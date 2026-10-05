@@ -559,6 +559,42 @@ void main() {
       expect(container.read(connectionProvider).autoHealAttempts, 1);
     });
 
+    test(
+      'the awg rung echoes its own overlay resolver, not the stock one',
+      () async {
+        // The obfuscated device routes only its own overlay (awg_assigned_ip /
+        // awg_dns): the stock resolver lives on the other device and is
+        // unreachable through it. A tick that probed wg_dns from the awg rung
+        // would always read the gateway dead and demote a working rung.
+        useLinuxDataPlane();
+        final events = <String>[];
+        final gatewayProbe = support.FakeGatewayProbe(false);
+        final (container, _) = await seedConnected(events, (o) {
+          if (o.path.endsWith('/config')) return dualDial();
+          if (o.path.endsWith('/status')) throw networkTimeout(o);
+          throw StateError('unexpected ${o.path}');
+        }, gatewayProbe: gatewayProbe);
+        final ctl = container.read(connectionProvider.notifier);
+
+        // Bank strike 1 on native: the probe follows the native rung to wg_dns.
+        ctl.debugHandshakeReader = () async =>
+            DateTime.now().subtract(const Duration(seconds: 40));
+        await ctl.checkHealthOnce();
+        expect(ctl.transportRung, TransportRung.native);
+        expect(gatewayProbe.lastIp, '10.8.0.1');
+
+        // The confirmed dead path (stale handshake + the run) steps onto awg.
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+        expect(ctl.transportRung, TransportRung.awg);
+
+        // The next tick runs on awg and must probe the awg overlay resolver.
+        staleHandshake(ctl);
+        await ctl.checkHealthOnce();
+        expect(gatewayProbe.lastIp, '10.9.0.1');
+      },
+    );
+
     test('a node offering no obfuscated rung never obfuscates', () async {
       useLinuxDataPlane();
       final events = <String>[];

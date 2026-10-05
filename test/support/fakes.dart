@@ -385,12 +385,17 @@ class FakeGatewayProbe implements GatewayProbe {
   /// Number of [echoDns] calls, for asserting the health tick's probe gate.
   int calls = 0;
 
+  /// The last IP [echoDns] probed, so a suite can assert the tick asked the
+  /// current rung's own overlay resolver.
+  String? lastIp;
+
   @override
   Future<bool?> echoDns(
     String ip, {
     Duration timeout = const Duration(seconds: 2),
   }) async {
     calls++;
+    lastIp = ip;
     return alive;
   }
 }

@@ -482,7 +482,7 @@ extension ConnectionColdStart on ConnectionController {
         return true;
       }
       // Tri-state, never throws (see [ConnectionHealth._gatewayAlive]).
-      final gateway = await _gatewayAlive(dial.wgDns);
+      final gateway = await _gatewayAlive(_overlayDnsFor(dial));
       if (gateway == true) return true;
       final restageTerminal =
           restage == VpnStage.disconnected ||

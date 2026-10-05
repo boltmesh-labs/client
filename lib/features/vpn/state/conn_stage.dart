@@ -256,7 +256,7 @@ extension ConnectionStage on ConnectionController {
       );
       // Tri-state, never throws (see [ConnectionHealth._gatewayAlive]):
       // null = skipped/errored (unknown, defers), false = echoed-dead.
-      final gateway = await _gatewayAlive(dial.wgDns);
+      final gateway = await _gatewayAlive(_overlayDnsFor(dial));
       if (gateway == true) {
         _adoptExternalStop(
           epoch,

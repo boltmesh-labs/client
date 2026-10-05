@@ -163,7 +163,7 @@ extension ConnectionHealth on ConnectionController {
       final linkUp = await _hasLink();
       if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
       if (linkUp) {
-        gateway = await _gatewayAlive(dial.wgDns);
+        gateway = await _gatewayAlive(_overlayDnsFor(dial));
         if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
         _deadEchoStrikes = gateway == false ? _deadEchoStrikes + 1 : 0;
       } else {
@@ -615,17 +615,21 @@ extension ConnectionHealth on ConnectionController {
     }
   }
 
-  /// Layer 1 read: in-tunnel gateway echo against a probeable IP in
-  /// `wgDns` (see [firstDnsProbeIp]). Tri-state: true = alive (suppresses
+  /// Layer 1 read: in-tunnel gateway echo against a probeable IP in the
+  /// **rung's own** overlay resolver — [_overlayDnsFor], not always `wgDns`:
+  /// the awg device routes only its own overlay, so probing the stock resolver
+  /// from the awg rung merely fails and would demote a working rung (see
+  /// [firstDnsProbeIp]). Tri-state: true = alive (suppresses
   /// healing), false = echoed-dead, null = skipped or errored — unknown,
   /// never proof of death on its own (the classifier can't fast-track on
   /// it and the external-stop verifier defers on it).
-  Future<bool?> _gatewayAlive(String wgDns) async {
-    final target = firstDnsProbeIp(wgDns);
+  Future<bool?> _gatewayAlive(String overlayDns) async {
+    final target = firstDnsProbeIp(overlayDns);
     if (target == null) {
-      // Never expected in production (wg_dns is the server's tunnel IP);
-      // logged so a mis-shaped dial value can't hide as a silent "skipped".
-      AppLog.info('gateway probe skipped (no probeable IP in dns=$wgDns)');
+      // Never expected in production (the overlay resolver is the server's
+      // tunnel IP); logged so a mis-shaped dial value can't hide as a silent
+      // "skipped".
+      AppLog.info('gateway probe skipped (no probeable IP in dns=$overlayDns)');
       return null;
     }
     try {
