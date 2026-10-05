@@ -414,6 +414,12 @@ extension ConnectionObfuscation on ConnectionController {
   TransportRung? _rungFor(DialParams dial) {
     final runnable = _runnableRungs(dial);
     if (runnable.isEmpty) return null;
+    // Test seam (see [debugForceRung]): an e2e walks the whole ladder by
+    // pinning each rung, which the health policy would otherwise only reach on
+    // a blocked network. Still scoped to `runnable`, so it can only start a
+    // rung this node serves and this build can assemble.
+    final forced = debugForceRung;
+    if (forced != null && runnable.contains(forced)) return forced;
     if (runnable.contains(_transportRung)) return _transportRung;
     final ceiling = runnable.last;
     final floor = runnable.first;

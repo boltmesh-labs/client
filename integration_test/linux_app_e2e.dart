@@ -19,15 +19,22 @@
 // BOLTMESH_E2E_API_USER / BOLTMESH_E2E_API_PASSWORD (same convention as
 // tool/e2e/run.sh).
 //
-// The four tests run in order and build on each other: sign in, connect,
-// switch server, log out. Each calls `app.main()` for a fresh widget tree,
-// but the keyring persists across tests in a run, so the session is restored
-// between them — which is itself the restore path being exercised.
+// The four tests run in order and build on each other: sign in, walk the
+// transport ladder (native, awg, stream), switch server, log out. Each calls
+// `app.main()` for a fresh widget tree, but the keyring persists across tests in
+// a run, so the session is restored between them — which is itself the restore
+// path being exercised.
+//
+// The ladder walk drives the real controller through every rung with its
+// `debugForceRung` seam: the controller starts on the node's floor and only
+// demotes on health evidence a lab run cannot fabricate, so the seam is what
+// lets one run prove all three data planes really carry bytes.
 
 library;
 
 import 'dart:io';
 
+import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:boltmesh/features/vpn/ui/home/power_button.dart';
 import 'package:boltmesh/l10n/gen/app_localizations.dart';
@@ -56,9 +63,10 @@ void main() {
     await _shot('01-signed-in');
   });
 
-  testWidgets('connects and moves real WireGuard bytes', (tester) async {
+  testWidgets('walks the transport ladder native, awg, stream', (tester) async {
     await _launch(tester);
     final container = _container(tester);
+    final ctl = container.read(connectionProvider.notifier);
     ConnState state() => container.read(connectionProvider);
 
     // The tunnel lives in the host namespace, not in this process, so a failed
@@ -68,86 +76,132 @@ void main() {
     await _ensureSignedIn(tester);
     await _shot('02-home');
 
-    // --- connect ---------------------------------------------------------
-    await _connect(tester, state);
-    await _shot('03-connected');
+    // The controller starts on the serving node's floor and only demotes on
+    // health evidence — a stalled path with the control plane still up — which
+    // a lab run cannot fabricate. The seam pins each rung in turn so the whole
+    // advertised ladder is exercised: the point of this run is that every data
+    // plane really carries bytes, not that the walk is re-picked here (that is
+    // the state suites' job).
+    const ladder = [
+      TransportRung.native,
+      TransportRung.awg,
+      TransportRung.stream,
+    ];
+    for (var i = 0; i < ladder.length; i++) {
+      final rung = ladder[i];
+      ctl.debugForceRung = rung;
 
-    // The UI has to agree with the state it renders: this is a GUI run, so a
-    // controller that reached `connected` behind a stuck spinner would pass a
-    // state-only assertion.
-    final l10n = AppLocalizations.of(
-      tester.element(find.byType(NavigationBar)),
-    );
-    expect(find.text(l10n.homeDisconnect), findsOneWidget);
-    expect(find.textContaining(l10n.homeStatusConnected), findsWidgets);
+      // --- connect on this rung ------------------------------------------
+      if (i == 0) {
+        // The first rung comes up through the GUI, and is the one start that
+        // binds the device's peer.
+        await _connect(tester, state);
+      } else {
+        // A rung change is a restart, not a new device session. Reconnecting
+        // through the controller reconciles the still-bound peer from `config`
+        // (a read) and replaces the live tunnel locally, where a GUI
+        // disconnect+connect would spend two more of the backend's shared
+        // per-IP write budget on every rung.
+        await _reconnect(tester, ctl, state);
+      }
+      expect(
+        ctl.transportRung,
+        rung,
+        reason:
+            'the run asked for ${rung.name}, so that is the rung it must '
+            'be on',
+      );
+      // ignore: avoid_print
+      print('e2e: connected on the ${rung.name} rung');
+      await _shot('03-connected-${rung.name}');
 
-    // --- bytes actually crossed the tunnel --------------------------------
-    await _pumpUntil(
-      tester,
-      'received bytes to appear on the tunnel',
-      () => (state().rxBytes ?? 0) > 0,
-      timeout: _trafficTimeout,
-      diagnose: state,
-    );
-    final received = state().rxBytes ?? 0;
-    // ignore: avoid_print
-    print('e2e: app reports rx=$received tx=${state().txBytes} bytes');
+      // The UI has to agree with the state it renders: this is a GUI run, so a
+      // controller that reached `connected` behind a stuck spinner would pass a
+      // state-only assertion.
+      final l10n = AppLocalizations.of(
+        tester.element(find.byType(NavigationBar)),
+      );
+      expect(find.text(l10n.homeDisconnect), findsOneWidget);
+      expect(find.textContaining(l10n.homeStatusConnected), findsWidgets);
 
-    // The kernel's own counters, when the kernel owns the data plane. On the
-    // obfuscated rung the interface is a userspace AmneziaWG tun and `wg show`
-    // reads nothing, which is not a failure — there the app's counters (read
-    // from the helper) are the equivalent view, so it is reported either way.
-    final kernelRx = await _kernelReceivedBytes();
-    if (kernelRx == null) {
+      // --- bytes actually crossed the tunnel ------------------------------
+      await _pumpUntil(
+        tester,
+        'received bytes to appear on the ${rung.name} rung',
+        () => (state().rxBytes ?? 0) > 0,
+        timeout: _trafficTimeout,
+        diagnose: state,
+      );
+      final received = state().rxBytes ?? 0;
       // ignore: avoid_print
       print(
-        'e2e: no kernel $_tunnelInterface device (userspace data plane); '
-        'the app\'s counters above stand as the evidence',
+        'e2e: ${rung.name} reports rx=$received tx=${state().txBytes} bytes',
       );
-    } else {
-      // ignore: avoid_print
-      print('e2e: kernel $_tunnelInterface received $kernelRx bytes');
+
+      // The kernel's own counters, when the kernel owns the data plane. The
+      // obfuscated rung is a userspace AmneziaWG tun, and even the kernel-owned
+      // rungs are not always readable from this unprivileged process, so a
+      // missing read is reported rather than failed: the app's counters (read
+      // from the helper) are the equivalent evidence there.
+      final kernelRx = await _kernelReceivedBytes();
+      if (kernelRx == null) {
+        // ignore: avoid_print
+        print(
+          'e2e: no kernel $_tunnelInterface wg view on ${rung.name}; the app\'s '
+          'counters above stand as the evidence',
+        );
+      } else {
+        // ignore: avoid_print
+        print('e2e: kernel $_tunnelInterface received $kernelRx bytes');
+        expect(
+          kernelRx,
+          greaterThan(0),
+          reason: 'the kernel device exists, so it must have moved bytes too',
+        );
+      }
+
+      // --- an in-tunnel packet really gets there --------------------------
+      // The node runs one device per rung in its own overlay, so the address to
+      // ping follows the rung: the stock device answers `wgDns`, the obfuscated
+      // one only `awgDns`.
+      final nodeTunnelIp = _rungNodeIp(state(), rung);
       expect(
-        kernelRx,
-        greaterThan(0),
-        reason: 'the kernel device exists, so it must have moved bytes too',
+        nodeTunnelIp,
+        isNotNull,
+        reason: 'the dial payload must carry the node\'s ${rung.name} address',
       );
+      final ping = await Process.run('ping', [
+        '-c',
+        '3',
+        '-W',
+        '3',
+        nodeTunnelIp!,
+      ]);
+      // ignore: avoid_print
+      print(
+        'e2e: in-tunnel ping $nodeTunnelIp on ${rung.name} -> '
+        '${ping.exitCode}\n'
+        '${(ping.stdout as String).trim()}',
+      );
+      expect(
+        ping.exitCode,
+        isZero,
+        reason: 'the in-tunnel ping must succeed on the ${rung.name} rung',
+      );
+      expect((ping.stdout as String), contains('0% packet loss'));
+      await _shot('04-tunnel-verified-${rung.name}');
     }
 
-    // --- an in-tunnel packet really gets there --------------------------
-    final nodeTunnelIp = _nodeTunnelIp(state());
-    expect(
-      nodeTunnelIp,
-      isNotNull,
-      reason: 'the dial payload must carry the node\'s tunnel address',
-    );
-    final ping = await Process.run('ping', [
-      '-c',
-      '3',
-      '-W',
-      '3',
-      nodeTunnelIp!,
-    ]);
-    // ignore: avoid_print
-    print(
-      'e2e: in-tunnel ping $nodeTunnelIp -> ${ping.exitCode}\n'
-      '${(ping.stdout as String).trim()}',
-    );
-    expect(
-      ping.exitCode,
-      isZero,
-      reason: 'the in-tunnel ping must succeed while connected',
-    );
-    expect((ping.stdout as String), contains('0% packet loss'));
-    await _shot('04-tunnel-verified');
-
-    // --- disconnect leaves the host as it was ----------------------------
+    // --- one GUI disconnect leaves the host as it was --------------------
     await tester.ensureVisible(_powerButton(tester));
     await tester.pumpAndSettle();
     await tester.tap(_powerButton(tester));
     await tester.pump();
     await _expectTunnelDown(tester, state);
     await _shot('05-disconnected');
+
+    // Hand the ladder back to the advertised rule for the suites that follow.
+    ctl.debugForceRung = null;
   });
 
   testWidgets('switches server', (tester) async {
@@ -366,16 +420,16 @@ ProviderContainer _container(WidgetTester tester) {
 /// of app state — otherwise a failed test leaves a full-tunnel on the host and
 /// every later test connects through a stale one.
 Future<void> _noTunnelLeftBehind() async {
-  if (!_interfaceExists()) return;
   final here = Directory.current.path;
   final client = '$here/tool/e2e/client.py';
-  if (File(client).existsSync()) {
-    await Process.run('python3', [
-      client,
-      '--socket',
-      '/run/boltmesh/boltmeshd.sock',
-      '--down',
-    ]);
+  const socket = '/run/boltmesh/boltmeshd.sock';
+  // Not gated on `_interfaceExists()`. On a host where the test cannot see the
+  // tunnel device by name, that gate would skip the teardown exactly when a
+  // failed run needs it, leaving a live full-tunnel for the next suite. A
+  // `down` with nothing up is what the helper already tolerates.
+  if (File(client).existsSync() &&
+      FileSystemEntity.typeSync(socket) != FileSystemEntityType.notFound) {
+    await Process.run('python3', [client, '--socket', socket, '--down']);
   }
   final deadline = DateTime.now().add(const Duration(seconds: 30));
   while (_interfaceExists() && DateTime.now().isBefore(deadline)) {
@@ -491,6 +545,36 @@ Future<void> _connect(WidgetTester tester, ConnState Function() state) async {
   );
 }
 
+/// Reconnects the live tunnel onto the currently forced rung.
+///
+/// Used for the ladder's second and later rungs: a rung change is a restart of
+/// the same device session, so `connect()` reconciles the still-bound peer from
+/// `config` (a read) and `_startWith` replaces the tunnel locally. A GUI
+/// disconnect+connect per rung would instead spend two more of the backend's
+/// shared per-IP write budget each time, which the walk cannot afford.
+Future<void> _reconnect(
+  WidgetTester tester,
+  ConnectionController ctl,
+  ConnState Function() state,
+) async {
+  final restarted = ctl.connect();
+  await _pumpUntil(
+    tester,
+    'the tunnel to leave the connected phase for the restart',
+    () => state().phase != ConnPhase.connected,
+    timeout: const Duration(seconds: 30),
+    diagnose: state,
+  );
+  await _pumpUntil(
+    tester,
+    'the tunnel to come back up on the next rung',
+    () => state().phase == ConnPhase.connected,
+    timeout: _connectTimeout,
+    diagnose: state,
+  );
+  await restarted;
+}
+
 /// Ensures the app is signed in, signing in through the form if it has to.
 ///
 /// Waits for the auth gate to *settle* before deciding, because the restore is
@@ -590,18 +674,16 @@ String _describe(ConnState s) =>
     'recovery=${s.recoveryAction?.name}/${s.recoveryReason?.name} '
     'opFailed=${s.opFailed}';
 
-/// The node's address on the tunnel the client actually claimed.
+/// The node's address on the tunnel [rung] actually claimed.
 ///
-/// The payload carries two: `wgDns` for the stock device and `awgDns` for the
-/// obfuscated one. Which one is live is read off the interface the kernel was
-/// given, because the node runs both devices in different networks and pinging
-/// the wrong one is a "no route" that reads like a broken tunnel.
-String? _nodeTunnelIp(ConnState s) {
+/// The node runs one device per rung in its own overlay, so which address is
+/// reachable follows the rung: the stock device answers `wgDns`, the obfuscated
+/// one only `awgDns`. Pinging the wrong one is a "no route" that reads like a
+/// broken tunnel.
+String? _rungNodeIp(ConnState s, TransportRung rung) {
   final dial = s.dial;
   if (dial == null) return null;
-  final awg = dial.awgAssignedIp;
-  if (awg != null && _interfaceHasAddress(awg)) return dial.awgDns;
-  return dial.wgDns;
+  return rung == TransportRung.awg ? dial.awgDns : dial.wgDns;
 }
 
 /// Bytes the kernel's own device received, or null when it has none (the
@@ -623,11 +705,6 @@ Future<int?> _kernelReceivedBytes() async {
 }
 
 bool _interfaceExists() => _ipLink(['show', _tunnelInterface]).exitCode == 0;
-
-bool _interfaceHasAddress(String address) {
-  final result = _ipLink(['-4', '-o', 'addr', 'show', _tunnelInterface]);
-  return result.exitCode == 0 && '${result.stdout}'.contains(address);
-}
 
 ProcessResult _ipLink(List<String> args) =>
     Process.runSync('ip', ['link', ...args]);

@@ -297,6 +297,18 @@ class ConnectionController extends Notifier<ConnState> {
   @visibleForTesting
   bool? debugForceThroughTunnel;
 
+  /// Test seam: forces the ladder onto one rung, so an end-to-end run can
+  /// exercise every data plane in turn without fabricating the blocked network
+  /// that would normally demote it.
+  ///
+  /// Null (production) leaves the ladder to [_rungFor]'s advertised-list rule.
+  /// A non-null value is honored only while that rung is advertised by the
+  /// serving node and runnable here; a rung the node does not serve is ignored
+  /// rather than started, so the seam cannot conjure a start the payload cannot
+  /// back. See [_applyRung], which re-derives the rung on every start.
+  @visibleForTesting
+  TransportRung? debugForceRung;
+
   /// Test seam: holds the op mutex so resume catch-up lock-skips can be
   /// tested deterministically. Returns the one-shot release callback.
   @visibleForTesting

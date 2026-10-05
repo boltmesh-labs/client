@@ -649,6 +649,7 @@ void main() {
       /// responses, exactly as they come from a daemon's `ping`.
       Future<(ProviderContainer, FakeHelperSocket)> seedStream({
         Set<String>? caps,
+        TransportRung? forceRung,
         Map<String, dynamic> Function()? dial,
         Map<String, dynamic> Function()? onSwitch,
         Map<String, dynamic> Function()? onStatus,
@@ -693,6 +694,9 @@ void main() {
         await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
         final ctl = container.read(connectionProvider.notifier);
         ctl.debugHandshakeReader = () async => DateTime.now();
+        // The app e2e's full-ladder walk is driven by this seam; a suite that
+        // wants a specific rung pins it before the first start, the same way.
+        ctl.debugForceRung = forceRung;
         await ctl.connect();
         if (expectConnected) {
           expect(container.read(connectionProvider).phase, ConnPhase.connected);
@@ -727,6 +731,52 @@ void main() {
           TransportRung.native,
         );
       });
+
+      test('the debug seam starts a rung the node advertises', () async {
+        // What the app e2e's full-ladder walk relies on. Pinning it here means a
+        // regression in _rungFor's admission shows up as a fast unit failure
+        // rather than a baffling end-to-end one.
+        //
+        // The awg rung is the one that can be pinned on a first start: the
+        // stream rung's gate also needs the helper capability a `ping` reports,
+        // and a first start has not pinged yet (the e2e only reaches stream
+        // after the native rung has cached it).
+        useLinuxDataPlane();
+        final (container, socket) = await seedStream(
+          forceRung: TransportRung.awg,
+        );
+
+        expect(
+          container.read(connectionProvider.notifier).transportRung,
+          TransportRung.awg,
+        );
+        // The awg rung's own shape: the node's second device on its own port,
+        // with the obfuscation parameters the entry carries and no transport.
+        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
+        expect(socket.lastConfig, contains('Jc = 3'));
+        expect(socket.lastTransport, isNull);
+      });
+
+      test(
+        'the debug seam cannot start a rung the node does not serve',
+        () async {
+          // Scoped to the advertised list: forcing a rung the payload has no entry
+          // for falls through to the real floor rather than starting a conf the
+          // node cannot read.
+          useLinuxDataPlane();
+          final (container, socket) = await seedStream(
+            dial: streamOnlyDial,
+            forceRung: TransportRung.awg,
+          );
+
+          expect(
+            container.read(connectionProvider.notifier).transportRung,
+            TransportRung.native,
+          );
+          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
+          expect(socket.lastTransport, isNull);
+        },
+      );
 
       test('Android also starts a dual-format node on native', () async {
         debugDefaultTargetPlatformOverride = TargetPlatform.android;

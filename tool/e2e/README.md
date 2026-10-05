@@ -138,12 +138,17 @@ them — which is also what puts the restore path inside what is covered.
 1. **signs in** — types the real credentials into the real form and reaches the
    VPN tabs. A stored session short-circuits this and says so; the runner script
    starts from a fresh keyring, so a scripted run does drive the form.
-2. **connects and moves real WireGuard bytes** — taps the Home power control,
-   waits for `connected`, checks the UI agrees (the header names the server, the
-   button reads Disconnect), then asserts on bytes: the app's own received
-   counter, the kernel's `wg` counters when the kernel owns the data plane, and
-   an in-tunnel ping to the node with no loss. Finishes by disconnecting and
-   asserting `boltmesh0` is gone from the host.
+2. **walks the transport ladder native, awg, stream** — pins the controller to
+   each rung in turn through its `debugForceRung` seam (a walk the health policy
+   would only take on a blocked network, which a lab run cannot fabricate). The
+   first rung comes up through the Home power control; the others are restarts
+   through the controller, reusing the bound session rather than spending the
+   backend's shared write budget on a disconnect+connect pair per rung. For each
+   rung it waits for `connected`, checks the UI agrees (the header names the
+   server, the button reads Disconnect), and asserts on bytes: the app's own
+   received counter, the kernel's `wg` counters when the kernel owns the data
+   plane, and an in-tunnel ping to that rung's own node address with no loss.
+   Finishes with one power-control disconnect that must leave `boltmesh0` gone.
 3. **switches server** — connects, then picks a *different* server in the
    Regions tab and asserts the live dial moved to it. With only one server on
    offer there is nothing to switch *to*, so it exercises Quick Connect instead
