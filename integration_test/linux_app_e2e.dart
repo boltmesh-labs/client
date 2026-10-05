@@ -51,11 +51,8 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('signs in', (tester) async {
-    final user = _requireEnv('BOLTMESH_E2E_API_USER');
-    final password = _requireEnv('BOLTMESH_E2E_API_PASSWORD');
-
     await _launch(tester);
-    await _signIn(tester, user, password);
+    await _ensureSignedIn(tester);
     await _shot('01-signed-in');
   });
 
@@ -66,34 +63,13 @@ void main() {
 
     // The tunnel lives in the host namespace, not in this process, so a failed
     // run would otherwise leave the box full-tunnelled with no way back.
-    addTearDown(() async {
-      await _disconnect(container);
-      if (_interfaceExists()) {
-        // ignore: avoid_print
-        print(
-          'WARNING: $_tunnelInterface is still up after this run. Tear it down '
-          'with:\n'
-          '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
-          'sudo ip link del $_tunnelInterface',
-        );
-      }
-    });
+    addTearDown(_noTunnelLeftBehind);
 
     await _ensureSignedIn(tester);
     await _shot('02-home');
 
     // --- connect ---------------------------------------------------------
-    final power = _powerButton(tester);
-    await tester.tap(power);
-    await tester.pump();
-
-    await _pumpUntil(
-      tester,
-      'the tunnel to reach the connected phase',
-      () => state().phase == ConnPhase.connected,
-      timeout: _connectTimeout,
-      diagnose: state,
-    );
+    await _connect(tester, state);
     await _shot('03-connected');
 
     // The UI has to agree with the state it renders: this is a GUI run, so a
@@ -166,21 +142,11 @@ void main() {
     await _shot('04-tunnel-verified');
 
     // --- disconnect leaves the host as it was ----------------------------
-    await tester.tap(power);
+    await tester.ensureVisible(_powerButton(tester));
+    await tester.pumpAndSettle();
+    await tester.tap(_powerButton(tester));
     await tester.pump();
-    await _pumpUntil(
-      tester,
-      'the tunnel to go down',
-      () => state().phase == ConnPhase.idle && !_interfaceExists(),
-      timeout: _connectTimeout,
-      diagnose: state,
-    );
-    expect(state().phase, ConnPhase.idle);
-    expect(
-      _interfaceExists(),
-      isFalse,
-      reason: '$_tunnelInterface must not outlive the session',
-    );
+    await _expectTunnelDown(tester, state);
     await _shot('05-disconnected');
   });
 
@@ -189,35 +155,16 @@ void main() {
     final container = _container(tester);
     ConnState state() => container.read(connectionProvider);
 
-    addTearDown(() async {
-      await _disconnect(container);
-      if (_interfaceExists()) {
-        // ignore: avoid_print
-        print(
-          'WARNING: $_tunnelInterface is still up after this run. Tear it down '
-          'with:\n'
-          '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
-          'sudo ip link del $_tunnelInterface',
-        );
-      }
-    });
+    addTearDown(_noTunnelLeftBehind);
 
     await _ensureSignedIn(tester);
 
     // Connect first so there is a server to switch away from.
-    await tester.tap(_powerButton(tester));
-    await tester.pump();
-    await _pumpUntil(
-      tester,
-      'the tunnel to reach the connected phase',
-      () => state().phase == ConnPhase.connected,
-      timeout: _connectTimeout,
-      diagnose: state,
-    );
-    final originalServer = state().dial?.serverName;
-    expect(originalServer, isNotNull);
+    await _connect(tester, state);
+    final original = state().dial;
+    expect(original?.serverName, isNotNull);
     // ignore: avoid_print
-    print('e2e: connected to $originalServer');
+    print('e2e: connected to ${original!.serverName}');
 
     // --- switch to a different server via the Regions tab -----------------
     final l10n = AppLocalizations.of(
@@ -232,16 +179,22 @@ void main() {
       timeout: _signInTimeout,
     );
 
-    // Read the regions from the provider to find a server to switch to.
+    // Pick a server that is not the one the tunnel is actually on.
+    //
+    // `serverId` is the *pin*, which is null whenever the connect was an
+    // unpinned Auto pick — comparing against it makes the live server look
+    // like a valid target, and the run then reports "switching test1 to
+    // test1". The live dial is the only thing that says where we are.
     final regions = container.read(regionsProvider).value ?? [];
-    final currentServerId = state().serverId;
     String? targetServerId;
     String? targetServerName;
+    String? targetRegionName;
     for (final region in regions) {
       for (final server in region.servers) {
-        if (server.id != currentServerId) {
+        if (server.id != original.serverId) {
           targetServerId = server.id;
           targetServerName = server.name;
+          targetRegionName = region.name;
           break;
         }
       }
@@ -249,66 +202,94 @@ void main() {
     }
 
     if (targetServerId == null) {
-      // Only one server available; switch to Quick Connect instead.
+      // Only one server on offer, so there is nothing to switch *to*. Quick
+      // Connect still exercises the other dial path (an unpinned re-pick) and
+      // is worth asserting; it just cannot change the answer.
       // ignore: avoid_print
-      print('e2e: only one server available; testing Quick Connect switch');
+      print('e2e: only one server available; exercising Quick Connect instead');
       await tester.tap(find.text(l10n.regionsQuickConnect));
       await tester.pump();
+      await _pumpUntil(
+        tester,
+        'Quick Connect to re-dial',
+        () => state().phase == ConnPhase.connected,
+        timeout: _connectTimeout,
+        diagnose: state,
+      );
     } else {
       // ignore: avoid_print
-      print('e2e: switching from $originalServer to $targetServerName');
-      // Find the ListTile for the target server and tap it.
-      final targetTile = find.descendant(
-        of: find.byType(ExpansionTile),
+      print('e2e: switching ${original.serverName} -> $targetServerName');
+      // The server rows live inside a collapsed ExpansionTile, so the region
+      // has to be opened first — the rows are not in the tree until it is.
+      final regionTile = find.ancestor(
+        of: find.text(targetRegionName!),
+        matching: find.byType(ExpansionTile),
+      );
+      expect(regionTile, findsOneWidget);
+      await tester.tap(regionTile);
+      await tester.pump();
+      await _pumpUntil(
+        tester,
+        'the $targetRegionName servers to expand',
+        () => find
+            .descendant(
+              of: regionTile,
+              matching: find.widgetWithText(ListTile, targetServerName!),
+            )
+            .evaluate()
+            .isNotEmpty,
+        timeout: _signInTimeout,
+      );
+      final serverRow = find.descendant(
+        of: regionTile,
         matching: find.widgetWithText(ListTile, targetServerName!),
       );
-      await tester.tap(targetTile);
+      // Settle before tapping, not just scroll: `ensureVisible` animates the
+      // list and the ExpansionTile is still expanding its children, so a tap
+      // issued straight afterwards aims at where the row *was*.
+      await tester.ensureVisible(serverRow);
+      await tester.pumpAndSettle();
+      await tester.tap(serverRow);
       await tester.pump();
-    }
 
-    // Wait for the switch to complete: either the server name changes or
-    // Quick Connect re-picks.
-    await _pumpUntil(
-      tester,
-      'the server switch to complete',
-      () {
-        final s = state();
-        if (targetServerId != null) {
-          return s.dial?.serverId == targetServerId &&
-              s.phase == ConnPhase.connected;
-        }
-        // Quick Connect: server may stay the same if it re-picks the same one,
-        // but the phase must be connected and the pin must be cleared.
-        return s.phase == ConnPhase.connected && s.serverId == null;
-      },
-      timeout: _connectTimeout,
-      diagnose: state,
-    );
+      await _pumpUntil(
+        tester,
+        'the tunnel to move to $targetServerName',
+        () =>
+            state().phase == ConnPhase.connected &&
+            state().dial?.serverId == targetServerId,
+        timeout: _connectTimeout,
+        diagnose: state,
+      );
+    }
     await _shot('06-switched');
 
-    // Verify the UI reflects the new server.
-    final newServerName = state().dial?.serverName;
-    expect(newServerName, isNotNull);
+    expect(state().phase, ConnPhase.connected);
     // ignore: avoid_print
-    print('e2e: now on $newServerName (was $originalServer)');
-
-    // Disconnect to leave the host clean.
-    await tester.tap(
-      find.text(
-        AppLocalizations.of(tester.element(find.byType(NavigationBar)))
-            .navConnect,
-      ),
+    print(
+      'e2e: now on ${state().dial?.serverName} '
+      '(was ${original.serverName}, pin=${state().serverId})',
     );
-    await tester.pump();
-    await tester.tap(_powerButton(tester));
+
+    // --- tear the switched tunnel back down ------------------------------
+    // Not optional: this box *is* the client, so a tunnel left up here is a
+    // full-tunnel that the next test would then connect through.
+    final l10nBack = AppLocalizations.of(
+      tester.element(find.byType(NavigationBar)),
+    );
+    await tester.tap(find.text(l10nBack.navConnect));
     await tester.pump();
     await _pumpUntil(
       tester,
-      'the tunnel to go down',
-      () => state().phase == ConnPhase.idle && !_interfaceExists(),
-      timeout: _connectTimeout,
-      diagnose: state,
+      'the Connect tab to be showing again',
+      () => _powerButton(tester).evaluate().isNotEmpty,
+      timeout: _signInTimeout,
     );
+    await tester.ensureVisible(_powerButton(tester));
+    await tester.pumpAndSettle();
+    await tester.tap(_powerButton(tester));
+    await tester.pump();
+    await _expectTunnelDown(tester, state);
   });
 
   testWidgets('logs out', (tester) async {
@@ -316,31 +297,12 @@ void main() {
     final container = _container(tester);
     ConnState state() => container.read(connectionProvider);
 
-    addTearDown(() async {
-      await _disconnect(container);
-      if (_interfaceExists()) {
-        // ignore: avoid_print
-        print(
-          'WARNING: $_tunnelInterface is still up after this run. Tear it down '
-          'with:\n'
-          '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
-          'sudo ip link del $_tunnelInterface',
-        );
-      }
-    });
+    addTearDown(_noTunnelLeftBehind);
 
     await _ensureSignedIn(tester);
 
     // Connect first so logout has to tear down a live tunnel.
-    await tester.tap(_powerButton(tester));
-    await tester.pump();
-    await _pumpUntil(
-      tester,
-      'the tunnel to reach the connected phase',
-      () => state().phase == ConnPhase.connected,
-      timeout: _connectTimeout,
-      diagnose: state,
-    );
+    await _connect(tester, state);
 
     // --- log out via the Settings tab -------------------------------------
     final l10n = AppLocalizations.of(
@@ -395,6 +357,60 @@ ProviderContainer _container(WidgetTester tester) {
   );
 }
 
+/// Safety net for a test that died mid-tunnel.
+///
+/// Deliberately does *not* go through the app's controller: `addTearDown` runs
+/// after the widget tree and its `ProviderContainer` are gone, so reading a
+/// provider here throws "container already disposed" and the net accomplishes
+/// nothing. It goes to the helper's socket instead, which is alive regardless
+/// of app state — otherwise a failed test leaves a full-tunnel on the host and
+/// every later test connects through a stale one.
+Future<void> _noTunnelLeftBehind() async {
+  if (!_interfaceExists()) return;
+  final here = Directory.current.path;
+  final client = '$here/tool/e2e/client.py';
+  if (File(client).existsSync()) {
+    await Process.run('python3', [
+      client,
+      '--socket',
+      '/run/boltmesh/boltmeshd.sock',
+      '--down',
+    ]);
+  }
+  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  while (_interfaceExists() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+  }
+  if (_interfaceExists()) {
+    // ignore: avoid_print
+    print(
+      'WARNING: $_tunnelInterface is still up. Tear it down with:\n'
+      '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
+      'sudo ip link del $_tunnelInterface',
+    );
+  }
+}
+
+/// Asserts the tunnel is down and the interface is gone from the host.
+Future<void> _expectTunnelDown(
+  WidgetTester tester,
+  ConnState Function() state,
+) async {
+  await _pumpUntil(
+    tester,
+    'the tunnel to go down',
+    () => state().phase == ConnPhase.idle && !_interfaceExists(),
+    timeout: _connectTimeout,
+    diagnose: state,
+  );
+  expect(state().phase, ConnPhase.idle);
+  expect(
+    _interfaceExists(),
+    isFalse,
+    reason: '$_tunnelInterface must not outlive the session',
+  );
+}
+
 /// The power button on the Home tab.
 Finder _powerButton(WidgetTester tester) {
   return find.descendant(
@@ -403,17 +419,106 @@ Finder _powerButton(WidgetTester tester) {
   );
 }
 
-/// Signs in, unless a stored session already restored one.
+/// Taps Connect and waits for the tunnel to be up.
 ///
-/// The session lives in the OS keyring, so on a reused e2e keyring the app
-/// comes up authenticated and this step is skipped — which is itself the
-/// session-restore path being exercised rather than worked around.
-Future<void> _signIn(WidgetTester tester, String user, String password) async {
+/// Shared by the three tests that need a live tunnel.
+///
+/// Both waits are load-bearing, because each one's alternative failure is
+/// silent rather than loud:
+///
+///  * **Scrolling into view.** The Home tab centers its content in a
+///    `SingleChildScrollView`, and with the status header, the backend banner
+///    and the 168px power button stacked, the button sits below the fold of a
+///    default-height window. A tap on an off-screen widget lands on nothing.
+///
+///  * **Waiting for the button to be enabled.** Connect is hard-disabled while
+///    the backend-health poll reports `unreachable`, which on a headless lab box
+///    is a real possibility: `connectivity_plus` reads NetworkManager over
+///    D-Bus, and a session without one reports no link. A tap on a disabled
+///    button hit-tests cleanly and does nothing, so without this wait the run
+///    would burn the whole connect timeout and then blame the transport.
+Future<void> _connect(WidgetTester tester, ConnState Function() state) async {
+  final power = _powerButton(tester);
+  await _pumpUntil(
+    tester,
+    'the Home tab power control',
+    () => power.evaluate().isNotEmpty,
+    timeout: _signInTimeout,
+  );
+
+  try {
+    await _pumpUntil(
+      tester,
+      'the Connect button to become enabled',
+      () => tester.widget<FilledButton>(power).onPressed != null,
+      timeout: _signInTimeout,
+    );
+  } on TestFailure {
+    fail(
+      'the Connect button stayed disabled for ${_signInTimeout.inSeconds}s, so '
+      'the tap after this would be a no-op.\n'
+      'This is the backend-health gate, which hard-disables Connect while '
+      '`GET /health` is unreachable or the OS reports no network link. On a '
+      'headless box `connectivity_plus` needs NetworkManager on the session '
+      'bus; a session without one reads as "no link" and the app is right to '
+      'refuse.\n'
+      'last state: ${_describe(state())}',
+    );
+  }
+
+  await tester.ensureVisible(power);
+  await tester.pumpAndSettle();
+  await tester.tap(power);
+  await tester.pump();
+
+  // Split the wait in two so a tap that never took effect is not reported as a
+  // transport that never came up. `idle` -> anything else is the controller
+  // accepting the request; only after that is the clock on the tunnel.
+  await _pumpUntil(
+    tester,
+    'the tap to be picked up by the controller (phase to leave idle)',
+    () => state().phase != ConnPhase.idle,
+    timeout: const Duration(seconds: 30),
+    diagnose: state,
+  );
+
+  await _pumpUntil(
+    tester,
+    'the tunnel to reach the connected phase',
+    () => state().phase == ConnPhase.connected,
+    timeout: _connectTimeout,
+    diagnose: state,
+  );
+}
+
+/// Ensures the app is signed in, signing in through the form if it has to.
+///
+/// Waits for the auth gate to *settle* before deciding, because the restore is
+/// async: right after launch the screen is still the restoring spinner, so
+/// neither the VPN tabs nor the form are mounted and a naive check would read
+/// that as "signed out" and wait forever for a form that a restored session
+/// was about to replace.
+///
+/// A stored session skips the form, and that is the session-restore path being
+/// exercised rather than worked around. The runner script starts from a fresh
+/// keyring, so a scripted run does drive the form itself.
+Future<void> _ensureSignedIn(WidgetTester tester) async {
+  await _pumpUntil(
+    tester,
+    'the auth gate to settle',
+    () =>
+        find.byType(NavigationBar).evaluate().isNotEmpty ||
+        find.byType(TextField).evaluate().isNotEmpty,
+    timeout: _signInTimeout,
+  );
   if (find.byType(NavigationBar).evaluate().isNotEmpty) {
     // ignore: avoid_print
     print('e2e: restored a stored session; skipping the sign-in form');
     return;
   }
+
+  final user = _requireEnv('BOLTMESH_E2E_API_USER');
+  final password = _requireEnv('BOLTMESH_E2E_API_PASSWORD');
   // Any widget under the app's MaterialApp carries the localization inherited
   // widget; the login screen's own Scaffold is the one mounted at this point.
   final l10n = AppLocalizations.of(tester.element(find.byType(Scaffold).first));
@@ -449,28 +554,6 @@ Future<void> _signIn(WidgetTester tester, String user, String password) async {
     await _shot('signin-failed');
     rethrow;
   }
-}
-
-/// Ensures the app is signed in, signing in if necessary.
-///
-/// Waits for the auth gate to settle before checking: the session restore is
-/// async, so the NavigationBar may not be present immediately after launch
-/// even when a valid session exists.
-Future<void> _ensureSignedIn(WidgetTester tester) async {
-  // Wait for either the VPN tabs (session restored) or the login form
-  // (no session) to appear.
-  await _pumpUntil(
-    tester,
-    'the auth gate to settle',
-    () =>
-        find.byType(NavigationBar).evaluate().isNotEmpty ||
-        find.byType(TextField).evaluate().isNotEmpty,
-    timeout: _signInTimeout,
-  );
-  if (find.byType(NavigationBar).evaluate().isNotEmpty) return;
-  final user = _requireEnv('BOLTMESH_E2E_API_USER');
-  final password = _requireEnv('BOLTMESH_E2E_API_PASSWORD');
-  await _signIn(tester, user, password);
 }
 
 /// Pumps real frames until [done] holds, or fails with [diagnose] attached.
@@ -548,27 +631,6 @@ bool _interfaceHasAddress(String address) {
 
 ProcessResult _ipLink(List<String> args) =>
     Process.runSync('ip', ['link', ...args]);
-
-/// Asks the controller, then waits for the interface to actually go away.
-///
-/// Best effort by design: this runs in the app's isolate after the widgets are
-/// gone, so it goes straight to the controller rather than through a button.
-Future<void> _disconnect(ProviderContainer container) async {
-  // Already down: the test's own disconnect landed, and the container died with
-  // the widget tree. Skipping beats printing a disposed-container error on
-  // every passing run.
-  if (!_interfaceExists()) return;
-  try {
-    await container.read(connectionProvider.notifier).disconnect();
-  } catch (e) {
-    // ignore: avoid_print
-    print('e2e: disconnect through the controller failed: $e');
-  }
-  final deadline = DateTime.now().add(const Duration(seconds: 30));
-  while (_interfaceExists() && DateTime.now().isBefore(deadline)) {
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-  }
-}
 
 /// Screenshots of the real window, for a human to look at afterwards.
 ///

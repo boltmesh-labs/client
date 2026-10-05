@@ -131,13 +131,43 @@ It builds and installs `boltmeshd` from source (needs `sudo` and a Go
 toolchain), so the run always exercises the current helper code. It also needs
 this user enrolled in the `boltmesh` group.
 
-What it asserts, in order: sign-in reaches the VPN tabs; the Home tab's power
-control drives a real connect; the phase reaches `connected` **and** the UI
-agrees (the header shows the server, the button reads Disconnect); received
-bytes appear; the kernel's own `wg` counters moved too when the kernel owns the
-data plane; an in-tunnel ping to the node succeeds with no loss; and
-disconnecting removes `boltmesh0` from the host. The last one matters most: this
-box *is* the client, so a leftover full-tunnel would outlive the run.
+Four tests, in order, each building on the last. They share one `flutter test`
+process and one keyring, so the session and the device identity carry across
+them — which is also what puts the restore path inside what is covered.
+
+1. **signs in** — types the real credentials into the real form and reaches the
+   VPN tabs. A stored session short-circuits this and says so; the runner script
+   starts from a fresh keyring, so a scripted run does drive the form.
+2. **connects and moves real WireGuard bytes** — taps the Home power control,
+   waits for `connected`, checks the UI agrees (the header names the server, the
+   button reads Disconnect), then asserts on bytes: the app's own received
+   counter, the kernel's `wg` counters when the kernel owns the data plane, and
+   an in-tunnel ping to the node with no loss. Finishes by disconnecting and
+   asserting `boltmesh0` is gone from the host.
+3. **switches server** — connects, then picks a *different* server in the
+   Regions tab and asserts the live dial moved to it. With only one server on
+   offer there is nothing to switch *to*, so it exercises Quick Connect instead
+   and says which path it took.
+4. **logs out** — connects first, so logout has a live tunnel to tear down, then
+   signs out and asserts the login screen is back and the interface is gone.
+
+### Two failure modes worth knowing
+
+Both cost real time here, so both are guarded in the test rather than left as
+folklore:
+
+- **The Connect button can be disabled, and tapping it then does nothing.** It
+  hard-disables while the backend-health poll reports `unreachable`, and on a
+  headless box that is a real possibility: `connectivity_plus` reads
+  NetworkManager over D-Bus, so a session without one reports no link. The tap
+  hit-tests cleanly, so nothing complains and the run would burn the whole
+  connect timeout blaming the transport. The test waits for the button to be
+  enabled and fails with that named.
+- **A tunnel left up poisons the next test.** This box *is* the client, so each
+  test tears its own tunnel down, and the `addTearDown` net goes to the helper's
+  socket rather than the app's controller: by the time tear-down runs, the widget
+  tree and its `ProviderContainer` are gone, so a controller-based net throws
+  "container already disposed" and accomplishes nothing.
 
 The app runs on a virtual display and an isolated keyring, both of which the
 script sets up because they are lab facts rather than app behaviour:
