@@ -158,9 +158,19 @@ type obfSettings struct {
 // endpoint is required: the underlay host route is what keeps the device's own
 // UDP out of the tunnel, and a config without it cannot come up safely on this
 // data plane.
+//
+// The default MTU reserves the transport padding (S4) on top of the fixed
+// encapsulation awgDefaultMTU already accounts for. AmneziaWG prepends S4 bytes
+// to every transport packet (amneziawg-go device/send.go), so a full-size
+// packet padded by the server's generated S4 would otherwise exceed a
+// 1500-byte underlay and every send fails with EMSGSIZE. An explicit MTU line
+// still wins: a caller that knows its path sets it.
 func parseObfuscatedSettings(text string) (obfSettings, error) {
 	var settings obfSettings
-	settings.mtu = awgDefaultMTU
+	// S4 pads every transport packet ahead of WireGuard's own encapsulation.
+	// Zero when absent — a config that pads nothing.
+	padding := 0
+	mtuSet := false
 	for _, d := range parseWgQuick(text) {
 		switch {
 		case d.section == "interface" && d.key == "address":
@@ -171,12 +181,19 @@ func parseObfuscatedSettings(text string) (obfSettings, error) {
 			if settings.dns == "" {
 				settings.dns = strings.TrimSpace(d.value)
 			}
+		case d.section == "interface" && d.key == "s4":
+			s4, err := strconv.Atoi(strings.TrimSpace(d.value))
+			if err != nil || s4 < 0 {
+				return settings, fmt.Errorf("invalid S4 %q", d.value)
+			}
+			padding = s4
 		case d.section == "interface" && d.key == "mtu":
 			mtu, err := strconv.Atoi(strings.TrimSpace(d.value))
 			if err != nil || mtu < 576 || mtu > 65535 {
 				return settings, fmt.Errorf("invalid Mtu %q", d.value)
 			}
 			settings.mtu = mtu
+			mtuSet = true
 		case d.section == "peer" && d.key == "allowedips":
 			for _, cidr := range strings.Split(d.value, ",") {
 				if cidr = strings.TrimSpace(cidr); cidr != "" {
@@ -191,6 +208,12 @@ func parseObfuscatedSettings(text string) (obfSettings, error) {
 				}
 				settings.endpoint = endpoint
 			}
+		}
+	}
+	if !mtuSet {
+		settings.mtu = awgDefaultMTU - padding
+		if settings.mtu < 576 {
+			settings.mtu = 576
 		}
 	}
 	if settings.address == "" {

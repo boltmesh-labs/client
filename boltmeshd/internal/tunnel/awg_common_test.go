@@ -115,15 +115,17 @@ func TestParseObfuscatedSettingsReadsEveryBackendAppliedField(t *testing.T) {
 
 // TestParseObfuscatedSettingsDefaultsTheMTU covers the omitted-MTU case: a config
 // with no MTU line must still get a sane one rather than zero, which every tun
-// backend would reject.
+// backend would reject. The default also reserves the transport padding (S4), so
+// a padded full-size packet still fits the underlay: obfConfigText carries
+// S4 = 35, so the default is awgDefaultMTU - 35.
 func TestParseObfuscatedSettingsDefaultsTheMTU(t *testing.T) {
 	noMTU := strings.ReplaceAll(obfConfigText, "MTU = 1380\n", "")
 	got, err := parseObfuscatedSettings(noMTU)
 	if err != nil {
 		t.Fatalf("parseObfuscatedSettings: %v", err)
 	}
-	if got.mtu != awgDefaultMTU {
-		t.Errorf("mtu = %d, want the default %d", got.mtu, awgDefaultMTU)
+	if want := awgDefaultMTU - 35; got.mtu != want {
+		t.Errorf("mtu = %d, want the padding-aware default %d", got.mtu, want)
 	}
 }
 
