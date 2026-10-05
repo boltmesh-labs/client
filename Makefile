@@ -31,7 +31,7 @@ FLAGS := $(strip $(DEFINES) $(EXTRA))
 	build-linux build-linux-debug build-apk build-apk-release build-windows \
 	release clean \
 	deps generated analyze format format-check test coverage check \
-	verify-native verify-windows
+	verify-native verify-windows e2e-linux-app
 
 help: ## List these targets
 	@grep -E '^[a-z][a-z0-9-]*:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -95,11 +95,11 @@ generated: ## Fail if l10n/build_runner output differs from the committed tree
 analyze: ## Static analysis, infos included
 	flutter analyze --fatal-infos
 
-format: ## Format lib/ and test/
-	dart format lib test
+format: ## Format lib/, test/ and integration_test/
+	dart format lib test integration_test
 
-format-check: ## Fail if lib/ or test/ is unformatted
-	dart format --set-exit-if-changed lib test
+format-check: ## Fail if lib/, test/ or integration_test/ is unformatted
+	dart format --set-exit-if-changed lib test integration_test
 
 test: ## Run the test suite
 	flutter test $(EXTRA)
@@ -115,3 +115,8 @@ verify-native: ## Cross-compile the C++ pipe test and build the desktop Go modul
 
 verify-windows: ## Full Windows validation -- Windows host only
 	pwsh -File tool/verify_windows.ps1
+
+# Not part of `check`: this one needs a live serving node, credentials in the
+# environment, the installed helper and a display. See tool/e2e/README.md.
+e2e-linux-app: ## Run the Linux desktop app end to end (live node; needs BOLTMESH_E2E_API_*)
+	tool/e2e/run_linux_app.sh

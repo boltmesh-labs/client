@@ -46,6 +46,10 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Device-run GUI end-to-end (tool/e2e/run_linux_app.sh). SDK-pinned: the
+  # hosted package on pub.dev is an old non-null-safe stub.
+  integration_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
   build_runner: ^2.16.1
   freezed: ^4.0.1

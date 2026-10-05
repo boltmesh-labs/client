@@ -19,7 +19,7 @@ flutter pub get --enforce-lockfile
 bash tool/check_generated.sh
 pwsh -File tool/verify_windows.ps1   # Windows host only; the validate-windows job
 flutter analyze --fatal-infos
-dart format --set-exit-if-changed lib test
+dart format --set-exit-if-changed lib test integration_test
 flutter test --coverage
 bash tool/coverage_gate.sh 80
 bash tool/verify_native.sh
@@ -27,6 +27,7 @@ bash tool/verify_native.sh
 
 - The root `Makefile` wraps the commands above rather than replacing them: `make check` runs that block in the same order (`deps`, `generated`, `analyze`, `format-check`, `test`, `coverage`), `make verify-native` / `make verify-windows` map to the last two, and the run/build targets apply `--dart-define-from-file=$(ENV_FILE)` when that file exists and pass nothing when it does not. `make help` lists them; `make env` prints the keys `.env` supplies, never the values.
 - Run one test with `flutter test test/features/vpn/data/wg_conf_test.dart`; test paths mirror `lib/`.
+- `integration_test/` is formatted and analyzed but never run by `flutter test`: it holds the device-run GUI end-to-end, which needs a live serving node, real credentials in the environment, and the installed `boltmeshd` helper. Run it with `tool/e2e/run_linux_app.sh` (Linux app) or `tool/e2e/run.sh --region=ID` (daemon only); see `tool/e2e/README.md`.
 - For a local backend, run `podman-compose up -d` from the `infra` repository; that is already the default API (`http://localhost:8000/v1`), so a fresh clone runs against localhost unconfigured. For any other API, copy `.env.example` to `.env` (gitignored) and pass it to Flutter with `--dart-define-from-file=.env` on `run|build`, or let `make run` / `make build-*` apply it; plain `flutter` and the IDE still work but pass no file and get the localhost default. Release builds reject `http://`, and `distribute_options.yaml` pins the production URL per job, so CI reads no `.env`.
 - Android validation is `flutter build apk --debug` followed by `(cd android && ./gradlew :app:lintDebug)`; the build must run first so Gradle has `android/local.properties`.
 - The Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/gradle-wrapper.jar`) is committed, unlike the Flutter template, so any job or fresh clone can run Gradle before a `flutter build`. Those files are the Flutter SDK's `gradle_wrapper` artifact byte-for-byte; never hand-edit them. `android/local.properties` stays ignored, and anything that invokes Gradle without `flutter build` must write it (see the `validate-android` job in `.github/workflows/ci.yml`).

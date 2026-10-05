@@ -96,8 +96,12 @@ jobs:
       - name: Analyze
         run: flutter analyze --fatal-infos
 
+      # `integration_test/` is in scope for the formatter but not for
+      # `flutter test` below: it holds the device-run GUI end-to-end, which
+      # needs a live node, real credentials and the installed helper, so it is
+      # run by tool/e2e/run_linux_app.sh rather than by CI.
       - name: Format Check
-        run: dart format --set-exit-if-changed lib test
+        run: dart format --set-exit-if-changed lib test integration_test
 
       # Same scope as the `shellcheck` pre-commit hook: every shell script, with
       # `-x` so it follows `source`d files. `android/gradlew` is vendored

@@ -113,6 +113,55 @@ implementation look broken:
   the bridge injects into the stock device. Copying the region's obfuscation
   parameters onto a stream start produces a conf that handshakes with nobody.
 
+## The app, not just the daemon
+
+`run.sh` stops at `boltmeshd`: it speaks the socket protocol itself, so every
+layer above the helper — the login form, the auth gate, provisioning, rung
+selection, the power button, session restore, the traffic card — is untested by
+it. `run_linux_app.sh` closes that gap by running the actual Linux desktop app
+under `integration_test/linux_app_e2e.dart`: real window, real widgets, real
+typed credentials, real taps.
+
+```sh
+sudo --preserve-env=BOLTMESH_E2E_API_USER,BOLTMESH_E2E_API_PASSWORD \
+  tool/e2e/run_linux_app.sh
+```
+
+It builds and installs `boltmeshd` from source (needs `sudo` and a Go
+toolchain), so the run always exercises the current helper code. It also needs
+this user enrolled in the `boltmesh` group.
+
+What it asserts, in order: sign-in reaches the VPN tabs; the Home tab's power
+control drives a real connect; the phase reaches `connected` **and** the UI
+agrees (the header shows the server, the button reads Disconnect); received
+bytes appear; the kernel's own `wg` counters moved too when the kernel owns the
+data plane; an in-tunnel ping to the node succeeds with no loss; and
+disconnecting removes `boltmesh0` from the host. The last one matters most: this
+box *is* the client, so a leftover full-tunnel would outlive the run.
+
+The app runs on a virtual display and an isolated keyring, both of which the
+script sets up because they are lab facts rather than app behaviour:
+
+| | Why |
+| --- | --- |
+| `Xvfb` on `:99` | a headless box has no display; `BOLTMESH_E2E_DISPLAY` overrides |
+| `--no-enable-impeller` | Mesa's llvmpipe is software GL, which Impeller's OpenGLES backend mishandles (`SETUP.md` §3) |
+| `XDG_DATA_HOME` + `gnome-keyring-daemon --unlock` | the app persists its session and device keys through libsecret, which needs an unlocked collection. Isolating it means a lab run cannot read or rewrite the operator's real login keyring, and it can never leave one locked |
+
+Credentials come from the environment like `run.sh`'s. `.env` supplies the
+API URL as `--dart-define-from-file`, the same way `make run` does; point it
+elsewhere with `ENV_FILE=staging.env`.
+
+Session restore is exercised rather than avoided: a rerun against the same work
+directory comes up already signed in, and the test says so and skips the form.
+The device identity lives in that keyring too, so it is reused between runs,
+which is required for the same reason `run.sh` reuses its keypair — the node's
+peer table is built from the public half the backend stored.
+
+`BOLTMESH_E2E_SHOT_DIR` (set by the script) makes the test screenshot the real
+window at each stage with ImageMagick's `import`. It is best effort: no
+`import`, no pictures, still a valid run.
+
 ## Self-tests
 
 `test_harness.py` covers the harness's own logic and needs no root, no node, and no
