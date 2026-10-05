@@ -6,7 +6,7 @@
 // this one needs a live serving node, real credentials, the installed helper
 // and a display, so it is deliberately outside `flutter test` and is run by
 // `tool/e2e/run_linux_app.sh` (Xvfb + an isolated keyring + the app's own
-// `--dart-define`s). The daemon-level counterpart is `tool/e2e/run.sh`.
+// `--dart-define`s).
 //
 // The pass condition is deliberately the transport's, not the UI's: a run that
 // reached `connected` with zero received bytes proves nothing, because a local
@@ -16,8 +16,7 @@
 // leftover full-tunnel would outlive the run.
 //
 // Credentials come from the environment, never from a checked-in file:
-// BOLTMESH_E2E_API_USER / BOLTMESH_E2E_API_PASSWORD (same convention as
-// tool/e2e/run.sh).
+// BOLTMESH_E2E_API_USER / BOLTMESH_E2E_API_PASSWORD.
 //
 // The four tests run in order and build on each other: sign in, walk the
 // transport ladder (native, awg, stream), switch server, log out. Each calls

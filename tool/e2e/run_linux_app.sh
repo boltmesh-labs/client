@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end for the **Linux desktop app**: the real GUI, in a real window,
 # signing in against the real API and connecting through the real privileged
-# boltmeshd. See README.md ("The app, not just the daemon") for what this adds
-# over tool/e2e/run.sh, which stops at the helper.
+# boltmeshd. See README.md for what the run covers.
 #
 # Everything below exists to make that possible on a headless lab box. None of
 # it is part of the app:
