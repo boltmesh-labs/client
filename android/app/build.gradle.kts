@@ -178,7 +178,7 @@ dependencies {
     // smoke-test runner dies with NoClassDefFoundError before reporting a
     // result and `connectedReleaseAndroidTest` hangs. Declared explicitly so a
     // transitive dependency bump cannot silently remove it again.
-    implementation("androidx.tracing:tracing:1.2.0")
+    implementation("androidx.tracing:tracing:2.0.3")
     // Typed access to the same tunnel artifact the plugin uses
     // (GoBackend/Tunnel/Config). Must stay on the exact version the plugin
     // bundles so both load the same classes.
