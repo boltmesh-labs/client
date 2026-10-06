@@ -1,0 +1,27 @@
+# Positive and adversarial controls for the Suricata transport-visibility test.
+#
+# Loaded *in addition* to the installed ruleset: the rules under test are
+# `/etc/suricata/rules/local.rules`, which the production config already
+# loads. This file exists so that a verdict of "no alert" is meaningful rather
+# than merely quiet:
+#
+#   - `9900001` is a positive control. A synthetic datagram carrying the magic
+#     below is sent before the run; if this sid never fires, the engine or this
+#     file never loaded, and every "no alert" is worthless.
+#   - `9900005`/`9900006`/`9900007` are adversarial controls. They show what a
+#     detector that *does* know the deployment can still see, which is the
+#     honest complement to the WireGuard rules failing to fire. See README.md.
+#
+# `@NODE_IP@`, `@AWG_PORT@` and `@STREAM_PORT@` are filled in by run.sh from the
+# run's own parameters; `9900006` is only emitted when an `h1` value is known.
+
+# Positive control: the engine must fire on this synthetic magic.
+alert udp any any -> any any (msg:"BoltMesh control: synthetic magic (engine live)"; content:"|42 4f 4c 54 4d 45 53 48|"; sid:9900001; rev:1;)
+
+# Adversarial: the AWG endpoint is plain UDP on a knowable port. The WireGuard
+# fingerprint is hidden, but the flow itself is not.
+alert udp any any -> @NODE_IP@ @AWG_PORT@ (msg:"Adversarial: AWG endpoint visible by port"; sid:9900005; rev:1;)
+
+# Adversarial: the stream rung is ordinary TLS to the node's ingress. It is not
+# identifiable as WireGuard, but it is fully visible as a TLS session.
+alert tls any any -> @NODE_IP@ @STREAM_PORT@ (msg:"Adversarial: stream rung visible as TLS"; tls.version:1.3; sid:9900007; rev:1;)

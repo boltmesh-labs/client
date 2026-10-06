@@ -31,7 +31,7 @@ FLAGS := $(strip $(DEFINES) $(EXTRA))
 	build-linux build-linux-debug build-apk build-apk-release build-windows \
 	release clean \
 	deps generated analyze format format-check test coverage check \
-	verify-native verify-windows e2e-linux-app
+	verify-native verify-windows e2e-linux-app suricata-wireguard
 
 help: ## List these targets
 	@grep -E '^[a-z][a-z0-9-]*:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -120,3 +120,8 @@ verify-windows: ## Full Windows validation -- Windows host only
 # environment, the installed helper and a display. See tool/e2e/README.md.
 e2e-linux-app: ## Run the Linux desktop app end to end (live node; needs BOLTMESH_E2E_API_*)
 	tool/e2e/run_linux_app.sh
+
+# Also not part of `check`: needs root for Suricata, a live serving node and the
+# e2e's requirements. See tool/suricata/README.md.
+suricata-wireguard: ## Prove Suricata visibility of native/awg/stream (root; live node)
+	tool/suricata/run.sh
