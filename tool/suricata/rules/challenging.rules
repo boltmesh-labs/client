@@ -1,0 +1,44 @@
+# A harder, second-tier ruleset. Load it with `SURICATA_HARD=1`.
+#
+# The base subject rules (the installed `local.rules`) and the controls in
+# `controls.rules` answer one question: do generic *WireGuard protocol*
+# fingerprints catch native, awg and stream? This file answers the harder one:
+# what does a detector willing to use traffic analysis and TLS fingerprinting
+# see? The short answer, measured on the same run, is that it changes the
+# verdict for awg and stream:
+#
+#   - the structural rules below still catch native and still miss awg;
+#   - the traffic-analysis heuristics (padding-aware size, entropy) DO catch
+#     awg, at a false-positive cost that makes them poor always-on rules;
+#   - the TLS rules catch stream outright.
+#
+# So "awg and stream are invisible" is true only of WireGuard signatures. This
+# tier is deliberately kept out of the default run so the two claims are never
+# conflated. See README.md.
+#
+# `@NODE_IP@`, `@AWG_PORT@` and `@STREAM_PORT@` are filled in by run.sh.
+
+# --- WireGuard structural, port-independent ---------------------------------
+# Native's exact handshake shapes, so the result does not hinge on one content
+# match at offset 0. awg shifts these sizes and replaces the type bytes, so
+# none of them fire for it.
+alert udp any any -> any any (msg:"HARD WireGuard handshake initiation (type1, 148)"; content:"|01 00 00 00|"; offset:0; depth:4; dsize:148; flow:to_server; sid:9920001; rev:1;)
+alert udp any any -> any any (msg:"HARD WireGuard handshake response (type2, 92)"; content:"|02 00 00 00|"; offset:0; depth:4; dsize:92; flow:to_client; sid:9920002; rev:1;)
+alert udp any any -> any any (msg:"HARD WireGuard cookie reply (type3, 64)"; content:"|03 00 00 00|"; offset:0; depth:4; dsize:64; flow:to_client; sid:9920003; rev:1;)
+alert udp any any -> any any (msg:"HARD WireGuard keepalive (type4, 32)"; content:"|04 00 00 00|"; offset:0; depth:4; dsize:32; sid:9920004; rev:1;)
+alert udp any any -> any any (msg:"HARD WireGuard transport data (type4)"; content:"|04 00 00 00|"; offset:0; depth:4; dsize:>=32; sid:9920005; rev:1;)
+
+# --- traffic-analysis heuristics (no per-node secrets) ----------------------
+# A padded handshake lands in a size window even when its magic does not. This
+# catches awg, and native's larger transport packets too; that overlap is why it
+# is a demonstration and not a deployable rule.
+alert udp any any -> any any (msg:"HARD padded-handshake size heuristic"; flow:to_server; dsize:149<>255; sid:9920010; rev:1;)
+# Encrypted UDP is high-entropy by definition, so this catches native, awg and
+# every other encrypted UDP protocol alike. It shows obfuscation does not hide
+# the *shape*; it is not a WireGuard detector.
+alert udp any any -> any any (msg:"HARD high-entropy UDP payload"; entropy: value > 7.0; dsize:>=32; sid:9920011; rev:1;)
+
+# --- the stream rung, visible as ordinary TLS -------------------------------
+# Not WireGuard at all: a TLS 1.3 client with ALPN h2 to the node's ingress.
+alert tls any any -> @NODE_IP@ @STREAM_PORT@ (msg:"HARD stream TLS 1.3 to node"; tls.version:1.3; sid:9920020; rev:1;)
+alert tls any any -> @NODE_IP@ @STREAM_PORT@ (msg:"HARD stream ALPN h2 to node"; tls.alpn; content:"h2"; sid:9920021; rev:1;)

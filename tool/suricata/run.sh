@@ -27,6 +27,7 @@ CONTROL_PORT="${SURICATA_CONTROL_PORT:-59999}"
 CONFIG="${SURICATA_CONFIG:-/etc/suricata/suricata.yaml}"
 KEEP="${SURICATA_KEEP:-0}"
 SKIP_E2E="${SURICATA_SKIP_E2E:-0}"
+HARD="${SURICATA_HARD:-0}"
 CREDS_FILE="${BOLTMESH_E2E_CREDS_FILE:-$client_repo/.env.e2e}"
 workdir="${SURICATA_LOG_DIR:-/tmp/opencode/suricata-$(date +%Y%m%d-%H%M%S)}"
 
@@ -74,11 +75,20 @@ extra_rules="$workdir/extra.rules"
 
 # --- build the extra ruleset: our controls, filled in for this run -----------
 
+# The control and challenging rulesets carry placeholders so one file can point
+# at any node.
+fill_rules() {
+  sed -e "s/@NODE_IP@/$NODE_IP/g" \
+      -e "s/@AWG_PORT@/$AWG_PORT/g" \
+      -e "s/@STREAM_PORT@/$STREAM_PORT/g" "$1"
+}
+
 log "building the control ruleset"
-sed -e "s/@NODE_IP@/$NODE_IP/g" \
-    -e "s/@AWG_PORT@/$AWG_PORT/g" \
-    -e "s/@STREAM_PORT@/$STREAM_PORT/g" \
-    "$here/rules/controls.rules" >"$extra_rules"
+fill_rules "$here/rules/controls.rules" >"$extra_rules"
+if [[ $HARD == 1 ]]; then
+  log "adding the harder ruleset (traffic analysis + TLS fingerprinting)"
+  fill_rules "$here/rules/challenging.rules" >>"$extra_rules"
+fi
 if [[ -n ${SURICATA_AWG_H1:-} ]]; then
   # Optional targeted-detector control: only meaningful once the node's h1
   # magic is known out of band, which is exactly the caveat this demonstrates.

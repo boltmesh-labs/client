@@ -139,6 +139,18 @@ class AnalyzeTest(unittest.TestCase):
         _, reports = check.analyze(events, NODE, RUNGS)
         self.assertEqual(reports["native"].wg_sids, [])
 
+    def test_hard_tier_alerts_are_reported_not_fatal(self) -> None:
+        # The harder ruleset is expected to catch awg (traffic analysis) and
+        # stream (TLS); that must be reported and must not fail the run.
+        events = a_clean_run() + [
+            alert(9920010, src_ip="192.168.1.113", src_port=40005,
+                  dest_ip=NODE, dest_port=51821, proto="UDP"),
+        ]
+        engine_live, reports = check.analyze(events, NODE, RUNGS)
+        self.assertIn(9920010, reports["awg"].hard_sids)
+        self.assertNotIn(9920010, reports["awg"].wg_sids)
+        self.assertEqual(check.evaluate(engine_live, reports, True), [])
+
 
 class EvaluateTest(unittest.TestCase):
     def _evaluate(self, events: list[dict], expect_port_rule: bool = True) -> list[str]:

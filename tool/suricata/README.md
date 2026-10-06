@@ -65,6 +65,7 @@ test.
 | 9900005 | adversarial | the AWG endpoint as plain UDP on its port |
 | 9900006 | adversarial | AWG with a **known** `h1` magic (opt-in, see below) |
 | 9900007 | adversarial | the stream rung as ordinary TLS 1.3 |
+| 9920xxx | hard | the optional harder tier (`SURICATA_HARD=1`), see below |
 
 Pass requires all of:
 
@@ -74,18 +75,47 @@ Pass requires all of:
   its endpoint;
 - stream tripped none of them, **and** showed traffic on its endpoint.
 
+The `9920xxx` hard rules never fail the run — they are expected to catch awg
+and stream and are reported to qualify the result.
+
+## The harder tier (`SURICATA_HARD=1`)
+
+The base run answers a narrow question: do generic *WireGuard protocol*
+signatures catch each rung? Set `SURICATA_HARD=1` to also load
+`rules/challenging.rules`, which answers the harder one — what a detector
+willing to use traffic analysis and TLS fingerprinting sees. Measured on the
+same run:
+
+| rung | WireGuard-signature rules | the harder tier |
+| --- | --- | --- |
+| native | caught (type1 148, type2 92, type4, keepalive) | caught |
+| awg | **missed** | **caught** by padding-aware size (`9920010`) and payload entropy (`9920011`) |
+| stream | **missed** | **caught** as TLS 1.3 + ALPN `h2` (`9920020`/`9920021`), JA3 `1bcbceb7…`, JA4 `t13d0312h2…` |
+
+Two consequences, and they are the honest bottom line:
+
+- **"awg is invisible"** holds only against protocol fingerprints. Its padded
+  handshake still lands in a knowable size window, and its payloads are still
+  high-entropy UDP. Both are real detections; both are also high-false-positive
+  heuristics, which is why they are not in the installed ruleset.
+- **"stream is invisible"** holds only against WireGuard signatures. It is
+  ordinary TLS 1.3 and is trivially caught by a TLS rule or a JA3/JA4 blocklist.
+  The correct claim is "indistinguishable from HTTPS to a VPN provider", not
+  "not detectable".
+
 ## What each result does and does not mean
 
 - **native**: detectable by protocol fingerprint alone. Only the outer
   handshake headers and packet shape are visible; the payload is encrypted
   either way.
-- **awg**: invisible *to these generic signatures*. It is not invisible on the
-  wire — `9900005` fires because the flow is plain UDP to a port. A detector
-  that knows the node's parameters can still catch it: set
-  `SURICATA_AWG_H1=<hex bytes>` to emit the `9900006` rule matching the
-  configured `h1` magic and watch it fire. If `h1` is configured as a *range*
-  the handshake magic varies per message, and even a targeted static rule
-  becomes probabilistic — which is the honest boundary of the claim.
+- **awg**: invisible *to these generic WireGuard signatures*. It is not
+  invisible on the wire — `9900005` fires because the flow is plain UDP to a
+  port, and the harder tier catches it by size and entropy without knowing any
+  node secret. A detector that knows the node's parameters can also catch it
+  directly: set `SURICATA_AWG_H1=<hex bytes>` to emit the `9900006` rule
+  matching the configured `h1` magic and watch it fire. If `h1` is configured
+  as a *range* the handshake magic varies per message, and even that targeted
+  static rule becomes probabilistic.
 - **stream**: invisible *as WireGuard*. It is fully visible as TLS 1.3 to the
   node's ingress — SNI, ALPN, JA3/JA4 (`9900007` fires). The right statement
   is "indistinguishable from HTTPS to a VPN provider", not "not on the wire".
@@ -105,6 +135,7 @@ All optional; the defaults describe the lab this was built on.
 | `SURICATA_CONTROL_PORT` | `59999` | where the positive control is sent |
 | `SURICATA_CONFIG` | `/etc/suricata/suricata.yaml` | Suricata config |
 | `SURICATA_AWG_H1` | unset | hex `h1` magic for the targeted-detector control |
+| `SURICATA_HARD` | `0` | `1` also loads `rules/challenging.rules` (traffic analysis + TLS) |
 | `SURICATA_LOG_DIR` | `/tmp/opencode/suricata-<ts>` | artifacts (eve log, pcap, logs) |
 | `SURICATA_SKIP_E2E` | `0` | `1` skips the ladder (plumbing check) |
 | `BOLTMESH_E2E_CREDS_FILE` | `.env.e2e` | e2e credentials |
