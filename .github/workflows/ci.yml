@@ -284,17 +284,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # This job goes straight to ./gradlew instead of `flutter build`, so
-      # nothing has written android/local.properties yet. The Flutter Gradle
-      # plugin loader reads flutter.sdk from it unguarded (no FLUTTER_ROOT
-      # fallback), and setting sdk.dir keeps the SDK path explicit rather than
-      # relying on the $ANDROID_HOME fallback.
-      - name: Write android/local.properties
-        run: |
-          : "${FLUTTER_ROOT:?flutter-action did not export FLUTTER_ROOT}"
-          : "${ANDROID_HOME:?no Android SDK on PATH}"
-          printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_ROOT" "$ANDROID_HOME" \
-            > android/local.properties
+      # This job goes straight to ./gradlew instead of `flutter build`, so the
+      # tool's config phase has to run first. It regenerates
+      # GeneratedPluginRegistrant.java in release mode, dropping dev-dependency
+      # plugins the way the Flutter Gradle Plugin does: `flutter pub get` writes
+      # the registrant with every method-channel plugin, including the dev-only
+      # integration_test plugin, which the plugin adds only to non-release build
+      # types. Without this the registrant's reference to integration_test fails
+      # :app:compileReleaseJavaWithJavac. `--config-only` runs that phase
+      # without invoking Gradle, and writes android/local.properties
+      # (flutter.sdk and sdk.dir) that the direct ./gradlew needs -- the Flutter
+      # Gradle plugin loader reads flutter.sdk from it unguarded (no FLUTTER_ROOT
+      # fallback), and sdk.dir keeps the SDK path explicit rather than relying on
+      # the $ANDROID_HOME fallback.
+      - name: Generate the release project config
+        run: flutter build apk --release --config-only
 
       # GitHub's hosted Android images expose KVM for the emulator step.  The
       # rule is harmless on runners where /dev/kvm is already configured.

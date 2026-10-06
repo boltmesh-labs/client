@@ -191,14 +191,4 @@ dependencies {
     androidTestImplementation("androidx.test:core:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
-    // `flutter pub get` writes GeneratedPluginRegistrant.java with every
-    // method-channel plugin, including dev dependencies, but the Flutter Gradle
-    // Plugin strips dev-dependency plugins from the release classpath (it adds
-    // them only to non-release build types). The smoke tests compile the release
-    // variant directly (testBuildType = "release") without a preceding
-    // `flutter build`, so the registrant's reference to the dev-only
-    // integration_test plugin needs that project on the release variant too.
-    // `flutter build apk --release` rewrites the registrant without dev plugins
-    // and R8 strips the now-unreferenced classes, so shipped APKs are unaffected.
-    releaseApi(project(":integration_test"))
 }
