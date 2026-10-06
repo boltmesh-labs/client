@@ -23,7 +23,7 @@ dependencies:
   # HTTP client for FastAPI backend.
   dio: ^5.7.0
   # Linux session-bus probe for StatusNotifier host availability.
-  dbus: ^0.7.15
+  dbus: ^0.8.0
   # Synchronous SHA-256 for the optional TLS leaf-certificate pin.
   crypto: ^3.0.0
   # State management.
