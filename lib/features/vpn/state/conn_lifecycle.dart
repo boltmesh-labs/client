@@ -309,7 +309,9 @@ extension ConnectionLifecycle on ConnectionController {
       // The tunnel is down from here on, so the device holds no peer this
       // session no matter how the steps below end. Recorded up front because
       // only a *confirmed* release makes it true, and that is the one case a
-      // later switch can act on (see [_peerReleasedLocally]).
+      // later switch can act on (see [_peerReleasedLocally]). Every failure
+      // below withdraws it again — the API-failure paths do it explicitly,
+      // and the outer catch covers any other exception type.
       _peerReleasedLocally = true;
       // The tunnel is down: the cached dial must never resurrect it, and
       // any pending cold watch is superseded by this explicit teardown.
@@ -374,6 +376,12 @@ extension ConnectionLifecycle on ConnectionController {
         'disconnect failed kind=${vpnErr?.kind ?? e.runtimeType}',
         vpnErr?.message ?? e,
       );
+      // Reaching here means the peer release was never confirmed (the tunnel
+      // is down, but the backend may still hold a peer), so withdraw the local
+      // knowledge: a later switch must POST the move rather than bind over a
+      // peer that may exist. Covers a non-Dio exception the named catch above
+      // does not, so the flag cannot go stale on an unexpected failure type.
+      _peerReleasedLocally = false;
       // The tunnel was already stopped above: never leave a stale stage
       // next to the error.
       snap = snap.copyWith(

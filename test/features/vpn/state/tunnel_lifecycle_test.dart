@@ -45,6 +45,18 @@ class HangingTunnel extends FakeTunnel {
   }
 }
 
+/// API whose peer release fails with a non-[DioException], to prove the local
+/// release knowledge is withdrawn even for an exception type the disconnect
+/// handler does not name.
+class ThrowingDisconnectApi extends VpnApi {
+  ThrowingDisconnectApi(super.dio);
+
+  @override
+  Future<void> disconnect(String deviceId, {CancelToken? cancelToken}) async {
+    throw StateError('disconnect blew up');
+  }
+}
+
 ProviderContainer makeContainer({
   required FakeStore store,
   required FakeKeys keys,
@@ -1249,6 +1261,35 @@ void main() {
         'tunnel:start',
       ]);
       expect(container.read(connectionProvider).dial?.serverId, 'srv-2');
+    },
+  );
+
+  test(
+    'a non-Dio disconnect failure still withdraws the local release',
+    () async {
+      final events = <String>[];
+      final store = FakeStore();
+      final api = ThrowingDisconnectApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/config')) return dialJson();
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
+      await seedConnected(container, store, FakeTunnel(events));
+      final ctl = container.read(connectionProvider.notifier);
+      events.clear();
+
+      await ctl.disconnect();
+
+      // The release never reached the server, so the peer may still exist: the
+      // next switch must POST the move rather than bind over it, whatever the
+      // exception type that failed the release.
+      expect(ctl.debugPeerReleasedLocally, isFalse);
     },
   );
 
