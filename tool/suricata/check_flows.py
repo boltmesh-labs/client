@@ -57,6 +57,10 @@ ADVERSARIAL_SIDS = frozenset({AWG_PORT_ADV_SID, AWG_H1_ADV_SID, STREAM_TLS_ADV_S
 # of running it, so these alerts never fail the run — they qualify it.
 HARD_SIDS = frozenset(range(9920001, 9920100))
 
+# The traffic-analysis tier (rules/traffic.rules). Informational for the same
+# reason: it is expected to catch the tunnels by shape, not by protocol.
+TRAFFIC_SIDS = frozenset(range(9930001, 9930100))
+
 
 @dataclass(frozen=True)
 class Rung:
@@ -75,6 +79,7 @@ class RungReport:
     wg_alerts: list[int] = field(default_factory=list)
     adversarial: list[int] = field(default_factory=list)
     hard: list[int] = field(default_factory=list)
+    traffic: list[int] = field(default_factory=list)
     flows: int = 0
     tls_events: int = 0
     tls_version: str | None = None
@@ -93,8 +98,15 @@ class RungReport:
         return sorted(set(self.hard))
 
     @property
+    def traffic_sids(self) -> list[int]:
+        return sorted(set(self.traffic))
+
+    @property
     def has_traffic(self) -> bool:
-        return bool(self.wg_alerts or self.adversarial or self.hard or self.flows or self.tls_events)
+        return bool(
+            self.wg_alerts or self.adversarial or self.hard or self.traffic
+            or self.flows or self.tls_events
+        )
 
 
 def load_events(path: str) -> list[dict]:
@@ -156,6 +168,8 @@ def analyze(
                     report.adversarial.append(sid)
                 if sid in HARD_SIDS:
                     report.hard.append(sid)
+                if sid in TRAFFIC_SIDS:
+                    report.traffic.append(sid)
             elif kind == "flow":
                 report.flows += 1
             elif kind == "tls":
@@ -224,6 +238,7 @@ def format_table(reports: dict[str, RungReport], engine_live: bool) -> str:
         sids = ",".join(str(s) for s in report.wg_sids) or "-"
         adv = ",".join(str(s) for s in report.adversarial_sids) or "-"
         hard = ",".join(str(s) for s in report.hard_sids) or "-"
+        traf = ",".join(str(s) for s in report.traffic_sids) or "-"
         tls = ""
         if report.tls_events:
             parts = [f"{report.tls_events}"]
@@ -235,7 +250,7 @@ def format_table(reports: dict[str, RungReport], engine_live: bool) -> str:
         lines.append(
             f"  {name:<7} {report.rung.proto}/{report.rung.port:<6} "
             f"wg={sids:<20} adversarial={adv:<16} hard={hard:<16} "
-            f"flows={report.flows:<4} tls={tls or '-'}"
+            f"traffic={traf:<14} flows={report.flows:<4} tls={tls or '-'}"
         )
     lines.append(f"  control: engine-live={'yes' if engine_live else 'NO'}")
     return "\n".join(lines)

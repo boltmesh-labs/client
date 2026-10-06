@@ -68,6 +68,7 @@ test.
 | 9900006 | adversarial | AWG with a **known** `h1` magic (opt-in, see below) |
 | 9900007 | adversarial | the stream rung as ordinary TLS 1.3 |
 | 9920xxx | hard | the optional harder tier (`SURICATA_HARD=1`), see below |
+| 9930xxx | traffic | the optional traffic-analysis tier (`SURICATA_TRAFFIC=1`), see below |
 
 Pass requires all of:
 
@@ -105,6 +106,43 @@ Two consequences, and they are the honest bottom line:
   The correct claim is "indistinguishable from HTTPS to a VPN provider", not
   "not detectable".
 
+## The traffic-analysis tier (`SURICATA_TRAFFIC=1`)
+
+The harder tier still keys on *something* — a size window, a TLS field. This
+tier keys on nothing but **flow shape**: how much, how long, in which
+direction, and how random. It loads `rules/traffic.rules` (sids `9930xxx`) and
+then prints a per-flow feature report from `traffic_features.py`, which is the
+real substance; the rules are only the alerting face of it.
+
+The features exclude ports and IP addresses — those are used only to *label* a
+flow against the run's known topology — so this is genuinely not port or
+protocol analysis. Measured on the committed run:
+
+| flow | pkts | bytes | first payload | size mean (min–max) | entropy |
+| --- | --- | --- | --- | --- | --- |
+| native (UDP) | 113 | 33,172 | **148** | 293.6 (32–1452) | 6.35 |
+| awg (UDP) | 92 | 26,616 | **3** | 289.3 (3–1457) | 6.59 |
+| stream (TCP) | 100 | 24,046 | 1448 | 240.5 (24–1448) | 6.64 |
+| baseline TLS (node↔API) | 40 | 8,354 | 700 | 417.7 (224–849) | 7.40 |
+| baseline DNS | 2 | 96–216 | 48–108 | 64–108 | 0.68–3.78 |
+
+What that shows, and its limits:
+
+- the two UDP tunnels are indistinguishable *from each other* by size or
+  entropy — both are ~26–33 kB over ~20 s, both ~6.5 bits/byte — so flow shape
+  identifies "a sustained encrypted UDP flow", not "WireGuard" and not "awg";
+- the first-payload size still separates them from each other (148-byte
+  handshake vs a 3-byte awg junk packet), and separates both from the TLS
+  baseline;
+- entropy alone is not a VPN detector: the baseline TLS flows score *higher*
+  (7.2–7.4) than the tunnels, because TLS records are also random. It separates
+  encrypted from plaintext (DNS at 0.7–3.8), nothing finer.
+
+Scope, honestly: one short capture with a handful of flows shows the observable
+fingerprint and lets rungs be compared. It is not a classifier result — that
+needs a labelled baseline and cross-validation over many flows, which this
+harness does not claim to do.
+
 ## What each result does and does not mean
 
 - **native**: detectable by protocol fingerprint alone. Only the outer
@@ -138,17 +176,19 @@ All optional; the defaults describe the lab this was built on.
 | `SURICATA_CONFIG` | `/etc/suricata/suricata.yaml` | Suricata config |
 | `SURICATA_AWG_H1` | unset | hex `h1` magic for the targeted-detector control |
 | `SURICATA_HARD` | `0` | `1` also loads `rules/challenging.rules` (traffic analysis + TLS) |
+| `SURICATA_TRAFFIC` | `0` | `1` also loads `rules/traffic.rules` and prints the feature report (needs `tshark`) |
 | `SURICATA_LOG_DIR` | `/tmp/opencode/suricata-<ts>` | artifacts (eve log, pcap, logs) |
 | `SURICATA_SKIP_E2E` | `0` | `1` skips the ladder (plumbing check) |
 | `BOLTMESH_E2E_CREDS_FILE` | `.env.e2e` | e2e credentials |
 
 ## Self-tests
 
-The checker's attribution and verdict logic is covered without root, a node, or
-Suricata:
+The checker's attribution/verdict logic and the feature extractor's statistics
+are covered without root, a node, tshark, or Suricata:
 
 ```sh
 python3 tool/suricata/test_checker.py
+python3 tool/suricata/test_traffic_features.py
 ```
 
 ## What it does not prove

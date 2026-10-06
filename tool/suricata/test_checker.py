@@ -162,6 +162,18 @@ class AnalyzeTest(unittest.TestCase):
         self.assertIn(check.HANDSHAKE_RESPONSE_SID, reports["awg"].wg_sids)
         self.assertTrue(check.evaluate(engine_live, reports, True))
 
+    def test_traffic_tier_alerts_are_reported_not_fatal(self) -> None:
+        # Flow-shape rules are expected to catch the tunnels; reported, and
+        # never scored against the WireGuard-signature verdict.
+        events = a_clean_run() + [
+            alert(9930002, src_ip="192.168.1.113", src_port=40006,
+                  dest_ip=NODE, dest_port=51821, proto="UDP"),
+        ]
+        engine_live, reports = check.analyze(events, NODE, RUNGS)
+        self.assertIn(9930002, reports["awg"].traffic_sids)
+        self.assertNotIn(9930002, reports["awg"].wg_sids)
+        self.assertEqual(check.evaluate(engine_live, reports, True), [])
+
 
 class EvaluateTest(unittest.TestCase):
     def _evaluate(self, events: list[dict], expect_port_rule: bool = True) -> list[str]:

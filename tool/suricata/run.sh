@@ -28,6 +28,7 @@ CONFIG="${SURICATA_CONFIG:-/etc/suricata/suricata.yaml}"
 KEEP="${SURICATA_KEEP:-0}"
 SKIP_E2E="${SURICATA_SKIP_E2E:-0}"
 HARD="${SURICATA_HARD:-0}"
+TRAFFIC="${SURICATA_TRAFFIC:-0}"
 CREDS_FILE="${BOLTMESH_E2E_CREDS_FILE:-$client_repo/.env.e2e}"
 workdir="${SURICATA_LOG_DIR:-/tmp/opencode/suricata-$(date +%Y%m%d-%H%M%S)}"
 
@@ -66,6 +67,10 @@ trap cleanup EXIT
 for tool in suricata tcpdump python3; do
   command -v "$tool" >/dev/null || die "$tool is required but not installed"
 done
+if [[ $TRAFFIC == 1 ]]; then
+  command -v tshark >/dev/null \
+    || die "tshark is required for the traffic-analysis tier (SURICATA_TRAFFIC=1)"
+fi
 # /etc/suricata is 0750 (root:suricata), so this needs root to even stat.
 sudo test -f "$CONFIG" || die "no Suricata config at $CONFIG (override with SURICATA_CONFIG)"
 
@@ -88,6 +93,10 @@ fill_rules "$here/rules/controls.rules" >"$extra_rules"
 if [[ $HARD == 1 ]]; then
   log "adding the harder ruleset (traffic analysis + TLS fingerprinting)"
   fill_rules "$here/rules/challenging.rules" >>"$extra_rules"
+fi
+if [[ $TRAFFIC == 1 ]]; then
+  log "adding the traffic-analysis ruleset (flow shape)"
+  cat "$here/rules/traffic.rules" >>"$extra_rules"
 fi
 if [[ -n ${SURICATA_AWG_H1:-} ]]; then
   # Optional targeted-detector control: only meaningful once the node's h1
@@ -184,6 +193,16 @@ suricata_pid=""
 sudo chown -R "$(id -u):$(id -g)" "$workdir"
 
 # --- decide ------------------------------------------------------------------
+
+if [[ $TRAFFIC == 1 ]]; then
+  log "traffic-analysis features"
+  python3 "$here/traffic_features.py" \
+    --pcap "$pcap_file" \
+    --node "$NODE_IP" \
+    --native-port "$NATIVE_PORT" \
+    --awg-port "$AWG_PORT" \
+    --stream-port "$STREAM_PORT"
+fi
 
 log "checking $(wc -l <"$workdir/eve.json") eve records"
 log "artifacts in $workdir"

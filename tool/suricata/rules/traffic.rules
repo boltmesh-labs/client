@@ -1,0 +1,26 @@
+# The traffic-analysis tier. Load it with `SURICATA_TRAFFIC=1`.
+#
+# These rules never mention a WireGuard byte, a port or an address. They match
+# a flow's *shape* — how much, how long, in which direction, how random — which
+# is what a middlebox that is willing to profile rather than fingerprint has to
+# work with. That is why they catch awg, whose whole point is to hide the
+# protocol, and why they are also crude: a busy, encrypted, bidirectional UDP
+# flow is what a tunnel looks like and what several other things look like too.
+#
+# The numbers behind a flag (packet sizes, direction volumes, inter-arrival
+# times, entropy) are printed by `traffic_features.py`, which is the real
+# substance of this tier; the rules are the alerting face of it. Reported as a
+# `traffic=` column and, like `hard`, never fails the WireGuard verdict.
+
+# A sustained, high-volume, encrypted UDP flow: enough packets to be a tunnel
+# rather than a probe, enough bytes to be carrying data, long enough to have
+# handshaked and settled, and random enough to be encrypted.
+alert udp any any -> any any (msg:"Traffic: sustained encrypted UDP flow"; flow.pkts:toserver,>30; flow.bytes:toserver,>20000; flow.age:>10; entropy: value > 6.0; sid:9930001; rev:1;)
+
+# Substantial volume in both directions: most client UDP is request/response
+# and lopsided; a tunnel carries the peer's traffic back.
+alert udp any any -> any any (msg:"Traffic: bidirectional UDP volume"; flow.bytes:toserver,>10000; flow.bytes:toclient,>10000; sid:9930002; rev:1;)
+
+# A long-lived, many-packet UDP flow: the shape of a persistent tunnel, and the
+# place a keepalive cadence lives.
+alert udp any any -> any any (msg:"Traffic: long-lived many-packet UDP flow"; flow.age:>20; flow.pkts:toserver,>50; sid:9930003; rev:1;)
