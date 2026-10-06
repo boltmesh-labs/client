@@ -185,7 +185,7 @@ dependencies {
     implementation("com.wireguard.android:tunnel:1.0.20260102")
     // AmneziaWG's Android backend is vendored from the official Apache-2.0
     // tunnel module; the JNI library is built from our pinned amneziawg-go.
-    implementation("androidx.annotation:annotation:1.7.1")
+    implementation("androidx.annotation:annotation:1.11.0")
     implementation("androidx.collection:collection:1.4.0")
     compileOnly("com.google.code.findbugs:jsr305:3.0.2")
     androidTestImplementation("androidx.test:core:1.7.0")
