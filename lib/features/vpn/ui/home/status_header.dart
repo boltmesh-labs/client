@@ -8,6 +8,10 @@ import '../../state/vpn_providers.dart';
 
 /// Status icon + headline + detail lines (message, endpoint, plan).
 ///
+/// When connected the headline already carries the server name, so the
+/// controller message and the endpoint line are suppressed: both would repeat
+/// what the headline states.
+///
 /// Rebuilds only when its slice changes: phase/message/dial/plan are one
 /// record select, so traffic-counter ticks don't repaint the header.
 class StatusHeader extends ConsumerWidget {
@@ -92,7 +96,7 @@ class StatusHeader extends ConsumerWidget {
             ),
           ),
         ),
-        if (message.isNotEmpty) ...[
+        if (!connected && message.isNotEmpty) ...[
           const SizedBox(height: 8),
           Semantics(
             liveRegion: true,
@@ -102,7 +106,7 @@ class StatusHeader extends ConsumerWidget {
             ),
           ),
         ],
-        if (dial != null) ...[
+        if (!connected && dial != null) ...[
           const SizedBox(height: 8),
           Text(
             '${dial.serverName} · ${dial.endpoint}:${dial.wgPort}',

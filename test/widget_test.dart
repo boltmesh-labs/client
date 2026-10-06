@@ -522,6 +522,19 @@ void main() {
     expect(find.text('Session traffic'), findsNothing);
   });
 
+  testWidgets('connected home shows the server in the headline only', (
+    tester,
+  ) async {
+    await tester.pumpWidget(connectedScope());
+    await tester.pumpAndSettle();
+
+    // The headline carries the server name; the controller message and the
+    // dial line would repeat it, so neither is rendered.
+    expect(find.text('Connected · one'), findsOneWidget);
+    expect(find.text('Connected'), findsNothing);
+    expect(find.text('one · one.example.com:51820'), findsNothing);
+  });
+
   testWidgets('error home offers connect via the hero button', (tester) async {
     await tester.pumpWidget(errorScope());
     await tester.pumpAndSettle();
