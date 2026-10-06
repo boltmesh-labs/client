@@ -67,6 +67,7 @@ String buildWgQuickConfig({
   bool allowLocal = true,
   ObfuscationParams? obfuscation,
   int? listenPort,
+  int? mtu,
 }) {
   if (privateKey.trim().isEmpty) {
     throw ArgumentError('Missing WireGuard private key.');
@@ -132,11 +133,23 @@ String buildWgQuickConfig({
     throw ArgumentError('Invalid listen port: $listenPort');
   }
   final listenLine = listenPort == null ? '' : 'ListenPort = $listenPort\n';
+  // The stream rung pins the interface MTU because its peer endpoint is the
+  // bridge's loopback address. `wg-quick` derives an unset MTU from the
+  // endpoint's route, reads loopback's 65536, and produces a ~64 KB inner MTU
+  // whose datagrams blow past the bridge's 1500-byte frame and get dropped:
+  // ping and DNS survive, HTTPS blackholes. Native and AmneziaWG leave this
+  // unset so the kernel (or the obfuscated device) keeps deriving it from the
+  // real path.
+  if (mtu != null && (mtu < 576 || mtu > 65535)) {
+    throw ArgumentError('Invalid MTU: $mtu');
+  }
+  final mtuLine = mtu == null ? '' : 'MTU = $mtu\n';
   return '[Interface]\n'
       'PrivateKey = $priv\n'
       'Address = $address\n'
       'DNS = $normalizedDns\n'
       '$listenLine'
+      '$mtuLine'
       '${obfLines.isEmpty ? '' : '${obfLines.join('\n')}\n'}'
       '\n'
       '[Peer]\n'

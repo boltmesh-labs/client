@@ -39,6 +39,17 @@ class TunnelTransport {
   /// relay datagrams for a peer it should be routing around.
   static const loopbackHost = '127.0.0.1';
 
+  /// The interface MTU the stream rung pins on the tunnel config.
+  ///
+  /// On this rung the peer `Endpoint` is [loopbackHost], and `wg-quick` derives
+  /// an unset MTU from the endpoint's route: it reads loopback's 65536 and sets
+  /// the interface to 65456. A 64 KB inner MTU makes every large packet produce a
+  /// WireGuard datagram past the bridge's 1500-byte frame cap, which the format
+  /// drops — the tunnel hands out a healthy-looking ping and DNS while real
+  /// websites blackhole. 1420 keeps the datagram (inner + 32 bytes of WireGuard
+  /// header and tag) comfortably under the cap and matches the rungs above.
+  static const tunnelMtu = 1420;
+
   /// Port of [listen], which becomes the peer endpoint in the conf.
   int get listenPort => _portOf(listen);
 

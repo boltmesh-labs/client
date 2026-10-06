@@ -188,6 +188,10 @@ extension ConnectionTunnel on ConnectionController {
       allowLocal: allowLocal,
       obfuscation: _obfuscationParamsFor(dial),
       listenPort: transport?.deliverPort,
+      // The stream rung's loopback peer endpoint would otherwise make
+      // `wg-quick` derive a ~64 KB MTU from the loopback interface; see
+      // [TunnelTransport.tunnelMtu]. Native and awg leave it to the platform.
+      mtu: transport == null ? null : TunnelTransport.tunnelMtu,
     );
     // Android needs the OS VPN consent before the plugin will bring the TUN
     // up, and the user answers a system dialog: an unbounded wait that must

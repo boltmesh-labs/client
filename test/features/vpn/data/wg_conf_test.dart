@@ -143,6 +143,55 @@ void main() {
       }
     });
 
+    test('the MTU is omitted unless a rung pins it', () {
+      // Native and AmneziaWG must keep letting the platform derive the MTU from
+      // the real path; only the stream rung's loopback endpoint needs a pin.
+      final conf = buildWgQuickConfig(
+        privateKey: 'PRIV',
+        assignedIp: '10.8.0.5',
+        serverPublicKey: 'SRV',
+        endpointHost: '203.0.113.10',
+        endpointPort: 51820,
+        dns: '10.8.0.1',
+      );
+      expect(conf, isNot(contains('MTU = ')));
+    });
+
+    test('the stream rung pins the MTU in the [Interface] section', () {
+      final conf = buildWgQuickConfig(
+        privateKey: 'PRIV',
+        assignedIp: '10.8.0.5',
+        serverPublicKey: 'SRV',
+        endpointHost: '127.0.0.1',
+        endpointPort: 51821,
+        dns: '10.8.0.1',
+        listenPort: 51820,
+        mtu: 1420,
+      );
+      expect(conf, contains('MTU = 1420'));
+      // wg-quick reads MTU from [Interface], so it must sit before [Peer].
+      final interface = conf.split('\n[Peer]').first;
+      expect(interface, contains('MTU = 1420'));
+    });
+
+    test('an out-of-range MTU is refused', () {
+      for (final mtu in [0, -1, 100, 70000]) {
+        expect(
+          () => buildWgQuickConfig(
+            privateKey: 'PRIV',
+            assignedIp: '10.8.0.5',
+            serverPublicKey: 'SRV',
+            endpointHost: '127.0.0.1',
+            endpointPort: 51821,
+            dns: '10.8.0.1',
+            mtu: mtu,
+          ),
+          throwsArgumentError,
+          reason: 'mtu $mtu',
+        );
+      }
+    });
+
     test('blank inputs throw', () {
       String build({
         String privateKey = 'PRIV',

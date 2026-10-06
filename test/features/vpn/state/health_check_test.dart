@@ -1402,6 +1402,12 @@ void main() {
         // right ones here, not the obfuscated pair the awg rung claims.
         expect(socket.lastConfig, contains('Address = 10.8.0.5/32'));
         expect(socket.lastConfig, contains('DNS = 10.8.0.1'));
+        // The MTU must be pinned here: this rung's peer endpoint is loopback,
+        // so an unset MTU makes wg-quick derive ~64 KB from `lo` and every large
+        // datagram overshoots the bridge's 1500-byte frame cap. The tunnel then
+        // passes ping and DNS while real websites blackhole, which the health
+        // ladder cannot distinguish from a healthy path.
+        expect(socket.lastConfig, contains('MTU = 1420'));
         // Which the branch below reads the rung off, so it is not dead.
         expect(ctl.transportRung, TransportRung.stream);
       });
@@ -1427,6 +1433,9 @@ void main() {
           socket.lastConfig,
           isNot(contains('Endpoint = 203.0.113.10:51820')),
         );
+        // The MTU pin is the stream rung's alone: the awg rung dials the real
+        // node and must keep deriving the MTU from that path.
+        expect(socket.lastConfig, isNot(contains('MTU = ')));
         expect(ctl.transportRung, TransportRung.awg);
       });
 

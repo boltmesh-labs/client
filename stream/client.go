@@ -233,7 +233,14 @@ func (c *Client) Addr() string { return c.socket.LocalAddr().String() }
 // re-sends on its own timer, and blocking here would fill the socket's
 // receive buffer and eventually stall the local interface's sends.
 func (c *Client) readLocal(stopped <-chan struct{}) {
-	buf := make([]byte, MaxDatagramSize)
+	// One byte over the limit so an oversized datagram is *detected* rather than
+	// silently truncated into a frame that still looks valid. A tunnel MTU
+	// larger than the format's cap (which a loopback peer endpoint makes
+	// wg-quick derive from lo) would otherwise ship a corrupt WireGuard message
+	// the node drops with no trace on either end. The real fix is the MTU the
+	// caller builds the conf with; this is the guard that keeps a misconfigured
+	// one observable instead of silent.
+	buf := make([]byte, MaxDatagramSize+1)
 	for {
 		n, _, err := c.socket.ReadFromUDP(buf)
 		if err != nil {
@@ -252,6 +259,10 @@ func (c *Client) readLocal(stopped <-chan struct{}) {
 		case <-stopped:
 			return
 		default:
+		}
+		if n > MaxDatagramSize {
+			c.cfg.logf("stream: dropping %d-byte datagram over the %d-byte cap (check the tunnel MTU)", n, MaxDatagramSize)
+			continue
 		}
 		frameBytes, err := BuildDatagram(buf[:n])
 		if err != nil {

@@ -248,6 +248,50 @@ func TestClientCarriesADatagramBothWays(t *testing.T) {
 	}
 }
 
+// TestClientDropsAnOversizedDatagram pins the guard that keeps a too-large
+// local datagram from being truncated into a frame that still parses. A tunnel
+// MTU past the format's cap (a loopback peer endpoint makes wg-quick derive one
+// from lo) used to ship a corrupt WireGuard message the node silently dropped;
+// the datagram must be dropped here instead, and the session must survive it.
+func TestClientDropsAnOversizedDatagram(t *testing.T) {
+	psk, cid := testKeyPair(t, 8)
+	node := newStubNode(t, psk, cid, false)
+	node.autoEcho = true
+	client, deliver, reports := newTestClient(t, node, psk, cid, nil)
+	client.Start()
+
+	select {
+	case up := <-reports:
+		if !up {
+			t.Fatal("first session report was not up")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no session established")
+	}
+
+	// One byte over the cap would previously be read as exactly MaxDatagramSize
+	// and forwarded truncated; the node would echo the corrupt frame back.
+	oversize := make([]byte, MaxDatagramSize+64)
+	if _, err := client.socket.WriteToUDP(oversize, mustAddr(t, client.Addr())); err != nil {
+		t.Fatalf("send oversize datagram: %v", err)
+	}
+	// A valid datagram right behind it must still make the round trip, which
+	// also proves the drop did not end the session.
+	marker := []byte("under-the-cap")
+	if _, err := client.socket.WriteToUDP(marker, mustAddr(t, client.Addr())); err != nil {
+		t.Fatalf("send marker datagram: %v", err)
+	}
+	_ = deliver.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, MaxDatagramSize)
+	n, _, err := deliver.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("deliver read: %v", err)
+	}
+	if string(buf[:n]) != string(marker) {
+		t.Errorf("delivered %d bytes, want the %d-byte marker %q", n, len(marker), marker)
+	}
+}
+
 func TestClientRejectsAnUnpinnedNode(t *testing.T) {
 	psk, cid := testKeyPair(t, 2)
 	node := newStubNode(t, psk, cid, false)
