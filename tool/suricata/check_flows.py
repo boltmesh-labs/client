@@ -37,9 +37,13 @@ from pathlib import Path
 
 # The subject rules, installed as /etc/suricata/rules/local.rules.
 HANDSHAKE_SID = 9900002
+HANDSHAKE_RESPONSE_SID = 9900012
+COOKIE_SID = 9900013
 TRANSPORT_SID = 9900003
 PORT_SID = 9900004
-WG_SIDS = frozenset({HANDSHAKE_SID, TRANSPORT_SID, PORT_SID})
+WG_SIDS = frozenset(
+    {HANDSHAKE_SID, HANDSHAKE_RESPONSE_SID, COOKIE_SID, TRANSPORT_SID, PORT_SID}
+)
 
 # The controls from rules/controls.rules.
 ENGINE_LIVE_SID = 9900001

@@ -58,8 +58,10 @@ test.
 
 | sid | kind | what it means |
 | --- | --- | --- |
-| 9900002 | subject | WireGuard handshake initiation (`01 00 00 00`) |
-| 9900003 | subject | WireGuard transport data / keepalive (`04 00 00 00`) |
+| 9900002 | subject | WireGuard handshake initiation (type 1, 148, to_server) |
+| 9900012 | subject | WireGuard handshake response (type 2, 92, to_client) |
+| 9900013 | subject | WireGuard cookie reply (type 3, 64, to_client) |
+| 9900003 | subject | WireGuard transport data / keepalive (type 4, ≥32) |
 | 9900004 | subject | any UDP to the native port |
 | 9900001 | control | the synthetic magic — proves the engine and rules loaded |
 | 9900005 | adversarial | the AWG endpoint as plain UDP on its port |

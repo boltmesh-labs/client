@@ -151,6 +151,17 @@ class AnalyzeTest(unittest.TestCase):
         self.assertNotIn(9920010, reports["awg"].wg_sids)
         self.assertEqual(check.evaluate(engine_live, reports, True), [])
 
+    def test_handshake_response_is_a_subject_rule(self) -> None:
+        # The hardened local.rules add types 2 and 3; both must count as
+        # WireGuard signatures, so an awg rung that trips one still fails.
+        events = a_clean_run() + [
+            alert(check.HANDSHAKE_RESPONSE_SID, src_ip=NODE, src_port=51821,
+                  dest_ip="192.168.1.113", dest_port=40003, proto="UDP"),
+        ]
+        engine_live, reports = check.analyze(events, NODE, RUNGS)
+        self.assertIn(check.HANDSHAKE_RESPONSE_SID, reports["awg"].wg_sids)
+        self.assertTrue(check.evaluate(engine_live, reports, True))
+
 
 class EvaluateTest(unittest.TestCase):
     def _evaluate(self, events: list[dict], expect_port_rule: bool = True) -> list[str]:
