@@ -6,11 +6,12 @@ import '../../../../core/theme.dart';
 import '../../../../l10n/gen/app_localizations.dart';
 import '../../state/vpn_providers.dart';
 
-/// Status icon + headline + detail lines (message, endpoint, plan).
+/// Status icon + headline + optional detail lines (message, plan).
 ///
-/// When connected the headline already carries the server name, so the
-/// controller message and the endpoint line are suppressed: both would repeat
-/// what the headline states.
+/// The headline carries the state (and the server name when connected), so the
+/// separate server/endpoint line is gone. A [ConnState.message] that only
+/// restates the state word ("Connected", "Disconnected") is dropped rather than
+/// rendered a second time; progress and error messages still render.
 ///
 /// Rebuilds only when its slice changes: phase/message/dial/plan are one
 /// record select, so traffic-counter ticks don't repaint the header.
@@ -65,6 +66,13 @@ class StatusHeader extends ConsumerWidget {
     final deviceStatus = conn.$4;
     final connected = phase == ConnPhase.connected;
     final statusText = _statusText(l10n, phase, dial?.serverName, connected);
+    // The controller reports the plain state word as `message` for the steady
+    // connected/disconnected snapshots; the headline already says it, so drop
+    // the duplicate line. Progress and error detail still render.
+    final showMessage =
+        message.isNotEmpty &&
+        message != l10n.homeStatusConnected &&
+        message != l10n.homeStatusDisconnected;
     final theme = Theme.of(context);
     final colors = boltMeshColorsOf(context);
 
@@ -96,7 +104,7 @@ class StatusHeader extends ConsumerWidget {
             ),
           ),
         ),
-        if (!connected && message.isNotEmpty) ...[
+        if (showMessage) ...[
           const SizedBox(height: 8),
           Semantics(
             liveRegion: true,
@@ -104,14 +112,6 @@ class StatusHeader extends ConsumerWidget {
             child: ExcludeSemantics(
               child: Text(message, textAlign: TextAlign.center),
             ),
-          ),
-        ],
-        if (!connected && dial != null) ...[
-          const SizedBox(height: 8),
-          Text(
-            '${dial.serverName} · ${dial.endpoint}:${dial.wgPort}',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium,
           ),
         ],
         if (deviceStatus != null) ...[

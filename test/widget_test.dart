@@ -173,6 +173,16 @@ class _ConnectedConnectionController extends _FakeConnectionController {
   );
 }
 
+/// Controller pinned to an arbitrary state, for header-rendering tests.
+class _StatusMessageController extends _FakeConnectionController {
+  _StatusMessageController(this._state);
+
+  final ConnState _state;
+
+  @override
+  ConnState build() => _state;
+}
+
 /// Error-phase controller whose last failure is a 429 cooldown: the hero
 /// Connect button must snack it (a no-op quickConnect leaves the state on).
 class _RateLimitedConnectionController extends _FakeConnectionController {
@@ -294,6 +304,11 @@ ProviderScope trafficScope() => vpnScope(
 
 ProviderScope connectedScope() => vpnScope(
   connection: _ConnectedConnectionController.new,
+  auth: _AuthedController.new,
+);
+
+ProviderScope statusMessageScope(ConnState state) => vpnScope(
+  connection: () => _StatusMessageController(state),
   auth: _AuthedController.new,
 );
 
@@ -533,6 +548,40 @@ void main() {
     expect(find.text('Connected · one'), findsOneWidget);
     expect(find.text('Connected'), findsNothing);
     expect(find.text('one · one.example.com:51820'), findsNothing);
+  });
+
+  testWidgets('disconnected home drops a message that restates the headline', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      statusMessageScope(
+        const ConnState(message: 'Disconnected', dial: _trafficDial),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The message and the server/endpoint line would both repeat the header.
+    expect(find.text('Disconnected'), findsOneWidget);
+    expect(find.text('one · one.example.com:51820'), findsNothing);
+  });
+
+  testWidgets('disconnected home keeps a message that adds information', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      statusMessageScope(
+        const ConnState(
+          message: 'Disconnected locally. Server release pending.',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Disconnected'), findsOneWidget);
+    expect(
+      find.text('Disconnected locally. Server release pending.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('error home offers connect via the hero button', (tester) async {
