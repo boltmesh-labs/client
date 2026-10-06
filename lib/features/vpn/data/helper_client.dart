@@ -173,6 +173,14 @@ class HelperClient {
       _call('ping', timeout: timeout);
 
   /// Current tunnel status. Concurrent callers share one request.
+  ///
+  /// A shared request is bounded by the first caller's deadline: a later
+  /// caller may only shorten its own wait (it gets an independent deadline
+  /// wrapper while the shared exchange keeps running for the others), never
+  /// extend it. Extending is not possible anyway — the transport already
+  /// received the original deadline and cancels the exchange when it expires —
+  /// so a caller that needs more time must wait for this request to settle and
+  /// issue a fresh one.
   Future<HelperStatus> status({Duration? timeout}) {
     final effectiveTimeout = _effectiveTimeout(timeout);
     final inFlight = _statusInFlight;

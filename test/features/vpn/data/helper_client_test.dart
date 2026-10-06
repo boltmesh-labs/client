@@ -400,6 +400,53 @@ void main() {
     expect(calls, 2);
   });
 
+  test('a longer timeout cannot extend an in-flight status request', () async {
+    var calls = 0;
+    final completer = Completer<Map<String, dynamic>>();
+    final socket = _ScriptedSocket((req) {
+      calls++;
+      if (calls == 1) return completer.future;
+      return Future.value(_ok(req['id'], _status()));
+    });
+    final client = HelperClient(
+      socket: socket,
+      callTimeout: const Duration(seconds: 30),
+    );
+
+    final short = client.status(timeout: const Duration(seconds: 5));
+    final long = client.status(timeout: const Duration(seconds: 20));
+
+    // The shared exchange keeps the first caller's deadline; a later caller
+    // may not push it out.
+    expect(identical(short, long), isTrue);
+
+    completer.complete(_ok('1', _status()));
+    await Future.wait([short, long]);
+    expect(calls, 1);
+  });
+
+  test('a shorter concurrent status caller gives up early without canceling '
+      'the shared exchange', () async {
+    var calls = 0;
+    final completer = Completer<Map<String, dynamic>>();
+    final socket = _ScriptedSocket((req) {
+      calls++;
+      if (calls == 1) return completer.future;
+      return Future.value(_ok(req['id'], _status()));
+    });
+    final client = HelperClient(socket: socket);
+
+    final slow = client.status(timeout: const Duration(seconds: 30));
+    final fast = client.status(timeout: const Duration(milliseconds: 20));
+
+    expect(identical(slow, fast), isFalse);
+    await expectLater(fast, throwsA(isA<HelperTransportException>()));
+
+    completer.complete(_ok('1', _status()));
+    await slow;
+    expect(calls, 1);
+  });
+
   test('a wedged status call times out and does not poison later reads', () async {
     var calls = 0;
     final socket = _ScriptedSocket((_) {
