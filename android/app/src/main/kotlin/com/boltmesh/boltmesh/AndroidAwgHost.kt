@@ -121,6 +121,15 @@ internal object AndroidAwgHost {
       "rxBytes" to stats.totalRx(),
       "txBytes" to stats.totalTx(),
     )
+    // The stream bridge's TLS session state, present only while a
+    // stream transport is live (the stream rung): the client reads
+    // it to keep a rung still coming up from reading as a dead
+    // path. -1 (no stream) omits the field, matching a native or
+    // obfuscated rung.
+    val session = AwgJni.awgStreamSession(liveStreamHandle)
+    if (session >= 0) {
+      values["streamSession"] = session == 1
+    }
     if (peer != null) {
       values["publicKey"] = peer.publicKey.toBase64()
       values["endpoint"] = endpoint

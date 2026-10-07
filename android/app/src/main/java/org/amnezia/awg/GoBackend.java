@@ -19,6 +19,14 @@ public class GoBackend {
 
     public static native void awgStopStream(int handle);
 
+    // The stream bridge's TLS session state: -1 when no stream is
+    // live (the caller omits the field, which is how a native or
+    // obfuscated rung reports "not a stream tunnel"), 0 while the
+    // bridge's session is still establishing, 1 once it has
+    // completed. Read through statusAwg so the app can tell a
+    // stream rung still coming up from one whose path has died.
+    public static native int awgStreamSession(int handle);
+
     public static native void awgTurnOff(int handle);
 
     public static native int awgTurnOn(String ifName, int tunFd, String settings);

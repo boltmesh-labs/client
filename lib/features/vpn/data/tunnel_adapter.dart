@@ -646,10 +646,26 @@ class AndroidTunnelAdapter implements TunnelAdapter {
 
   @override
   // The in-process Android bridge owns its own session lifecycle and
-  // reports no session state to the app, so there is nothing to read
-  // here. Null means "unknown", which the health tick treats as "not a
-  // helper stream rung" rather than as evidence either way.
-  Future<bool?> readStreamSession() async => null;
+  // reports it through statusAwg, present only while a stream transport
+  // is live: false while the bridge's TLS session is still
+  // establishing, true once it has completed. Absent means the tunnel
+  // is on a native or obfuscated rung, which has no stream session to
+  // report — the same tri-state the helper daemon's status carries, so
+  // the health tick's establishment grace applies here too.
+  Future<bool?> readStreamSession() async {
+    final status = await _readAwgStatus();
+    if (status != null && _isUp(status)) {
+      _awgActive = true;
+      final session = status['streamSession'];
+      if (session is! bool) return null;
+      return session;
+    }
+    if (_awgActive) {
+      _awgActive = false;
+      return null;
+    }
+    return _stock.readStreamSession();
+  }
 
   @override
   Future<ActivePeer?> getActivePeer() async {

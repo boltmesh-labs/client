@@ -600,5 +600,44 @@ void main() {
         expect(peer?.endpoint, '127.0.0.1:51820');
       },
     );
+
+    test('reads the stream session state from the AWG backend', () async {
+      final adapter = AndroidTunnelAdapter(
+        stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
+      );
+      // A live stream transport reports its session state: false while
+      // the bridge's TLS session is still establishing, true once it
+      // has completed. The health tick reads this to keep a rung still
+      // coming up from reading as a dead path.
+      messenger.setMockMethodCallHandler(
+        AndroidTunnelAdapter.awgChannel,
+        (call) async => <String, Object?>{
+          'up': true,
+          'stage': 'connected',
+          'lastHandshake': 0,
+          'streamSession': false,
+        },
+      );
+      expect(await adapter.readStreamSession(), isFalse);
+
+      messenger.setMockMethodCallHandler(
+        AndroidTunnelAdapter.awgChannel,
+        (call) async => <String, Object?>{
+          'up': true,
+          'stage': 'connected',
+          'lastHandshake': 1_800_000_000,
+          'streamSession': true,
+        },
+      );
+      expect(await adapter.readStreamSession(), isTrue);
+
+      // Absent means the tunnel is on a native or obfuscated rung,
+      // which has no stream session to report.
+      messenger.setMockMethodCallHandler(
+        AndroidTunnelAdapter.awgChannel,
+        (call) async => <String, Object?>{'up': true, 'stage': 'connected'},
+      );
+      expect(await adapter.readStreamSession(), isNull);
+    });
   });
 }

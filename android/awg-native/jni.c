@@ -16,6 +16,7 @@ extern char *awgGetConfig(int handle);
 extern char *awgVersion();
 extern int awgStartStream(struct go_string spec);
 extern void awgStopStream(int handle);
+extern int awgStreamSession(int handle);
 
 /* The live VpnService, used to protect the stream bridge's TLS socket from the
  * tunnel it carries. Registered by the Java side when the AWG VpnService is
@@ -139,4 +140,11 @@ JNIEXPORT void JNICALL Java_org_amnezia_awg_GoBackend_awgStopStream(JNIEnv *env,
 	(void)env;
 	(void)c;
 	awgStopStream(handle);
+}
+
+JNIEXPORT jint JNICALL Java_org_amnezia_awg_GoBackend_awgStreamSession(JNIEnv *env, jclass c, jint handle)
+{
+	(void)env;
+	(void)c;
+	return awgStreamSession(handle);
 }
