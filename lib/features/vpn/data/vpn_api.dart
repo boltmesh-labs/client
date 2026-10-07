@@ -19,7 +19,13 @@ class VpnApi {
 
   /// Hard wall-clock budget for one VPN API operation. Dio's receive timeout
   /// only bounds inactivity; this bounds a server that keeps trickling bytes.
-  static const requestDeadline = Duration(seconds: 30);
+  static const requestDeadline = Duration(seconds: 5);
+
+  /// Shorter deadline for disconnect/revoke operations to avoid long waits
+  /// when the backend is unreachable. The local tunnel teardown is authoritative,
+  /// so a failed server-side release should not block the UI.
+  static const disconnectDeadline = Duration(seconds: 3);
+
   final Duration deadline;
 
   const VpnApi(this._dio, {this.deadline = requestDeadline});
@@ -31,10 +37,12 @@ class VpnApi {
     String path,
     Future<T> Function(CancelToken token) call, {
     CancelToken? cancelToken,
+    Duration? deadline,
   }) {
     final token = cancelToken ?? CancelToken();
+    final effectiveDeadline = deadline ?? this.deadline;
     return call(token).timeout(
-      deadline,
+      effectiveDeadline,
       onTimeout: () {
         token.cancel('$path exceeded total deadline');
         throw DioException(
@@ -220,6 +228,7 @@ class VpnApi {
         cancelToken: token,
       ),
       cancelToken: cancelToken,
+      deadline: disconnectDeadline,
     );
   }
 
@@ -233,6 +242,7 @@ class VpnApi {
       (token) =>
           _dio.delete<void>('/vpn-devices/$deviceId', cancelToken: token),
       cancelToken: cancelToken,
+      deadline: disconnectDeadline,
     );
   }
 }

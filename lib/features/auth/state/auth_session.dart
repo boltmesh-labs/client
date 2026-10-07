@@ -6,7 +6,7 @@ part of 'auth_providers.dart';
 /// `AsyncNotifier.state` directly.
 /// Retry delay after a transport failure: tokens are kept, refresh is
 /// retried once before falling back to the 401 path.
-const _retryAfterFailure = Duration(seconds: 30);
+const _retryAfterFailure = Duration(seconds: 5);
 
 extension AuthSession on AuthController {
   Future<AuthState> _restore() async {

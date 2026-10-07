@@ -154,12 +154,11 @@ class HelperClient {
   Set<String> _capabilities = const {};
   Set<String> get capabilities => _capabilities;
 
-  /// Default backstop deadline for one helper round-trip. It is longer than
-  /// the daemon's complete-operation budget so a normal helper response wins
-  /// the race; the transport receives this same deadline and closes its
-  /// connection when it expires. The per-call timeout still guarantees that
-  /// an injected or future transport cannot leave a caller pending forever.
-  static const defaultCallTimeout = Duration(seconds: 45);
+  /// Default backstop deadline for one helper round-trip. The transport
+  /// receives this same deadline and closes its connection when it expires.
+  /// The per-call timeout still guarantees that an injected or future transport
+  /// cannot leave a caller pending forever.
+  static const defaultCallTimeout = Duration(seconds: 10);
 
   /// Per-instance override of [defaultCallTimeout] (tests use a short one).
   final Duration callTimeout;
