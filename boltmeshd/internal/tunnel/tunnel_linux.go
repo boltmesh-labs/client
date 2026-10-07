@@ -97,16 +97,32 @@ type Manager struct {
 	device     func(name string) (*wgtypes.Device, error)
 
 	// Userspace AmneziaWG data plane (obfuscated configs). mu guards the
-	// fields below; a nil awgDev means no userspace tunnel is live. Unlike
-	// the kernel path, the data plane dies with the daemon process, so a
-	// stale config file after a restart is the only state that can linger
-	// (plus the underlay host routes; see teardownObfuscated).
+	// fields below — the AWG device, its routes, and the stream
+	// transport's session state (streamSession) — so the status path,
+	// which reads them without the up/down gate, never races a
+	// lifecycle mutation. A nil awgDev means no userspace tunnel is
+	// live. Unlike the kernel path, the data plane dies with the
+	// daemon process, so a stale config file after a restart is the
+	// only state that can linger (plus the underlay host routes; see
+	// teardownObfuscated).
 	mu                sync.Mutex
 	awgDev            awgDevice
 	awgEndpointRoutes []string
-	makeAwgTun        func(name string, mtu int) (awgtun.Device, error)
-	makeAwgDevice     func(awgtun.Device) (awgDevice, error)
-	resolveHost       func(ctx context.Context, host string) ([]net.IP, error)
+	// streamSession is the stream transport's TLS session state, a
+	// tri-state: nil when no stream transport is live (the status
+	// then omits the field, which is how a native/awg rung — or a
+	// daemon predating the field — reports "not a stream tunnel"),
+	// and a pointer to the live session otherwise — false while the
+	// bridge's session is still establishing, true once it has
+	// completed. The pointer is replaced rather than mutated, so a
+	// status snapshot owns its own value. noteStreamSession runs on
+	// the transport's own goroutine, and downTransport clears it
+	// before it drops the transport, so a stale "established" can
+	// never outlive the transport that produced it.
+	streamSession *bool
+	makeAwgTun    func(name string, mtu int) (awgtun.Device, error)
+	makeAwgDevice func(awgtun.Device) (awgDevice, error)
+	resolveHost   func(ctx context.Context, host string) ([]net.IP, error)
 
 	// Live stream transport: the in-process bridge carrying the tunnel's
 	// datagrams, plus the routes pinned for it. The bridge is not a privilege
@@ -375,7 +391,27 @@ func (m *Manager) readDeviceStatus(ctx context.Context) (*protocol.Status, error
 		})
 	}
 	applyPeers(st, peers)
+	st.StreamSession = m.streamSessionState()
 	return st, nil
+}
+
+// streamSessionState projects the live stream transport's TLS session
+// into a status field. It reads only streamSession — never the
+// gate-guarded transport pointer — so the status path, which does not
+// hold the up/down gate, cannot race a lifecycle mutation. It returns
+// nil when no stream transport is live (the field is then omitted,
+// which is how a native/awg rung — or a daemon that predates the
+// field — reports "not a stream tunnel"), and a fresh pointer to the
+// current session state otherwise, so the status owns its own value
+// rather than aliasing the manager's.
+func (m *Manager) streamSessionState() *bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.streamSession == nil {
+		return nil
+	}
+	up := *m.streamSession
+	return &up
 }
 
 func statusReadError(err error) error {

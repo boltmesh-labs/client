@@ -128,6 +128,24 @@ class HelperTunnelAdapter implements TunnelAdapter {
   }
 
   @override
+  // The stream transport's TLS session state, straight from the
+  // daemon's status. Null means no stream transport is live (the
+  // native/awg rung) or a daemon that predates the field; the
+  // health tick reads that as "not a helper stream rung" rather
+  // than as evidence either way. A read failure is likewise unknown,
+  // never proof of death. Shares the in-flight status call the other
+  // health reads already use, so this costs no extra round-trip.
+  Future<bool?> readStreamSession() async {
+    try {
+      final status = await _client.status(timeout: TunnelTuning.healthTimeout);
+      return status.streamSession;
+    } catch (e) {
+      AppLog.info('helper stream-session read failed (unknown, ignoring): $e');
+      return null;
+    }
+  }
+
+  @override
   Future<ActivePeer?> getActivePeer() async {
     try {
       final status = await _client.status(timeout: TunnelTuning.healthTimeout);

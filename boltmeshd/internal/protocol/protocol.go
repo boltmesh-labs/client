@@ -436,6 +436,18 @@ type Status struct {
 	// when no peer has ever handshook.
 	LastHandshake int64 `json:"lastHandshake"`
 
+	// StreamSession reports the stream transport's TLS session state to
+	// the upstream server. It is set only while a stream transport is
+	// live (the stream rung): a non-nil pointer distinguishes "session
+	// establishing" (false) from "session established" (true). A nil
+	// pointer — the field is omitted — means no stream transport is
+	// running: the native or awg rung, or a daemon that predates the
+	// field. The client reads the distinction to keep a stream rung
+	// still coming up from reading as a dead path (a not-yet-established
+	// session has no completed end-to-end handshake and no flowing data
+	// path, which otherwise looks identical to a dead peer).
+	StreamSession *bool `json:"streamSession,omitempty"`
+
 	// RxBytes/TxBytes are summed across peers.
 	RxBytes int64 `json:"rxBytes"`
 	TxBytes int64 `json:"txBytes"`

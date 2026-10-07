@@ -108,6 +108,9 @@ type fakeStream struct {
 	started int
 	stopped int
 	stopErr error
+	// onSession is the session callback the daemon handed the transport, so a
+	// test can drive the session transitions the status reports.
+	onSession func(bool, error)
 }
 
 func (f *fakeStream) Start() { f.started++ }
@@ -174,13 +177,14 @@ func newTransportHarness(t *testing.T) *transportHarness {
 	// (pin before start, sweep before retry) are assertable.
 	svc.onStart = func() { h.order = append(h.order, "service-start") }
 	svc.onStop = func() { h.order = append(h.order, "service-stop") }
-	m.streamTransport = func(spec *protocol.TransportSpec, _ func(bool, error)) (streamClient, error) {
+	m.streamTransport = func(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error) {
 		if h.buildErr != nil {
 			return nil, h.buildErr
 		}
 		held := *spec
 		h.passSpec = &held
 		h.stream.spec = held
+		h.stream.onSession = onSession
 		h.order = append(h.order, "transport-built")
 		return h.stream, nil
 	}
@@ -192,6 +196,44 @@ func (h *transportHarness) up(t *testing.T) {
 	t.Helper()
 	if _, err := h.m.Up(context.Background(), streamConfig, streamSpec()); err != nil {
 		t.Fatalf("Up = %v, want nil", err)
+	}
+}
+
+// TestStreamSessionStateTracksTheTransportLifecycle pins the tri-state the
+// status reports for the stream rung, which is what lets the client tell a
+// rung still coming up from one whose path has died. The transitions are the
+// daemon's own: bring-up seeds "establishing" (the bridge reports a session
+// only once one has ended), the callback flips it on establish and on drop,
+// and teardown clears it so a stale "established" cannot outlive the
+// transport that produced it.
+func TestStreamSessionStateTracksTheTransportLifecycle(t *testing.T) {
+	h := newTransportHarness(t)
+	h.up(t)
+
+	if st := h.m.streamSessionState(); st == nil || *st {
+		t.Fatalf("after bring-up, streamSessionState = %v, want a live false", st)
+	}
+
+	// The session establishing is the client's grace window; the
+	// first completed handshake ends it.
+	h.stream.onSession(true, nil)
+	if st := h.m.streamSessionState(); st == nil || !*st {
+		t.Fatalf("after OnSession(true), streamSessionState = %v, want true", st)
+	}
+
+	// A session that drops reports "not established" again — but the
+	// handshake is by then observed, so the client reads a dropped
+	// session as a dead path, not a slow one.
+	h.stream.onSession(false, errors.New("node dropped the session"))
+	if st := h.m.streamSessionState(); st == nil || *st {
+		t.Fatalf("after OnSession(false), streamSessionState = %v, want false", st)
+	}
+
+	if _, err := h.m.Down(context.Background()); err != nil {
+		t.Fatalf("Down = %v, want nil", err)
+	}
+	if st := h.m.streamSessionState(); st != nil {
+		t.Fatalf("after teardown, streamSessionState = %v, want nil", st)
 	}
 }
 

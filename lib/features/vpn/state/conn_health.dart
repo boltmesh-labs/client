@@ -64,10 +64,13 @@ extension ConnectionHealth on ConnectionController {
     // in-tunnel echo is read below only when it can matter (see
     // [ConnectionTuning.echoProbeAfter]): it is the only per-tick network
     // I/O in the health path, and a fresh handshake already proves the peer
-    // alive. A record `.wait` keeps the result types explicit (no index
-    // casts) while still running the reads concurrently. None of them
-    // throws: the adapter and the handshake reader resolve failures as null.
-    final (stage, handshake, traffic) = await (
+    // alive. The stream-session read is the same kind of null-means-unknown
+    // read: it is only consulted on the stream rung (see
+    // [ConnectionTuning.streamEstablishmentCeiling]). A record `.wait` keeps
+    // the result types explicit (no index casts) while still running the
+    // reads concurrently. None of them throws: the adapter and the handshake
+    // reader resolve failures as null.
+    final (stage, handshake, traffic, streamSession) = await (
       _tunnel.readStage(),
       _readHandshake(),
       // Display-only, foreground-only: in the background the read would
@@ -78,6 +81,7 @@ extension ConnectionHealth on ConnectionController {
       _backgrounded
           ? Future<Map<String, dynamic>?>.value()
           : _tunnel.readTraffic(),
+      _tunnel.readStreamSession(),
     ).wait;
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
     if (stage != null && stage != snap.lastStage) {
@@ -114,6 +118,47 @@ extension ConnectionHealth on ConnectionController {
       if (nextRx != snap.rxBytes || nextTx != snap.txBytes) {
         snap = snap.copyWith(rxBytes: nextRx, txBytes: nextTx);
       }
+    }
+    // Stream-rung establishment grace. While the stream transport's TLS
+    // session is still coming up, the end-to-end WireGuard handshake has
+    // not completed, so a null handshake and dead in-tunnel echoes are the
+    // *expected* state — not path death. Reading them as such would fast-track
+    // a server move that cannot help: the replacement node has the same
+    // establishment window, so the move budget ping-pongs between nodes until
+    // the bridge finally comes up (and a real dead server later in the session
+    // has no move left). Treat the tunnel as coming up instead: skip the echo
+    // probe and every handshake-staleness verdict until the session
+    // establishes (streamSession true, or the handshake observed) or the
+    // establishment ceiling ([ConnectionTuning.streamEstablishmentCeiling])
+    // expires — at which point the ordinary verdicts resume and a session
+    // that genuinely will not come up is diagnosed as a dead path.
+    //
+    // `handshake == null` is what separates "still establishing" from "the
+    // session established and then dropped": once the session has completed a
+    // handshake, the reader reports that (stale) handshake, so a dropped
+    // session reads as a genuinely stale path and is *not* suppressed here.
+    // `streamSession == false` (not null) is the daemon's own statement that
+    // a live transport's session is not established; null means no stream
+    // transport (or a daemon that predates the field), which is not this case.
+    final streamEstablishing =
+        _transportRung == TransportRung.stream &&
+        handshake == null &&
+        streamSession == false &&
+        _connectedAt != null &&
+        now.difference(_connectedAt!) <
+            ConnectionTuning.streamEstablishmentCeiling;
+    if (streamEstablishing) {
+      _deadEchoStrikes = 0;
+      if (snap.healthNote == _checkingRecoveryNote ||
+          snap.healthNote == _recoveryInProgressNote) {
+        snap = snap.copyWith(healthNote: null);
+      }
+      snap = snap.copyWith(
+        recoveryAction: null,
+        recoveryReason: null,
+        recoveryDetail: null,
+      );
+      return;
     }
     // A performed-dead run of echoes (never a null/unknown read) shortens
     // the dead-peer handshake window below: the in-tunnel probe is a direct

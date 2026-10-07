@@ -14,6 +14,7 @@ import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
 import 'package:boltmesh/features/vpn/state/connection_tuning.dart';
+import 'package:boltmesh/features/vpn/state/polling_service.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -1030,6 +1031,117 @@ void main() {
         expect(socket.lastConfig, isNot(contains('Jc =')));
         expect(socket.lastTransport, isNotNull);
       });
+
+      test('a stream rung whose session is still establishing does not read as a dead path', () async {
+        // The regression: the stream rung's kernel WireGuard device is
+        // up the moment the loopback bridge binds, but the end-to-end
+        // handshake only completes once the bridge's TLS session is
+        // established. For that whole window the handshake reader
+        // reports null and the in-tunnel echo is dead — the signature
+        // of a dead peer — so the tick used to fast-track a server
+        // move. The replacement node has the same establishment window,
+        // so the move budget ping-ponged between nodes until the
+        // bridge finally came up, leaving nothing for a real dead
+        // server later in the session.
+        //
+        // The daemon now publishes the session state (streamSession),
+        // and the tick treats "session establishing" as the expected
+        // state: no heal, no move, for as long as it takes.
+        useLinuxDataPlane();
+        final clock = support.FakeClock();
+        final (container, socket) = await seedStream(
+          clock: clock,
+          gatewayProbe: support.FakeGatewayProbe(false),
+          controlProbe: support.FakeControlProbe(false),
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        // A supported reader reporting no handshake at all, ever.
+        ctl.debugHandshakeReader = () async => null;
+        // Walk to the stream rung the way a blocked first connect
+        // does. Until a transport is live the daemon reports no
+        // streamSession at all, which is exactly the walk's own
+        // signal, so the ladder still steps.
+        final walked = <TransportRung>[];
+        for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
+          clock.advance(ConnectionTuning.firstHandshakeGrace);
+          await ctl.checkHealthOnce();
+          walked.add(ctl.transportRung);
+        }
+        expect(walked, [TransportRung.awg, TransportRung.stream]);
+        expect(ctl.transportRung, TransportRung.stream);
+
+        // The bridge is now live but its TLS session has not come up:
+        // the daemon says so, the handshake is still null and the echo
+        // is dead. Repeated ticks — well past the handshake grace and
+        // echo-stall thresholds that used to fire — must neither heal
+        // nor move.
+        socket.status = helperStatusJson(streamSession: false);
+        final healsAtFloor = container
+            .read(connectionProvider)
+            .autoHealAttempts;
+        for (var i = 0; i < 6; i++) {
+          clock.advance(PollingService.healthCheckInterval);
+          await ctl.checkHealthOnce();
+        }
+        final state = container.read(connectionProvider);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(state.autoHealAttempts, healsAtFloor);
+        expect(state.autoFailoverAttempts, 0);
+        expect(state.recoveryAction, isNull);
+        expect(state.phase, ConnPhase.connected);
+      });
+
+      test(
+        'a stream session that will not establish is bounded by the ceiling',
+        () async {
+          // The grace is a ceiling, not a forever hold: a session that
+          // cannot establish within it is a node whose stream endpoint
+          // is down, so "no handshake" reverts to positive path-death
+          // evidence and the fast-track move spends the move budget
+          // where it belongs.
+          useLinuxDataPlane();
+          final clock = support.FakeClock();
+          final (container, socket) = await seedStream(
+            clock: clock,
+            gatewayProbe: support.FakeGatewayProbe(false),
+            controlProbe: support.FakeControlProbe(false),
+            onRegions: () => regionsList(twoServers()),
+            onSwitch: () => streamDial(
+              serverId: 'srv-2',
+              serverName: 'two',
+              endpoint: '203.0.113.11',
+              wgPublicKey: 'SRV2',
+            ),
+          );
+          final ctl = container.read(connectionProvider.notifier);
+          ctl.debugHandshakeReader = () async => null;
+          for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
+            clock.advance(ConnectionTuning.firstHandshakeGrace);
+            await ctl.checkHealthOnce();
+          }
+          expect(ctl.transportRung, TransportRung.stream);
+
+          // The session never comes up. Past the establishment ceiling
+          // the grace lifts and the ordinary dead-path verdict resumes:
+          // the never-handshook hard ceiling (well inside the
+          // establishment window's own bound) fast-tracks a move to the
+          // other node.
+          socket.status = helperStatusJson(streamSession: false);
+          clock.advance(
+            ConnectionTuning.streamEstablishmentCeiling +
+                PollingService.healthCheckInterval,
+          );
+          await ctl.checkHealthOnce();
+
+          final state = container.read(connectionProvider);
+          expect(state.autoFailoverAttempts, 1);
+          expect(state.dial?.serverId, 'srv-2');
+          expect(state.recoveryAction, RecoveryAction.switchingServer);
+          // The move keeps the rung: the replacement node serves it, so
+          // the rung is left in place rather than charged a fresh walk.
+          expect(ctl.transportRung, TransportRung.stream);
+        },
+      );
 
       test('a backend-confirmed dead node moves servers without stepping a rung', () async {
         // The rungs exist for a transport the network blocks; a node the

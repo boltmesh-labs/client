@@ -81,6 +81,30 @@ abstract final class ConnectionTuning {
   /// handshaked yet, so its clock starts over, which is the intent.
   static const hardFirstHandshakeCeiling = Duration(seconds: 45);
 
+  /// How long a stream-rung tunnel may go with its TLS session still
+  /// establishing before the health tick stops treating "no completed
+  /// end-to-end handshake" as the expected state and reverts to the
+  /// ordinary staleness verdicts.
+  ///
+  /// The stream rung points the peer at a loopback bridge that carries the
+  /// tunnel's datagrams to the node inside a TLS session. The kernel WireGuard
+  /// device is up the moment the bridge binds, but the end-to-end WireGuard
+  /// handshake only completes once that TLS session is established — so for the
+  /// whole establishment window the handshake reader reports null and the
+  /// in-tunnel echo is dead, which is exactly the signature of a dead peer.
+  /// [ConnectionHealth] suppresses that verdict while the session is still
+  /// establishing, and this ceiling bounds the suppression: a session that
+  /// cannot establish within it is a node whose stream endpoint is down (or a
+  /// network that will not carry it), so the ordinary dead-path recovery resumes
+  /// and the move budget is spent where it belongs.
+  ///
+  /// The stream client's own dial timeout is 10s with an exponential
+  /// reconnect backoff (250ms→5s), so a reachable node establishes within
+  /// seconds and an unreachable one fails fast and retries; 90s covers an
+  /// order of magnitude more retry attempts than that while still bounding a
+  /// dead endpoint to well under the 180s observed-handshake hard ceiling.
+  static const streamEstablishmentCeiling = Duration(seconds: 90);
+
   /// Observed-handshake age beyond which a performed-dead in-tunnel gateway
   /// echo shortens the dead-peer window (see [_deadEchoStrikes] and
   /// [isHandshakeStale]). Above the 25s keepalive so a just-handshaked peer

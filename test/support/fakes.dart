@@ -428,16 +428,28 @@ Map<String, dynamic> helperStatusJson({
   int lastHandshake = 0,
   String endpoint = '',
   String publicKey = '',
-}) => {
-  'interface': interfaceName,
-  'up': up,
-  'stage': stage,
-  'rxBytes': rxBytes,
-  'txBytes': txBytes,
-  'lastHandshake': lastHandshake,
-  'endpoint': endpoint,
-  'publicKey': publicKey,
-};
+  bool? streamSession,
+}) {
+  final status = <String, dynamic>{
+    'interface': interfaceName,
+    'up': up,
+    'stage': stage,
+    'rxBytes': rxBytes,
+    'txBytes': txBytes,
+    'lastHandshake': lastHandshake,
+    'endpoint': endpoint,
+    'publicKey': publicKey,
+  };
+  // Omitted when null, exactly as the daemon's `omitempty` does: a
+  // payload without the field is how a native/awg rung — or a daemon
+  // too old to know the field — reports "not a stream tunnel". (A
+  // block-body `if` rather than a collection `if` element: the
+  // null-aware map entry is key-conditional, and this is a value.)
+  if (streamSession != null) {
+    status['streamSession'] = streamSession;
+  }
+  return status;
+}
 
 /// Successful helper response envelope wrapping [status]. The request `id` is
 /// filled in by the socket double, mirroring the daemon's correlation echo.

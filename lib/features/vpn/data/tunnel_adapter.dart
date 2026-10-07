@@ -116,6 +116,16 @@ abstract class TunnelAdapter {
   /// Never throws.
   Future<DateTime?> readHandshake();
 
+  /// The stream transport's TLS session state, or null when unknown — no
+  /// stream transport is live (every adapter but the helper's), an older
+  /// daemon that predates the field, or a read failure. Non-null
+  /// distinguishes "session establishing" (false) from "session
+  /// established" (true). The health tick uses it to keep a stream rung
+  /// still coming up from reading as a dead path: a not-yet-established
+  /// session has no completed end-to-end handshake and no flowing data
+  /// path, which otherwise looks identical to a dead peer. Never throws.
+  Future<bool?> readStreamSession();
+
   /// The live peer of the owning tunnel (the backend whose
   /// `runningTunnelNames` is non-empty, surviving engine restarts), or null
   /// when no tunnel is running or the platform has no ghost-aware channel.
@@ -396,6 +406,12 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }
 
   @override
+  // The plugin data plane has no stream transport lifecycle, so it can
+  // never report a session state. Null means "unknown", which the health
+  // tick treats as "not a stream rung" rather than as evidence either way.
+  Future<bool?> readStreamSession() async => null;
+
+  @override
   Future<ActivePeer?> getActivePeer() async {
     try {
       final m = await ghostChannel
@@ -627,6 +643,13 @@ class AndroidTunnelAdapter implements TunnelAdapter {
     }
     return _stock.readHandshake();
   }
+
+  @override
+  // The in-process Android bridge owns its own session lifecycle and
+  // reports no session state to the app, so there is nothing to read
+  // here. Null means "unknown", which the health tick treats as "not a
+  // helper stream rung" rather than as evidence either way.
+  Future<bool?> readStreamSession() async => null;
 
   @override
   Future<ActivePeer?> getActivePeer() async {

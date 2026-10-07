@@ -76,6 +76,7 @@ class HelperStatus {
     required this.lastHandshake,
     required this.rxBytes,
     required this.txBytes,
+    this.streamSession,
   });
 
   factory HelperStatus.fromJson(Map<String, dynamic> json) {
@@ -85,16 +86,21 @@ class HelperStatus {
     final lastHandshake = json['lastHandshake'];
     final rxBytes = json['rxBytes'];
     final txBytes = json['txBytes'];
+    final streamSession = json['streamSession'];
     // Strict schema: a field that is missing or mistyped is a contract
     // violation, not "unknown". Silently defaulting here would let a
-    // malformed daemon masquerade as a healthy one.
+    // malformed daemon masquerade as a healthy one. `streamSession` is
+    // the one optional field: absent means no stream transport is live
+    // (or a daemon that predates the field), which is a valid state, not
+    // a violation — but a present value that is not a bool is.
     if (interfaceName is! String ||
         up is! bool ||
         stage is! String ||
         !helperStages.contains(stage) ||
         lastHandshake is! num ||
         rxBytes is! num ||
-        txBytes is! num) {
+        txBytes is! num ||
+        (streamSession != null && streamSession is! bool)) {
       throw HelperException('internal', 'helper status is malformed');
     }
     final endpoint = json['endpoint'] ?? '';
@@ -114,6 +120,7 @@ class HelperStatus {
           : null,
       rxBytes: rxBytes.toInt(),
       txBytes: txBytes.toInt(),
+      streamSession: streamSession as bool?,
     );
   }
 
@@ -125,6 +132,12 @@ class HelperStatus {
   final DateTime? lastHandshake;
   final int rxBytes;
   final int txBytes;
+
+  /// The stream transport's TLS session state, or null when no stream
+  /// transport is live (native/awg rung, or a daemon that predates the
+  /// field). Non-null distinguishes "session establishing" (false) from
+  /// "session established" (true); see [HelperTunnelAdapter.readStreamSession].
+  final bool? streamSession;
 }
 
 /// Client over [HelperSocket].

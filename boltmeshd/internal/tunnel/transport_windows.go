@@ -107,8 +107,16 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 	}
 
 	// Record the live transport before starting it: one that fails to start
-	// must still be stoppable by the recovery pass.
+	// must still be stoppable by the recovery pass. Seed the session state
+	// to "establishing" here rather than waiting for the first OnSession
+	// callback: the bridge reports a session transition only once a session
+	// has *ended*, so the whole first establishment window — the window the
+	// client's grace covers — would otherwise read as "no stream transport
+	// at all".
 	m.transport = tr
+	m.mu.Lock()
+	m.streamSession = new(bool)
+	m.mu.Unlock()
 	client.Start()
 	slog.Info(
 		"stream transport started",
@@ -161,6 +169,15 @@ func (m *Manager) downTransport(ctx context.Context) error {
 	if tr == nil && !m.transportPinsRecorded() {
 		return nil
 	}
+	// Drop the session state before the transport pointer: from the
+	// moment teardown begins the status must not report a live
+	// transport's session, so a stale "established" can never
+	// outlive the transport it came from. The transport pointer is
+	// gate-guarded; this field is mu-guarded, so the status reader
+	// and the teardown agree on it without either taking the gate.
+	m.mu.Lock()
+	m.streamSession = nil
+	m.mu.Unlock()
 	m.transport = nil
 
 	var errs []error
@@ -186,13 +203,27 @@ func (m *Manager) downTransport(ctx context.Context) error {
 	return m.removeTransportPinRecord()
 }
 
-// noteStreamSession records the transport's session transitions in the log.
+// noteStreamSession records the transport's session transitions in the log
+// and in the status the client reads.
 //
 // A session that will not come up is the interesting case, and it is *not* a
 // tunnel failure: the client already demotes on its own health policy, and this
-// path has no view of the tunnel's state to act on. So it logs and nothing else
-// — the daemon does not second-guess the ladder.
+// path has no view of the tunnel's state to act on. So the daemon does not
+// second-guess the ladder — but it does publish the transition, because the
+// client's health policy needs to tell a stream rung still coming up (no
+// completed end-to-end handshake yet) from one whose path has died.
+//
+// The nil guard keeps a teardown's callbacks from resurrecting state:
+// downTransport clears streamSession before it stops the client, so a
+// session the client reports on its way down finds nothing to write to
+// and is dropped.
 func (m *Manager) noteStreamSession(up bool, err error) {
+	m.mu.Lock()
+	if m.streamSession != nil {
+		v := up
+		m.streamSession = &v
+	}
+	m.mu.Unlock()
 	if up {
 		slog.Info("stream transport session established", "interface", m.iface)
 		return
