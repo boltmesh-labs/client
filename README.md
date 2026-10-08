@@ -743,7 +743,13 @@ rest of the pipeline (which files, when, verify) is unchanged.
   so that skips the ladder and moves straight on; anything else takes the
   cheap local retry first. Where the server serves no lower rung there is
   nothing to step to, so a heal would only rebuild the same config on the same
-  rung and the old move-first escalation is kept unchanged.
+  rung and the old move-first escalation is kept unchanged. One step is gated
+  on reachability: a demotion that would land on `stream` first probes that
+  rung's TLS port over TCP after the heal's tunnel stop (direct network — a
+  probe issued while the tunnel still routes traffic would travel the dead
+  path it is meant to judge), and an unreachable port skips the restart and
+  moves servers instead. An unknown probe fails open onto the demote, and a
+  spent move budget keeps the restart.
   A rung step is licensed by *local* path-death evidence, not by the control
   plane: a performed-dead echo run, a hard-stale handshake, or a handshake that
   never completed past `firstHandshakeGrace` (30s). The control-plane probe is

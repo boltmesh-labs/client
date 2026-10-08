@@ -223,6 +223,12 @@ abstract final class ConnectionTuning {
   /// combined (2s + 5s) still fit inside one 10s health tick.
   static const controlProbeTimeout = Duration(seconds: 5);
 
+  /// Budget for the pre-demote TCP probe of the stream rung's TLS port.
+  /// Runs after the heal's tunnel stop on the direct network, so it pays
+  /// no in-tunnel cost; kept short so a filtered port fails fast and the
+  /// tick still reaches failover promptly.
+  static const demoteTcpProbeTimeout = Duration(seconds: 3);
+
   /// Grace after a server-truth-confirmed cold restore during which a
   /// `disconnected` stage event is ignored. A fresh engine re-attach
   /// reports no running tunnels even when the OS TUN survived, so the

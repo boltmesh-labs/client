@@ -37,6 +37,12 @@ extension ConnectionRecovery on ConnectionController {
     DialParams? expectedDial,
   }) async {
     final release = await _mutex.acquire('auto-heal');
+    // Set when the stream demote is skipped (see below): the failover runs
+    // after the mutex is released, so its inputs are hoisted here rather
+    // than read from try-scoped locals.
+    String? skipDemoteToFailover;
+    int? skipSession;
+    DialParams? skipDial;
     try {
       if (expectedSession != null && expectedSession != _sessionEpoch) return;
       if (expectedEpoch != null && expectedEpoch != _tunnelEpoch) return;
@@ -119,51 +125,133 @@ extension ConnectionRecovery on ConnectionController {
       );
       await _stopTunnel('auto-heal');
       if (sessionEpoch != _sessionEpoch) return;
-      try {
-        await _startWith(
-          dial,
-          preservePollFailures: true,
-          sessionEpoch: sessionEpoch,
-        );
+      // A demotion that just stepped onto the stream rung is a TCP/TLS
+      // session to the node's stream port: when that port is unreachable the
+      // restart cannot succeed, so skip it and move servers instead of
+      // spending the heal on a known-dead endpoint. The probe runs here —
+      // after the stop, on the direct network — because a probe issued while
+      // the tunnel still routes traffic would travel the dead path it is
+      // meant to judge. Unknown (null) fails open onto the demote, and a
+      // spent move budget keeps the restart: with nowhere to move it is
+      // still the only action left.
+      String? skipToFailover;
+      if (demoteTransport &&
+          _transportRung == TransportRung.stream &&
+          _transportRung != previousRung &&
+          snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
+        final reachable = await _probeStreamTcp(dial);
         if (sessionEpoch != _sessionEpoch) return;
-      } catch (e) {
-        if (sessionEpoch != _sessionEpoch) return;
-        final vpnErr = asVpnError(e);
-        AppLog.error('auto-heal restart failed', vpnErr?.message ?? e);
-        // The tunnel is already down (it was stopped above), so this is a
-        // terminal state like [_surfaceRecoveryExhausted]: stop the ticks
-        // and drop the stage it died on rather than leaving stale reads
-        // armed behind an error.
-        _stopPolling();
-        _pollsSinceRotate = 0;
-        _resetLocalHealth();
-        snap = snap.copyWith(
-          phase: ConnPhase.error,
-          message:
-              'VPN stalled ($why). Restart failed (${failureReason(vpnErr, e)}). Tap Connect.',
-          lastStage: null,
-          healthNote: null,
-          backendIssue: null,
-        );
-        return;
+        if (reachable == false) {
+          final target = _streamTcpTarget(dial);
+          final where = target == null ? 'stream' : '${target.$1}:${target.$2}';
+          AppLog.info(
+            'auto-heal demote skipped ($why) $where unreachable -> failover',
+          );
+          _transportRung = previousRung;
+          skipToFailover = '$why ($where unreachable)';
+        }
       }
-      // [_startWith] resets session health; re-assert the attempt count
-      // while preserving the failover budget and poll evidence.
-      snap = snap.copyWith(
-        autoHealAttempts: attempt,
-        autoFailoverAttempts: prevFailovers,
-        pollFailures: prevPollFailures,
-        // Keep the connected phase from presenting a false healthy state
-        // during the post-restart handshake deadline. A successful handshake
-        // clears this note through the normal fresh-tunnel path.
-        healthNote: _recoveryInProgressNote,
-        recoveryAction: action,
-        recoveryReason: reason,
-        recoveryDetail: why,
-      );
-      AppLog.info('auto-heal ok ($why) attempt=$attempt');
+      if (skipToFailover == null) {
+        try {
+          await _startWith(
+            dial,
+            preservePollFailures: true,
+            sessionEpoch: sessionEpoch,
+          );
+          if (sessionEpoch != _sessionEpoch) return;
+        } catch (e) {
+          if (sessionEpoch != _sessionEpoch) return;
+          final vpnErr = asVpnError(e);
+          AppLog.error('auto-heal restart failed', vpnErr?.message ?? e);
+          // The tunnel is already down (it was stopped above), so this is a
+          // terminal state like [_surfaceRecoveryExhausted]: stop the ticks
+          // and drop the stage it died on rather than leaving stale reads
+          // armed behind an error.
+          _stopPolling();
+          _pollsSinceRotate = 0;
+          _resetLocalHealth();
+          snap = snap.copyWith(
+            phase: ConnPhase.error,
+            message:
+                'VPN stalled ($why). Restart failed (${failureReason(vpnErr, e)}). Tap Connect.',
+            lastStage: null,
+            healthNote: null,
+            backendIssue: null,
+          );
+          return;
+        }
+        // [_startWith] resets session health; re-assert the attempt count
+        // while preserving the failover budget and poll evidence.
+        snap = snap.copyWith(
+          autoHealAttempts: attempt,
+          autoFailoverAttempts: prevFailovers,
+          pollFailures: prevPollFailures,
+          // Keep the connected phase from presenting a false healthy state
+          // during the post-restart handshake deadline. A successful handshake
+          // clears this note through the normal fresh-tunnel path.
+          healthNote: _recoveryInProgressNote,
+          recoveryAction: action,
+          recoveryReason: reason,
+          recoveryDetail: why,
+        );
+        AppLog.info('auto-heal ok ($why) attempt=$attempt');
+      } else {
+        skipDemoteToFailover = skipToFailover;
+        skipSession = sessionEpoch;
+        skipDial = dial;
+        // The heal published `working` before the stop; the failover below
+        // re-enters through its normal `connected` gate, so restore the phase
+        // it expects. The tunnel is already down and the move stops it again
+        // (a no-op second stop) before its direct-network discovery.
+        snap = snap.copyWith(phase: ConnPhase.connected);
+      }
     } finally {
       release();
+    }
+    final failoverWhy = skipDemoteToFailover;
+    final failoverDial = skipDial;
+    final failoverSession = skipSession;
+    if (failoverWhy != null &&
+        failoverDial != null &&
+        failoverSession != null) {
+      // The mutex is released: the demote was skipped with the tunnel
+      // already down, so the move runs its direct-network discovery without
+      // a second stop. `tunnelPathDead` carries the evidence the demote was
+      // licensed on plus the unreachable port.
+      await _autoFailover(
+        failoverWhy,
+        tunnelPathDead: true,
+        hardStalled: hardStalled,
+        expectedSession: failoverSession,
+        expectedDial: failoverDial,
+      );
+    }
+  }
+
+  /// The stream rung's `host:port` for [dial], or null when it names nothing
+  /// dialable. Read off the advertised credential, never the WireGuard
+  /// endpoint: the TLS session dials the credential's server, which need not
+  /// share the tunnel endpoint's host.
+  (String, int)? _streamTcpTarget(DialParams dial) {
+    final credential = dial.transportFor(TransportRung.stream)?.credential;
+    if (credential == null) return null;
+    return parseTcpHostPort(credential.server);
+  }
+
+  /// TCP reachability of the stream rung's TLS port, or null when unknown.
+  /// Never throws: a probe that could not run must fail open onto the demote.
+  Future<bool?> _probeStreamTcp(DialParams dial) async {
+    final target = _streamTcpTarget(dial);
+    if (target == null) return null;
+    try {
+      return await _tcpProbe.check(
+        target.$1,
+        target.$2,
+        timeout: ConnectionTuning.demoteTcpProbeTimeout,
+      );
+    } catch (e) {
+      AppLog.error('stream tcp probe failed', e);
+      return null;
     }
   }
 

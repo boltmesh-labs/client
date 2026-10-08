@@ -10,6 +10,7 @@ import 'package:boltmesh/features/vpn/data/helper_tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
+import 'package:boltmesh/features/vpn/data/tcp_probe.dart';
 import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/domain/backend_issue.dart';
@@ -85,6 +86,7 @@ ProviderContainer makeContainer({
   Clock? clock,
   GatewayProbe? gatewayProbe,
   ControlPlaneProbe? controlProbe,
+  TcpProbe? tcpProbe,
   TunnelAdapter? tunnel,
 }) {
   final container = ProviderContainer(
@@ -109,6 +111,12 @@ ProviderContainer makeContainer({
       controlPlaneProbeProvider.overrideWithValue(
         controlProbe ?? DownControlProbe(),
       ),
+      // Fail-open default (unknown): suites that demote onto the stream rung
+      // without caring about the TCP gate keep the legacy behavior with zero
+      // real I/O. Suites exercising the gate inject their own probe.
+      tcpProbeProvider.overrideWithValue(
+        tcpProbe ?? support.FakeTcpProbe(null),
+      ),
     ],
   );
   addTearDown(container.dispose);
@@ -122,6 +130,7 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
   Clock? clock,
   GatewayProbe? gatewayProbe,
   ControlPlaneProbe? controlProbe,
+  TcpProbe? tcpProbe,
   bool expectConnected = true,
 }) async {
   final store = FakeStore();
@@ -135,6 +144,7 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
     clock: clock,
     gatewayProbe: gatewayProbe,
     controlProbe: controlProbe,
+    tcpProbe: tcpProbe,
   );
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
@@ -728,6 +738,7 @@ void main() {
         List<Map<String, dynamic>> Function()? onRegions,
         GatewayProbe? gatewayProbe,
         ControlPlaneProbe? controlProbe,
+        TcpProbe? tcpProbe,
         Clock? clock,
         bool expectConnected = true,
       }) async {
@@ -760,6 +771,7 @@ void main() {
           clock: clock,
           gatewayProbe: gatewayProbe,
           controlProbe: controlProbe,
+          tcpProbe: tcpProbe,
           tunnel: HelperTunnelAdapter(client: HelperClient(socket: socket)),
         );
         await store.setDeviceId('dev-1');
@@ -1633,6 +1645,118 @@ void main() {
           );
         },
       );
+
+      test(
+        'an unreachable stream port skips the demote and moves servers',
+        () async {
+          // The demote onto stream is a TCP/TLS session to the node's stream
+          // port: with that port unreachable the restart cannot succeed, so the
+          // heal is skipped and the ladder moves servers instead. The probe
+          // reads the credential's server, not the WireGuard endpoint.
+          useLinuxDataPlane();
+          final tcp = support.FakeTcpProbe(false);
+          final (container, socket) = await seedStream(
+            dial: streamOnlyDial,
+            controlProbe: support.FakeControlProbe(true),
+            tcpProbe: tcp,
+            onRegions: () => regionsList(twoServers()),
+            onSwitch: () => streamDial(
+              serverId: 'srv-2',
+              serverName: 'two',
+              endpoint: '203.0.113.11',
+              wgPublicKey: 'SRV2',
+            ),
+          );
+          final ctl = container.read(connectionProvider.notifier);
+
+          await stepDown(container);
+
+          expect(tcp.calls, 1);
+          expect(tcp.lastHost, 'vpn.example.net');
+          expect(tcp.lastPort, 443);
+          // No stream start was ever attempted on the old server: every `up`
+          // the socket saw carried no bridge transport.
+          final ups = [
+            for (final r in socket.requests)
+              if (r['op'] == 'up') r['transport'],
+          ];
+          expect(ups, isNotEmpty);
+          expect(ups.every((t) => t == null), isTrue);
+          // The rung is restored and the move lands on the other node.
+          expect(ctl.transportRung, TransportRung.native);
+          final state = container.read(connectionProvider);
+          expect(state.dial?.serverId, 'srv-2');
+          expect(state.autoFailoverAttempts, 1);
+          expect(state.recoveryAction, RecoveryAction.switchingServer);
+        },
+      );
+
+      test('a reachable stream port still demotes onto it', () async {
+        useLinuxDataPlane();
+        final tcp = support.FakeTcpProbe(true);
+        final (container, socket) = await seedStream(
+          dial: streamOnlyDial,
+          controlProbe: support.FakeControlProbe(true),
+          tcpProbe: tcp,
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
+
+        expect(tcp.calls, 1);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(socket.lastConfig, contains('Endpoint = 127.0.0.1:'));
+        expect(socket.lastTransport, isNotNull);
+        expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+      });
+
+      test('an unknown stream probe fails open onto the demote', () async {
+        // Null is absence of evidence, never proof of death: a probe that
+        // could not run must not strand the session on a rung the network
+        // may simply be slow to answer.
+        useLinuxDataPlane();
+        final tcp = support.FakeTcpProbe(null);
+        final (container, socket) = await seedStream(
+          dial: streamOnlyDial,
+          controlProbe: support.FakeControlProbe(true),
+          tcpProbe: tcp,
+        );
+        final ctl = container.read(connectionProvider.notifier);
+
+        await stepDown(container);
+
+        expect(tcp.calls, 1);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(socket.lastTransport, isNotNull);
+        expect(container.read(connectionProvider).autoFailoverAttempts, 0);
+      });
+
+      test('a spent move budget keeps the stream restart', () async {
+        // With nowhere to move the restart is still the only action left, so
+        // the gate does not even probe: skipping the demote would leave the
+        // session with nothing to try.
+        useLinuxDataPlane();
+        final tcp = support.FakeTcpProbe(false);
+        final (container, socket) = await seedStream(
+          dial: streamOnlyDial,
+          controlProbe: support.FakeControlProbe(true),
+          tcpProbe: tcp,
+        );
+        final ctl = container.read(connectionProvider.notifier);
+        ctl.snap = ctl.snap.copyWith(
+          autoFailoverAttempts: ConnectionTuning.maxAutoFailovers,
+        );
+
+        await stepDown(container);
+
+        expect(tcp.calls, 0);
+        expect(ctl.transportRung, TransportRung.stream);
+        expect(socket.lastTransport, isNotNull);
+        expect(
+          container.read(connectionProvider).autoFailoverAttempts,
+          ConnectionTuning.maxAutoFailovers,
+        );
+      });
 
       test('a daemon without the capability never offers the stream rung', () async {
         // An older Linux helper knows nothing about transports, so its missing

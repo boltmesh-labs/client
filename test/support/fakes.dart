@@ -24,6 +24,7 @@ import 'package:boltmesh/features/vpn/data/helper_client.dart';
 import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/key_manager.dart';
 import 'package:boltmesh/features/vpn/data/network_monitor.dart';
+import 'package:boltmesh/features/vpn/data/tcp_probe.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
@@ -397,6 +398,34 @@ class FakeGatewayProbe implements GatewayProbe {
     calls++;
     lastIp = ip;
     return alive;
+  }
+}
+
+/// [TcpProbe] answering a fixed reachability result (null = unknown) and
+/// recording the last target, so recovery suites can assert the heal probed
+/// the stream rung's TLS port.
+class FakeTcpProbe implements TcpProbe {
+  FakeTcpProbe(this.result);
+
+  bool? result;
+
+  /// Number of [check] calls.
+  int calls = 0;
+
+  /// The last host/port [check] probed.
+  String? lastHost;
+  int? lastPort;
+
+  @override
+  Future<bool?> check(
+    String host,
+    int port, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    calls++;
+    lastHost = host;
+    lastPort = port;
+    return result;
   }
 }
 

@@ -24,6 +24,7 @@ import '../data/models.dart';
 import '../data/network_monitor.dart';
 import '../data/platform_info.dart';
 import '../data/stream_transport.dart';
+import '../data/tcp_probe.dart';
 import '../data/tunnel_adapter.dart';
 import '../data/tunnel_tuning.dart';
 import '../data/vpn_api.dart';
@@ -67,6 +68,7 @@ class ConnectionController extends Notifier<ConnState> {
   GatewayProbe get _gatewayProbe => ref.read(gatewayProbeProvider);
   ControlPlaneProbe get _controlPlaneProbe =>
       ref.read(controlPlaneProbeProvider);
+  TcpProbe get _tcpProbe => ref.read(tcpProbeProvider);
   // Wall clock behind every time window (handshake staleness, backend quiet,
   // cold-restore grace). Injectable so those windows are aged deterministically
   // in tests instead of by poking private anchors.
