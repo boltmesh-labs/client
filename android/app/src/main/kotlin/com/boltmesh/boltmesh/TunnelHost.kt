@@ -14,9 +14,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import orban.group.wireguard_flutter.WireguardFlutterPlugin
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 
 /// Process-level host for the app's own native tunnel channels.
@@ -56,6 +58,28 @@ internal object TunnelHost {
   /// engine still depends on.
   private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val main = Handler(Looper.getMainLooper())
+
+  /// The only thread that may enter libawg-go.so, and the scope for the four
+  /// AWG handlers below ([startAwg][stopAwg][statusAwg][killAwgGhost]).
+  ///
+  /// Two Go runtimes live in this process — the stock plugin's libwg-go.so
+  /// and our libawg-go.so — and a Go runtime binds the calling thread on
+  /// first entry, so a thread that entered one runtime must never enter the
+  /// other. The stock plugin runs its backend on the shared [Dispatchers.IO]
+  /// pool, and so did these handlers: once the pool recycled a worker the
+  /// stock backend had used, the first AWG JNI call read the stock runtime's
+  /// thread state as its own and died with a SIGSEGV inside
+  /// `runtime.cgocallback` (null + 0x38, identical PC on every native→AWG
+  /// failover, no Go traceback because the runtime never engaged). This
+  /// private thread only ever enters ours, which also serializes the
+  /// backend's unguarded handle map. The stock-touching calls above it must
+  /// stay on [ioScope]: running them here would pollute this thread for the
+  /// stock runtime and crash in the other direction.
+  private val awgThread = Executors.newSingleThreadExecutor { r ->
+    Thread(r, AndroidAwgHost.awgThreadName).apply { isDaemon = true }
+  }
+  private val awgScope =
+    CoroutineScope(SupervisorJob() + awgThread.asCoroutineDispatcher())
 
   /// Application context captured on the first [register]; used only to read
   /// the plugin's persisted `vpn_prefs` config.
@@ -192,7 +216,7 @@ internal object TunnelHost {
           // native bridge dials the node with. Null on the plain AWG rung.
           val streamSpec = call.argument<String>("streamSpec")
           val app = appContext ?: context.applicationContext
-          ioScope.launch {
+          awgScope.launch {
             val reply = try {
               AndroidAwgHost.start(app, wgQuickConfig, streamSpec)
             } catch (t: Throwable) {
@@ -207,7 +231,7 @@ internal object TunnelHost {
         }
         "stopAwg" -> {
           val app = appContext ?: context.applicationContext
-          ioScope.launch {
+          awgScope.launch {
             val reply = try {
               AndroidAwgHost.stop(app)
             } catch (t: Throwable) {
@@ -221,7 +245,7 @@ internal object TunnelHost {
           }
         }
         "statusAwg" -> {
-          ioScope.launch {
+          awgScope.launch {
             val reply = try {
               AndroidAwgHost.status()
             } catch (t: Throwable) {
@@ -233,7 +257,7 @@ internal object TunnelHost {
         }
         "killAwgGhost" -> {
           val app = appContext ?: context.applicationContext
-          ioScope.launch {
+          awgScope.launch {
             val killed = try {
               AndroidAwgHost.stop(app)["up"] != true
             } catch (t: Throwable) {

@@ -22,6 +22,21 @@ internal object AndroidAwgHost {
   private const val foregroundServiceClass =
     "orban.group.wireguard_flutter.VpnForegroundService"
 
+  /// Name of the process-wide thread that owns every libawg-go.so call (see
+  /// TunnelHost's awgScope). Two Go runtimes share this process and a thread
+  /// that entered one must never enter the other, so every entry point below
+  /// checks confinement first and fails with a catchable error instead of
+  /// the SIGSEGV the runtime dies with. A name check rather than recorded
+  /// identity keeps this stateless: recording the first caller would let a
+  /// test (or any stray call) claim ownership and break the real thread.
+  internal const val awgThreadName = "BoltMeshAwg"
+
+  private fun checkAwgThread() {
+    check(Thread.currentThread().name == awgThreadName) {
+      "libawg-go.so calls are confined to $awgThreadName"
+    }
+  }
+
   private val lock = Any()
   private val tunnel = object : Tunnel {
     override fun getName(): String = tunnelName
@@ -38,6 +53,7 @@ internal object AndroidAwgHost {
   @Volatile private var liveStreamHandle: Int = -1
 
   fun start(context: Context, wgQuickConfig: String, streamSpec: String? = null): Map<String, Any> = synchronized(lock) {
+    checkAwgThread()
     val parsed = Config.parse(
       ByteArrayInputStream(wgQuickConfig.toByteArray(StandardCharsets.UTF_8)),
     )
@@ -86,6 +102,7 @@ internal object AndroidAwgHost {
   }
 
   fun stop(context: Context): Map<String, Any> = synchronized(lock) {
+    checkAwgThread()
     val streamHandle = liveStreamHandle
     liveStreamHandle = -1
     if (streamHandle > 0) {
@@ -101,6 +118,7 @@ internal object AndroidAwgHost {
   }
 
   fun status(): Map<String, Any> = synchronized(lock) {
+    checkAwgThread()
     val owner = backend ?: return@synchronized disconnectedStatus()
     if (owner.getState(tunnel) != Tunnel.State.UP) {
       return@synchronized disconnectedStatus()

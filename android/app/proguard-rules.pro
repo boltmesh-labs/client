@@ -45,5 +45,11 @@
 # NoSuchMethodError. Keep the model the connect-path smoke test asserts on.
 -keep class com.wireguard.config.** { *; }
 
+# AmneziaWgConnectSmokeTest asserts AndroidAwgHost's thread-confinement guard
+# directly. Production reaches the host only through TunnelHost's channel
+# lambdas, which R8 can inline past, so the test's call then dies with
+# NoClassDefFoundError. Keep the host the confinement test asserts on.
+-keep class com.boltmesh.boltmesh.AndroidAwgHost { *; }
+
 # Do not add owner-class keeps here: production uses javaClass, and AGP applies
 # the release mapping to androidTest class references.

@@ -2,6 +2,7 @@ package com.boltmesh.boltmesh;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -64,5 +65,23 @@ public final class AmneziaWgConnectSmokeTest {
     assertNotNull(version);
     assertFalse(version.isEmpty());
     assertFalse("native AWG version must be discoverable", "unknown".equals(version));
+  }
+
+  @Test
+  public void awgHostConfinesNativeCallsToItsDedicatedThread() {
+    Context context = ApplicationProvider.getApplicationContext();
+    // Every libawg-go.so entry point is confined to TunnelHost's private
+    // thread: two Go runtimes share this process (the stock plugin's
+    // libwg-go.so and ours) and a thread that entered one must never enter
+    // the other — the runtime reads the wrong thread state as its own and
+    // dies with a SIGSEGV no catch block can see. These calls run here on
+    // the instrumentation thread, so each must fail fast instead.
+    assertThrows(
+        IllegalStateException.class, () -> AndroidAwgHost.INSTANCE.status());
+    assertThrows(
+        IllegalStateException.class, () -> AndroidAwgHost.INSTANCE.stop(context));
+    assertThrows(
+        IllegalStateException.class,
+        () -> AndroidAwgHost.INSTANCE.start(context, CONFIG, null));
   }
 }
