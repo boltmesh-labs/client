@@ -119,6 +119,14 @@ def resolve_ndk(explicit: str | None) -> Path:
             candidate = Path(sdk) / "ndk" / NDK_VERSION
             if candidate.is_dir():
                 return candidate
+    # Last resort for local runs: the conventional SDK location. CI sets
+    # ANDROID_HOME explicitly, so this only ever fires on a dev machine
+    # whose shell never exported it.
+    home = os.environ.get("HOME")
+    if home:
+        candidate = Path(home) / "Android" / "Sdk" / "ndk" / NDK_VERSION
+        if candidate.is_dir():
+            return candidate
     raise RuntimeError(
         "Android NDK not found: pass the NDK directory, set ANDROID_NDK_HOME, "
         f"or install ndk;{NDK_VERSION} under $ANDROID_HOME"
