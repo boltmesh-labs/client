@@ -16,8 +16,9 @@
 #                   needs an unlocked collection; isolating XDG_DATA_HOME keeps
 #                   a lab run off the operator's real login keyring
 #
-# Credentials come from the environment, never a flag: the process list is
-# world-readable and a password there outlives the run.
+# Credentials come from the environment or the gitignored `.env.e2e`, never a
+# flag: the process list is world-readable and a password there outlives the
+# run.
 set -euo pipefail
 
 [[ $EUID -ne 0 ]] \
@@ -45,12 +46,42 @@ display_num="${BOLTMESH_E2E_DISPLAY:-:99}"
 log() { printf '\n=== %s\n' "$*"; }
 die() { printf 'e2e: %s\n' "$*" >&2; exit 1; }
 
-[[ -n $api_user && -n $api_password ]] \
-  || die "BOLTMESH_E2E_API_USER and BOLTMESH_E2E_API_PASSWORD must be set in the environment"
+# True when a server is actually accepting connections on an X socket; a
+# socket *file* alone says nothing once a run has been killed.
+display_live() {
+  python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);sys.exit(0 if s.connect_ex(sys.argv[1])==0 else 1)' "$1"
+}
+
+# --- credentials -------------------------------------------------------------
+# The environment wins when it carries both halves (`tool/suricata/run.sh`
+# injects them that way); anything missing falls back to the lab's .env.e2e, so
+# a bare `tool/e2e/run_linux_app.sh` needs no export first. The file is parsed
+# with sed and never sourced — reading it executes nothing — and unquote hands
+# over the raw secret even when it carries quotes or shell metacharacters.
+CREDS_FILE="${BOLTMESH_E2E_CREDS_FILE:-$client_repo/.env.e2e}"
+
+unquote() {
+  local value=$1 first=${1:0:1} last=${1: -1}
+  if [[ ${#value} -ge 2 && ( $first == '"' || $first == "'" ) && $first == "$last" ]]; then
+    value=${value:1:${#value}-2}
+  fi
+  printf '%s' "$value"
+}
+
+if [[ -z $api_user || -z $api_password ]]; then
+  [[ -f $CREDS_FILE ]] \
+    || die "BOLTMESH_E2E_API_USER/BOLTMESH_E2E_API_PASSWORD are not both set and there is no $CREDS_FILE (override with BOLTMESH_E2E_CREDS_FILE)"
+  [[ -n $api_user ]] \
+    || api_user=$(unquote "$(sed -n 's/^BOLTMESH_E2E_API_USER=//p' "$CREDS_FILE" | tail -1)")
+  [[ -n $api_password ]] \
+    || api_password=$(unquote "$(sed -n 's/^BOLTMESH_E2E_API_PASSWORD=//p' "$CREDS_FILE" | tail -1)")
+  [[ -n $api_user && -n $api_password ]] \
+    || die "$CREDS_FILE must set BOLTMESH_E2E_API_USER and BOLTMESH_E2E_API_PASSWORD"
+fi
 [[ -f $env_file ]] \
   || die "no $env_file: copy .env.example to .env, or point ENV_FILE at one"
 
-required=(flutter ip ping go)
+required=(flutter ip ping go python3)
 # Optional, and only for the screenshots the test takes when it is told where to
 # put them: its absence costs you the pictures, not the run.
 command -v import >/dev/null || printf 'e2e: note: ImageMagick import not found; screenshots will be skipped\n' >&2
@@ -95,6 +126,16 @@ trap cleanup EXIT
 # --- a display --------------------------------------------------------------
 
 display_socket="/tmp/.X11-unix/X${display_num#:}"
+
+# The socket *file* is the readiness signal below, but a file alone proves
+# nothing once a run has been killed outright: SIGKILL leaves it behind with
+# no server, and `-S` would take a dead display for a live one — GTK would
+# then fall through to the session's Wayland compositor and every screenshot
+# would capture an empty screen. One real connect settles it.
+if [[ -S $display_socket ]] && ! display_live "$display_socket"; then
+  log "removing stale $display_socket (no server behind it)"
+  rm -f "$display_socket"
+fi
 
 log "starting a virtual display on $display_num"
 # The X socket is the readiness signal, not `xdpyinfo`: that comes from
@@ -166,7 +207,12 @@ echo "  credentials: $api_user (password from the environment)"
 echo "  defines:     $env_file"
 echo "  screenshots: $shot_dir"
 
+# GDK_BACKEND=x11 pins GTK to the virtual display. Without it, on a box with a
+# Wayland log-in session GTK falls back to the real compositor whenever X11 is
+# unavailable, so a green run could still ship screenshots of an empty screen —
+# the display exists for the screenshots, not just for the app.
 DISPLAY="$display_num" \
+GDK_BACKEND=x11 \
 XDG_DATA_HOME="$workdir/xdg" \
 BOLTMESH_E2E_API_USER="$api_user" \
 BOLTMESH_E2E_API_PASSWORD="$api_password" \

@@ -36,8 +36,11 @@ evidence that the node is up.
 Needs `flutter`, `Xvfb`, `gnome-keyring-daemon`, `secret-tool`, `python3`, and a
 Go toolchain, plus `sudo` for the one privileged step: installing the helper.
 
-Credentials go through the environment, never a file or a flag: the process list
-is world-readable, and a password there outlives the run.
+Credentials are read from the environment when it carries both halves, and
+otherwise from the gitignored `.env.e2e` at the repo root (override the path
+with `BOLTMESH_E2E_CREDS_FILE`) — so a bare run needs no export first. They
+are never passed as a flag: the process list is world-readable, and a password
+there outlives the run.
 
 Two steps — privileged install, then the unprivileged run:
 

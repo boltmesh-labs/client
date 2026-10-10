@@ -737,8 +737,8 @@ String _requireEnv(String name) {
   if (value == null || value.isEmpty) {
     fail(
       '$name is not set. The staging credentials go through the environment, '
-      'never a flag or a checked-in file; source tool/e2e/.env.e2e or export '
-      'them before running this.',
+      'never a flag or a checked-in file; export them, or run this through '
+      'tool/e2e/run_linux_app.sh, which loads .env.e2e automatically.',
     );
   }
   return value;

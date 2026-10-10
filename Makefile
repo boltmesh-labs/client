@@ -116,8 +116,9 @@ verify-native: ## Cross-compile the C++ pipe test and build the desktop Go modul
 verify-windows: ## Full Windows validation -- Windows host only
 	pwsh -File tool/verify_windows.ps1
 
-# Not part of `check`: this one needs a live serving node, credentials in the
-# environment, the installed helper and a display. See tool/e2e/README.md.
+# Not part of `check`: this one needs a live serving node, credentials
+# (.env.e2e or BOLTMESH_E2E_API_* in the environment), the installed helper
+# and a display. See tool/e2e/README.md.
 # Install the helper first (sudo): make e2e-install-helper.
 e2e-linux-app: ## Run the Linux desktop app end to end (live node; needs BOLTMESH_E2E_API_*)
 	tool/e2e/run_linux_app.sh
