@@ -81,6 +81,14 @@ jobs:
           channel: "stable"
           cache: true
 
+      # Flutter's native asset hooks resolve Linux desktop dependencies even
+      # when the test target itself is a VM test (cnativeapi probes GTK/X11).
+      - name: Install Linux native asset dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libx11-dev libxi-dev
+
       - name: Install dependencies
         # --enforce-lockfile fails instead of silently rewriting pubspec.lock.
         # This is the only place the lockfile is enforced; the `flutter-lockfile`
