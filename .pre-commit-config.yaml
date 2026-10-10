@@ -212,7 +212,7 @@ repos:
         # every run.
         entry: prettier --write
         language: node
-        additional_dependencies: ["prettier@3.9.9"]
+        additional_dependencies: ["prettier@3.9.10"]
         types_or: [css, javascript, jsx, ts, tsx, json, yaml, html]
         # Xcode owns the asset-catalog Contents.json files, so keep their
         # Xcode-generated layout out of prettier's way.
