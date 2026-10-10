@@ -198,7 +198,7 @@ def run_checks(module: Path, go: str, compiler: Path, sysroot: Path) -> None:
     if lint is None:
         raise RuntimeError(
             "golangci-lint v2 is required to check android/awg-native: "
-            "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2"
+            "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
         )
     for abi, goarch, target in ABIS:
         env = abi_env(compiler, sysroot, goarch, target)

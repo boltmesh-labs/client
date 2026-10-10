@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	boltmesh/stream v0.0.0
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
-	golang.org/x/sys v0.36.0
+	golang.org/x/sys v0.49.0
 )
 
 require (

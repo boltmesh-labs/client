@@ -345,7 +345,7 @@ jobs:
       # mint OIDC tokens for the release signature.
       - name: Install Syft
         id: syft
-        uses: anchore/sbom-action/download-syft@v0.24.2
+        uses: anchore/sbom-action/download-syft@v0.24.3
 
       # Source SBOM: catalogues Dart (pubspec.lock), Go (boltmeshd/go.mod) and
       # any other lockfiles at the tag. Excludes the downloaded binaries, which

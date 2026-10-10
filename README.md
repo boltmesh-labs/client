@@ -993,7 +993,7 @@ make build-darwin      # cross-compiles darwin/amd64 + darwin/arm64
 
 `make lint`, `lint-windows` and `lint-darwin` (and their pre-commit hooks) need
 **golangci-lint v2** — the v1 line is EOL and cannot target Go 1.27. Install it
-with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`
+with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0`
 (matching the version the `validate-boltmeshd` job pins); a different v2 release
 can report differently from CI.
 
