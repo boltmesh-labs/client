@@ -118,8 +118,12 @@ verify-windows: ## Full Windows validation -- Windows host only
 
 # Not part of `check`: this one needs a live serving node, credentials in the
 # environment, the installed helper and a display. See tool/e2e/README.md.
+# Install the helper first (sudo): make e2e-install-helper.
 e2e-linux-app: ## Run the Linux desktop app end to end (live node; needs BOLTMESH_E2E_API_*)
 	tool/e2e/run_linux_app.sh
+
+e2e-install-helper: ## Build and install boltmeshd from source (sudo; run before e2e-linux-app)
+	sudo tool/e2e/install_boltmeshd.sh
 
 # Also not part of `check`: needs root for Suricata, a live serving node and the
 # e2e's requirements. See tool/suricata/README.md.

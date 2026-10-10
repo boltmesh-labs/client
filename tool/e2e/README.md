@@ -34,18 +34,24 @@ evidence that the node is up.
 ## Running it
 
 Needs `flutter`, `Xvfb`, `gnome-keyring-daemon`, `secret-tool`, `python3`, and a
-Go toolchain, plus `sudo` to install the helper.
+Go toolchain, plus `sudo` for the one privileged step: installing the helper.
 
 Credentials go through the environment, never a file or a flag: the process list
 is world-readable, and a password there outlives the run.
 
+Two steps — privileged install, then the unprivileged run:
+
 ```sh
-sudo --preserve-env=BOLTMESH_E2E_API_USER,BOLTMESH_E2E_API_PASSWORD \
-  tool/e2e/run_linux_app.sh
+sudo tool/e2e/install_boltmeshd.sh
+
+tool/e2e/run_linux_app.sh
 ```
 
-It builds and installs `boltmeshd` from source, so the run always exercises the
-current helper code. It also needs this user enrolled in the `boltmesh` group.
+`install_boltmeshd.sh` is the only part that runs as root: it builds
+`boltmeshd` from source and installs it, so the run always exercises the
+current helper code. `run_linux_app.sh` runs entirely as the normal user (it
+refuses root and `sudo`, because `flutter` itself refuses root). Both need
+this user enrolled in the `boltmesh` group.
 
 `.env` supplies the API URL as `--dart-define-from-file`, the same way `make run`
 does; point it elsewhere with `ENV_FILE=staging.env`.

@@ -3,6 +3,10 @@
 # signing in against the real API and connecting through the real privileged
 # boltmeshd. See README.md for what the run covers.
 #
+# Runs entirely as the normal user. The privileged helper is installed by
+# `tool/e2e/install_boltmeshd.sh` (sudo), which must run first; this script
+# refuses root because `flutter` itself refuses root.
+#
 # Everything below exists to make that possible on a headless lab box. None of
 # it is part of the app:
 #
@@ -15,6 +19,11 @@
 # Credentials come from the environment, never a flag: the process list is
 # world-readable and a password there outlives the run.
 set -euo pipefail
+
+[[ $EUID -ne 0 ]] \
+  || { printf 'e2e: run_linux_app.sh must NOT run as root (flutter refuses root); install the helper first with: sudo tool/e2e/install_boltmeshd.sh\n' >&2; exit 1; }
+[[ -n ${SUDO_UID:-} ]] \
+  && { printf 'e2e: run_linux_app.sh must NOT run under sudo; install the helper first with: sudo tool/e2e/install_boltmeshd.sh\n' >&2; exit 1; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 client_repo="$(cd "$here/../.." && pwd)"
@@ -49,23 +58,14 @@ for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null || die "$tool is required but not installed"
 done
 
-# --- build and install the helper --------------------------------------------
-# The app talks to the *running* systemd helper, so a stale install tests stale
-# protocol code. Build from source and install it here so the run always
-# exercises the current tree.
-log "building boltmeshd from source"
-(cd "$client_repo/boltmeshd" && CGO_ENABLED=0 go build -trimpath -o "$workdir/boltmeshd" ./cmd/boltmeshd)
-
-log "installing boltmeshd (needs sudo)"
-sudo install -Dm755 "$workdir/boltmeshd" /usr/libexec/boltmesh/boltmeshd
-sudo systemctl restart boltmeshd.service
-# Wait for the socket to come back up
-for _ in $(seq 1 40); do
-  [[ -S /run/boltmesh/boltmeshd.sock ]] && break
-  sleep 0.25
-done
+# --- the privileged helper ---------------------------------------------------
+# Installed by `tool/e2e/install_boltmeshd.sh` (sudo), which must run first:
+# the app talks to the *running* systemd helper, so a stale install tests
+# stale protocol code, and the installer rebuilds from source so the run
+# always exercises the current tree. This script only checks the socket is up
+# and this user may speak to it; it never elevates.
 [[ -S /run/boltmesh/boltmeshd.sock ]] \
-  || die "boltmeshd socket did not come up after restart"
+  || die "no /run/boltmesh/boltmeshd.sock: install it first with: sudo tool/e2e/install_boltmeshd.sh"
 id -nG | tr ' ' '\n' | grep -qx boltmesh \
   || die "this user is not in the boltmesh group: run boltmesh-enroll-user (SETUP.md §4)"
 
@@ -173,6 +173,7 @@ BOLTMESH_E2E_API_PASSWORD="$api_password" \
 BOLTMESH_E2E_SHOT_DIR="$shot_dir" \
   flutter test integration_test/linux_app_e2e.dart \
     -d linux \
-    --dart-define-from-file="$env_file"
+    --dart-define-from-file="$env_file" \
+    --no-enable-impeller
 
 log "e2e PASSED — screenshots in $shot_dir"
