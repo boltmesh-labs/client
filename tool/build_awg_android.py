@@ -223,10 +223,10 @@ def main() -> None:
 
     go = shutil.which("go")
     if go is None:
-        raise RuntimeError("Go 1.26 is required to build the Android AWG library")
+        raise RuntimeError("Go 1.27 is required to build the Android AWG library")
     go_version = subprocess.check_output([go, "version"], text=True).split()[2]
-    if not go_version.startswith("go1.26"):
-        raise RuntimeError(f"Android AWG requires Go 1.26, found {go_version}")
+    if not go_version.startswith("go1.27"):
+        raise RuntimeError(f"Android AWG requires Go 1.27, found {go_version}")
 
     ndk = resolve_ndk(args.ndk)
     compiler, sysroot = toolchain_for(ndk)

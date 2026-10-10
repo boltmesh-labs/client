@@ -145,7 +145,7 @@ val buildAwgAndroidNative = tasks.register<Exec>("buildAwgAndroidNative") {
     // rebuild the native library too, not just the Dart side.
     inputs.dir(rootProject.file("../stream"))
     inputs.file(awgBuildScript)
-    inputs.property("goVersion", "1.26")
+    inputs.property("goVersion", "1.27")
     inputs.property("ndkVersion", awgNdkVersion)
     outputs.dir(awgJniLibsDir)
     doFirst {

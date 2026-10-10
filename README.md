@@ -395,7 +395,7 @@ the build.
 
 Prereqs: Visual Studio 2022 with the "Desktop development with C++" workload,
 [Inno Setup 7](https://jrsoftware.org/isdl.php) (the `iscc` compiler; use the
-64-bit edition, which installs to `C:\Program Files\Inno Setup 7`), and Go 1.26
+64-bit edition, which installs to `C:\Program Files\Inno Setup 7`), and Go 1.27
 (to build `boltmeshd.exe`; the `windows-exe` pre hook does this).
 
 **Inno Setup 7 needs `INNO_SETUP_PATH`.** `flutter_app_packager` resolves
@@ -992,7 +992,7 @@ make build-darwin      # cross-compiles darwin/amd64 + darwin/arm64
 ```
 
 `make lint`, `lint-windows` and `lint-darwin` (and their pre-commit hooks) need
-**golangci-lint v2** — the v1 line is EOL and cannot target Go 1.26. Install it
+**golangci-lint v2** — the v1 line is EOL and cannot target Go 1.27. Install it
 with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2`
 (matching the version the `validate-boltmeshd` job pins); a different v2 release
 can report differently from CI.

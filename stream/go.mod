@@ -8,4 +8,4 @@
 // `replace`, so there is a single implementation and one golden-vector suite.
 module boltmesh/stream
 
-go 1.26.0
+go 1.27

@@ -3,7 +3,7 @@
 ## Build and attach the emulator
 
 The Android AWG JNI library is built from `android/awg-native` during each APK
-build. Requirements: Flutter 3.47.x, JDK 21, Go 1.26, Android SDK/build-tools
+build. Requirements: Flutter 3.47.x, JDK 21, Go 1.27, Android SDK/build-tools
 36, and NDK `28.2.13676358`.
 
 ```bash
