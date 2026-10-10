@@ -7,7 +7,11 @@ extension ConnectionProvision on ConnectionController {
     int? sessionEpoch,
   }) async {
     final expectedSession = sessionEpoch ?? _sessionEpoch;
-    bool sessionCurrent() => expectedSession == _sessionEpoch;
+    // A Notifier can be disposed while a storage/API future is pending (for
+    // example when its ProviderContainer is torn down). The session epoch
+    // only covers auth changes while this provider is alive; include the
+    // provider lifecycle so no continuation reads/writes state after dispose.
+    bool sessionCurrent() => _sessionIsCurrent(expectedSession);
     if (!sessionCurrent()) return;
     snap = snap.copyWith(phase: ConnPhase.working, message: 'Provisioning…');
     try {

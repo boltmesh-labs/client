@@ -36,9 +36,13 @@ final regionsProvider = FutureProvider.autoDispose<List<Region>>((ref) async {
   final api = ref.watch(vpnApiProvider);
   try {
     final regions = await api.regions();
+    if (!ref.mounted) return regions;
     ref.keepAliveFor(Env.regionsCacheTtl);
     return regions;
   } catch (e) {
+    // Auto-dispose may run while the request is pending. Don't touch the Ref
+    // again or report a failed refresh for work whose consumer went away.
+    if (!ref.mounted) rethrow;
     AppLog.error('regions refresh failed', e);
     rethrow;
   }

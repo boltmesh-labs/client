@@ -1,6 +1,8 @@
 part of 'connection_controller.dart';
 
 extension ConnectionColdStart on ConnectionController {
+  bool _coldSessionCurrent(int epoch) => _sessionIsCurrent(epoch);
+
   /// Foreground-resume catch-up (Option A). No timers: runs once per
   /// `resumed` event while connected. Always runs the backend-free health
   /// tick first (restores stale handshakes via the existing heal chain),
@@ -51,6 +53,7 @@ extension ConnectionColdStart on ConnectionController {
   /// leave the previous state.
   Future<void> _reconcileColdStartOp() async {
     final sessionEpoch = _sessionEpoch;
+    if (!_coldSessionCurrent(sessionEpoch)) return;
     if (snap.phase != ConnPhase.idle && snap.phase != ConnPhase.working) {
       return;
     }
@@ -65,7 +68,7 @@ extension ConnectionColdStart on ConnectionController {
     if (id == null) return;
     // Re-check after the await: a user op or auth transition may have taken
     // over meanwhile.
-    if (sessionEpoch != _sessionEpoch ||
+    if (!_coldSessionCurrent(sessionEpoch) ||
         (snap.phase != ConnPhase.idle && snap.phase != ConnPhase.working)) {
       return;
     }
@@ -76,7 +79,7 @@ extension ConnectionColdStart on ConnectionController {
       AppLog.error('cold restore tunnel init failed', e);
       return;
     }
-    if (sessionEpoch != _sessionEpoch ||
+    if (!_coldSessionCurrent(sessionEpoch) ||
         (snap.phase != ConnPhase.idle && snap.phase != ConnPhase.working)) {
       return;
     }
@@ -95,11 +98,11 @@ extension ConnectionColdStart on ConnectionController {
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
     }
-    if (sessionEpoch != _sessionEpoch) return;
+    if (!_coldSessionCurrent(sessionEpoch)) return;
     final read = stage;
     if (read == null) {
       final cached = await _readCachedDial(id);
-      if (sessionEpoch != _sessionEpoch) return;
+      if (!_coldSessionCurrent(sessionEpoch)) return;
       if (cached == null) {
         AppLog.info('cold restore stage unknown, no cache -> idle');
         return;
@@ -130,7 +133,7 @@ extension ConnectionColdStart on ConnectionController {
     // corrected by the existing watchdogs (stage stream via [_noteStage],
     // health ticks) once the confirm succeeds.
     final cached = await _readCachedDial(id);
-    if (sessionEpoch != _sessionEpoch) return;
+    if (!_coldSessionCurrent(sessionEpoch)) return;
     if (cached == null) {
       AppLog.info('cold restore stage=${read.name}, no cache -> idle');
       return;
@@ -157,7 +160,7 @@ extension ConnectionColdStart on ConnectionController {
     final release = await _mutex.acquire('cold-restore');
     final sessionEpoch = expectedSession ?? _sessionEpoch;
     try {
-      if (sessionEpoch != _sessionEpoch ||
+      if (!_coldSessionCurrent(sessionEpoch) ||
           (snap.phase != ConnPhase.idle && snap.phase != ConnPhase.working)) {
         return;
       }
@@ -175,7 +178,7 @@ extension ConnectionColdStart on ConnectionController {
       } catch (e) {
         AppLog.error('cold restore saved target read failed', e);
       }
-      if (sessionEpoch != _sessionEpoch) return;
+      if (!_coldSessionCurrent(sessionEpoch)) return;
       final transitional = isColdTransitionalStage(stage);
       DialParams? cached;
       // True when the read says the OS tunnel is already gone: a cold
@@ -189,7 +192,7 @@ extension ConnectionColdStart on ConnectionController {
           stage == VpnStage.exiting;
       if (!transitional) {
         cached = await _readCachedDial(id);
-        if (sessionEpoch != _sessionEpoch) return;
+        if (!_coldSessionCurrent(sessionEpoch)) return;
         if (cached != null && !downRead) {
           // Optimistic Connected: the tunnel is up and the label is fresh
           // enough to show while server truth is confirmed below. Polling
@@ -250,7 +253,7 @@ extension ConnectionColdStart on ConnectionController {
           id,
           sessionEpoch: sessionEpoch,
         );
-        if (sessionEpoch != _sessionEpoch) return;
+        if (!_coldSessionCurrent(sessionEpoch)) return;
         dial = reconciled.dial;
         rebound = reconciled.rebound;
       } on DioException catch (e) {
@@ -265,21 +268,21 @@ extension ConnectionColdStart on ConnectionController {
           // bind (cleared only on true 404 below).
           AppLog.info('cold restore $kind -> stop stale tunnel');
           await _stopTunnel('cold-start-stale');
-          if (sessionEpoch != _sessionEpoch) return;
+          if (!_coldSessionCurrent(sessionEpoch)) return;
           if (kind == ApiErrorKind.notFound) {
             try {
               await _wipeDevice();
             } catch (e) {
               AppLog.error('cold restore clear device failed', e);
             }
-            if (sessionEpoch != _sessionEpoch) return;
+            if (!_coldSessionCurrent(sessionEpoch)) return;
           } else {
             // Peerless: the device is kept for a fresh bind, but the cached
             // dial points at the peer the server just reported gone — drop
             // it so the next offline cold start can't optimistically restore
             // or sit verifying that dead session.
             await _clearCachedDial();
-            if (sessionEpoch != _sessionEpoch) return;
+            if (!_coldSessionCurrent(sessionEpoch)) return;
           }
           _stopPolling();
           _resetLocalHealth();
@@ -298,7 +301,7 @@ extension ConnectionColdStart on ConnectionController {
         _coldRestore.armed = true;
         return;
       } catch (e) {
-        if (sessionEpoch != _sessionEpoch) return;
+        if (!_coldSessionCurrent(sessionEpoch)) return;
         AppLog.error('cold restore confirm failed', e);
         _coldRestore.armed = true;
         return;
@@ -309,7 +312,7 @@ extension ConnectionColdStart on ConnectionController {
       } catch (e) {
         AppLog.error('cold restore persist dial failed', e);
       }
-      if (sessionEpoch != _sessionEpoch) return;
+      if (!_coldSessionCurrent(sessionEpoch)) return;
       // An unpinned (Auto) state stays unpinned here: the restored dial
       // labels the session while the pin remains empty, so later connects
       // re-pick fresh instead of sticking to the restored server.
@@ -327,13 +330,13 @@ extension ConnectionColdStart on ConnectionController {
         // tears down to idle instead; a rebind never does (the peer is
         // confirmed, only its key changed).
         final alive = rebound ? null : await _coldRestoreAlive(dial);
-        if (sessionEpoch != _sessionEpoch) return;
+        if (!_coldSessionCurrent(sessionEpoch)) return;
         if (!rebound && alive == false) {
           AppLog.info(
             'cold restore down-read corroborated dead -> ghost-kill + idle',
           );
           await _stopTunnel('cold-start-dead');
-          if (sessionEpoch != _sessionEpoch) return;
+          if (!_coldSessionCurrent(sessionEpoch)) return;
           _stopPolling();
           _resetLocalHealth();
           _coldRestore.clear();
@@ -367,12 +370,12 @@ extension ConnectionColdStart on ConnectionController {
         await _stopTunnel(
           rebound ? 'cold-restore-rebind' : 'cold-restore-bounce',
         );
-        if (sessionEpoch != _sessionEpoch) return;
+        if (!_coldSessionCurrent(sessionEpoch)) return;
         try {
           await _startWith(dial, sessionEpoch: sessionEpoch);
-          if (sessionEpoch != _sessionEpoch) return;
+          if (!_coldSessionCurrent(sessionEpoch)) return;
         } catch (e) {
-          if (sessionEpoch != _sessionEpoch) return;
+          if (!_coldSessionCurrent(sessionEpoch)) return;
           final vpnErr = asVpnError(e);
           AppLog.error('cold restore restart failed', vpnErr?.message ?? e);
           snap = snap.copyWith(
@@ -385,7 +388,7 @@ extension ConnectionColdStart on ConnectionController {
         }
         return;
       }
-      if (sessionEpoch != _sessionEpoch) return;
+      if (!_coldSessionCurrent(sessionEpoch)) return;
       _promoteColdRestore(dial, verified: false);
     } finally {
       release();

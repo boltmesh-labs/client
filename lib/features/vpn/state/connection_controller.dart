@@ -107,6 +107,10 @@ class ConnectionController extends Notifier<ConnState> {
   /// capture it before any network/storage await and refuse to start a tunnel
   /// again after a revocation (or a subsequent login) has superseded them.
   int _sessionEpoch = 0;
+  bool _disposed = false;
+
+  bool _sessionIsCurrent(int epoch) =>
+      ref.mounted && !_disposed && epoch == _sessionEpoch;
 
   /// Bumped on every explicit teardown: Disconnect, Reset/Forget-device, and
   /// session revocation. A lock-free operation spanning awaits — Quick
@@ -377,6 +381,7 @@ class ConnectionController extends Notifier<ConnState> {
   @override
   ConnState build() {
     ref.onDispose(() {
+      _disposed = true;
       unawaited(_stageSub?.cancel());
       unawaited(_linkSub?.cancel());
       _stopPolling();
