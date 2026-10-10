@@ -11,10 +11,10 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show Size;
 
 import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:nativeapi/nativeapi.dart' show Size;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -104,7 +104,7 @@ class TrayManagerPlatform with WindowListener implements TrayPlatform {
         AppLog.error('tray icon asset unavailable ($_iconAsset)');
       } else {
         icon.icon = image;
-        icon.iconSize = const Size(18, 18);
+        icon.iconSize = const Size(width: 18, height: 18);
       }
       // See the library doc: Linux needs `clicked` for the menu to exist at
       // all; Windows keeps the menu on right-click so left-click can restore.

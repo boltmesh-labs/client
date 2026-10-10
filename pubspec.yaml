@@ -23,7 +23,7 @@ dependencies:
   # HTTP client for FastAPI backend.
   dio: ^5.7.0
   # Linux session-bus probe for StatusNotifier host availability.
-  dbus: ^0.7.15
+  dbus: ^0.8.0
   # Synchronous SHA-256 for the optional TLS leaf-certificate pin.
   crypto: ^3.0.0
   # State management.
@@ -32,16 +32,19 @@ dependencies:
   uuid: ^4.4.0
   flutter_web_auth_2: ^5.1.0
   # Opens the account-creation site (WEBSITE_URL) in the system browser.
-  url_launcher: ^6.3.2
+  url_launcher: ^6.3.3
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0
-  connectivity_plus: ^7.3.1
+  connectivity_plus: ^7.3.2
   # Desktop-only: intercepts the window close button and hides/shows/focuses
   # the native window (see `lib/core/desktop/`).
   window_manager: ^0.5.2
   # Desktop-only tray/menu-bar icon: StatusNotifier on Linux, notification-area
   # on Windows, status item on macOS.
-  tray_manager: ^0.7.0
+  tray_manager: ^0.8.0
+  # Direct use only for nativeapi's Size in the desktop tray icon setup (the
+  # iconSize setter takes nativeapi's type since tray_manager 0.8).
+  nativeapi: ^0.5.2
 
 dev_dependencies:
   flutter_test:
@@ -51,7 +54,7 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  build_runner: ^2.16.1
+  build_runner: ^2.16.2
   freezed: ^4.0.1
   json_serializable: ^6.14.1
   flutter_launcher_icons: ^0.14.4
