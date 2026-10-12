@@ -82,8 +82,14 @@ token lacks that group — one started over SSH, by a service, or by an ordinary
 scheduled task — cannot open the pipe at all. When the script is not already in
 the interactive session it therefore re-executes itself there through a
 limited-privilege scheduled task, streams the log, and reports the exit code.
-That is also why it never elevates the app: the point of the run is that the
-unprivileged GUI talks to the privileged helper.
+The stream is a PowerShell transcript, which flushes in chunks, so it can sit
+unchanged for minutes while the run is fine — which reads exactly like a hang.
+The relaunching run therefore prints a heartbeat naming the newest screenshot,
+and the screenshots are the honest clock: they land on disk at each stage, well
+before the transcript catches up. The full transcript is left at
+`%TEMP%\boltmesh-windows-app-e2e\run.log`. That is also why it never elevates
+the app: the point of the run is that the unprivileged GUI talks to the
+privileged helper.
 
 Each platform stops before a run it cannot usefully do: a stopped helper on
 Windows is one the app cannot reach (there is no socket activation), and a
@@ -146,9 +152,13 @@ process and one store, so the session and the device identity carry across them
    plane, and an in-tunnel ping to that rung's own node address with no loss.
    Finishes with one power-control disconnect that must leave `boltmesh0` gone.
 3. **switches server** — connects, then picks a *different* server in the
-   Regions tab and asserts the live dial moved to it. With only one server on
-   offer there is nothing to switch *to*, so it exercises Quick Connect instead
-   and says which path it took.
+   Regions tab and asserts the live dial moved to it. The wait is on the
+   controller's own arc, which only reaches `connected` again once the daemon
+   reports a new handshake; the run then pings the *new* node's tunnel address,
+   so a switch that reported success over a dead peer fails here rather than
+   quietly leaving the rest of the run measuring the old tunnel. With only one
+   server on offer there is nothing to switch *to*, so it exercises Quick
+   Connect instead and says which path it took.
 4. **logs out** — connects first, so logout has a live tunnel to tear down, then
    signs out and asserts the login screen is back and the interface is gone.
 

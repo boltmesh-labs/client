@@ -288,6 +288,10 @@ function Invoke-E2ERun {
     $apiBase = $defines['API_BASE_URL']
     if (-not $apiBase) { die "$EnvFile sets no API_BASE_URL" }
 
+    # Resolved before anything is mutated, so a missing credential fails before
+    # this run deletes the app's stored session or the account's devices.
+    $credentials = Resolve-Credentials
+
     if (Test-Elevated) {
         # The app is meant to be unprivileged: every privileged read goes
         # through the helper. Elevated, the run would still pass while proving
@@ -303,13 +307,24 @@ function Invoke-E2ERun {
 
     if (-not $SkipClearDevices) {
         Write-Host "`n==> clearing the account's devices" -ForegroundColor Cyan
-        Clear-Devices $apiBase (Resolve-Credentials) $python
+        Clear-Devices $apiBase $credentials $python
     }
 
     Write-Host "`n==> running the Windows app end to end" -ForegroundColor Cyan
+    Write-Host "  credentials: $($credentials.User) (password from the environment)"
     Write-Host "  defines:     $EnvFile"
     Write-Host "  screenshots: $shotDir"
+    # Cleared, not appended to: the screenshots are also the relaunching run's
+    # progress signal, and a stale file from a previous run would be reported as
+    # this one's last stage.
+    Remove-Item (Join-Path $shotDir '*') -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $shotDir -Force | Out-Null
+
+    # The test reads the pair from its own environment, the way
+    # run_linux_app.sh passes them: never on a command line, and the same
+    # names the test's `_requireEnv` looks for.
+    $env:BOLTMESH_E2E_API_USER = $credentials.User
+    $env:BOLTMESH_E2E_API_PASSWORD = $credentials.Password
 
     $env:BOLTMESH_E2E_SHOT_DIR = $shotDir
     $code = Invoke-Native { & flutter test integration_test/app_e2e.dart -d windows --dart-define-from-file $EnvFile }
@@ -385,7 +400,16 @@ function Invoke-InSession {
         }
         if (-not $started) { die "the relaunched run never started (task state: $state)" }
         Write-Host "  relaunched run is up; streaming $LogFile" -ForegroundColor DarkGray
+        Write-Host "  (the transcript is written in chunks, so progress below can lag by minutes)" -ForegroundColor DarkGray
 
+        # The transcript gives no liveness of its own: Start-Transcript buffers,
+        # so the log can sit unchanged for minutes while the run is fine - which
+        # reads exactly like a hang. The screenshots are the honest clock: they
+        # land on disk at each stage, well before the transcript catches up, so
+        # a heartbeat naming the newest one says "working" without pretending
+        # the buffer is empty for a reason.
+        $startedAt = Get-Date
+        $lastBeat = $startedAt
         $shown = 0
         while ((Get-Date) -lt $deadline) {
             if (Test-Path -LiteralPath $LogFile) {
@@ -397,6 +421,18 @@ function Invoke-InSession {
             }
             $state = (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).State
             if ($state -ne 'Running') { break }
+            if (((Get-Date) - $lastBeat).TotalSeconds -ge 30) {
+                $elapsed = [int]((Get-Date) - $startedAt).TotalSeconds
+                # Only this run's screenshots: the shots directory is cleared
+                # before the run, but a file's age is the honest test of whether
+                # it belongs to this one.
+                $newest = Get-ChildItem $shotDir -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -gt $startedAt } |
+                    Sort-Object LastWriteTime | Select-Object -Last 1
+                $where = if ($newest) { "last stage: $($newest.Name)" } else { 'no stage screenshot yet' }
+                Write-Host "  ... still running (${elapsed}s); $where" -ForegroundColor DarkGray
+                $lastBeat = Get-Date
+            }
             Start-Sleep -Seconds 2
         }
 

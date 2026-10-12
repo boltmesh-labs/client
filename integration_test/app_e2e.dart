@@ -38,6 +38,7 @@
 
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -209,6 +210,7 @@ void main() {
   testWidgets('switches server', (tester) async {
     await _launch(tester);
     final container = _container(tester);
+    final ctl = container.read(connectionProvider.notifier);
     ConnState state() => container.read(connectionProvider);
 
     addTearDown(_noTunnelLeftBehind);
@@ -318,6 +320,33 @@ void main() {
         diagnose: state,
       );
     }
+
+    // --- the moved tunnel really carries traffic --------------------------
+    // The wait above is satisfied by the controller's own arc — it raises
+    // `connected` only once the daemon reports a new handshake — but a GUI run
+    // should be able to say a packet reached the *new* server, which is what a
+    // human would ask. Pinging the destination is the check; the byte counters
+    // are not, because they can carry the previous server's total across a
+    // restart. The address follows the rung the switch landed on, exactly as
+    // the ladder's ping does.
+    final movedIp = _rungNodeIp(state(), ctl.transportRung);
+    expect(
+      movedIp,
+      isNotNull,
+      reason: 'the switched dial must carry the node\'s address as well',
+    );
+    final movedPing = await Process.run('ping', _host.pingArgs(movedIp!));
+    // ignore: avoid_print
+    print(
+      'e2e: in-tunnel ping $movedIp after the switch -> ${movedPing.exitCode}\n'
+      '${(movedPing.stdout as String).trim()}',
+    );
+    expect(
+      movedPing.exitCode,
+      isZero,
+      reason: 'the switched tunnel must pass traffic to its new server',
+    );
+    expect((movedPing.stdout as String), contains(_host.zeroLossMarker));
     await _shot('06-switched');
 
     expect(state().phase, ConnPhase.connected);
@@ -545,10 +574,14 @@ class _WindowsHost extends _Host {
   @override
   Future<int?> kernelReceivedBytes() async {
     // There is no `wg show` on Windows, and the obfuscated rung's Wintun
-    // device has no kernel counters to read at all. The daemon's own `status`
-    // is the counters then — it reads them off the data plane it owns — and it
-    // is also a read from a different process than the app's, which is the
-    // point of having one.
+    // device has no kernel counters at all: what the daemon reports is whatever
+    // the data plane it owns says — read through wireguard.dll on the native
+    // rung, and the device's own UAPI dump on the obfuscated one. So these are
+    // the same numbers as the app's counters, read by a second, non-Flutter
+    // client over the production transport. That is worth having (it is what
+    // exercises `client.py --pipe` against the real daemon, and it fails
+    // loudly when the daemon cannot read the device at all), but it is not the
+    // independent kernel view the Linux line is.
     final status = await _daemonStatus();
     final rx = status?['rxBytes'];
     return rx is int ? rx : null;
@@ -564,9 +597,15 @@ class _WindowsHost extends _Host {
   Future<void> screenshot(String path) async {
     // No X display and no ImageMagick on a stock Windows box: capture the
     // primary screen, which is where the app's window is.
+    //
+    // `-ExecutionPolicy Bypass` because a default box is often Restricted,
+    // which refuses to load a script file at all — `-File` is what the policy
+    // governs, not `-Command`, so the probes above are unaffected.
     final here = Directory.current.path;
     final result = await Process.run('powershell', [
       '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
       '-File',
       '$here/tool/e2e/screenshot.ps1',
       '-Path',
@@ -761,27 +800,46 @@ Future<void> _connect(WidgetTester tester, ConnState Function() state) async {
 /// `config` (a read) and `_startWith` replaces the tunnel locally. A GUI
 /// disconnect+connect per rung would instead spend two more of the backend's
 /// shared per-IP write budget each time, which the walk cannot afford.
+///
+/// The wait is on the connect *future*, not on the phase leaving `connected`.
+/// The controller does raise `working` at the top of its connect, but a warm
+/// rung change runs that whole arc — config, tunnel start, LAN handshake and
+/// back to `connected` — inside one 200ms poll, so a sampled dip is a race: it
+/// held on a cold box and timed out on a warm one. The future completes exactly
+/// when the restart has run to completion, which is what this needs to know.
 Future<void> _reconnect(
   WidgetTester tester,
   ConnectionController ctl,
   ConnState Function() state,
 ) async {
   final restarted = ctl.connect();
-  await _pumpUntil(
-    tester,
-    'the tunnel to leave the connected phase for the restart',
-    () => state().phase != ConnPhase.connected,
-    timeout: const Duration(seconds: 30),
-    diagnose: state,
+  // Keep frames coming while the restart runs — the app schedules its own work
+  // per frame — but let the future be the signal. `await restarted` at the end
+  // is what surfaces a failure; this subscription only reports completion.
+  final finished = Completer<void>();
+  unawaited(
+    restarted.then(
+      (_) => finished.complete(),
+      onError: (Object _) => finished.complete(),
+    ),
   );
   await _pumpUntil(
     tester,
-    'the tunnel to come back up on the next rung',
-    () => state().phase == ConnPhase.connected,
+    'the restart to run to completion',
+    () => finished.isCompleted,
     timeout: _connectTimeout,
     diagnose: state,
   );
   await restarted;
+  // A connect that failed without throwing lands in `error`; this turns that
+  // into the phase assertion below rather than a puzzling ping failure.
+  await _pumpUntil(
+    tester,
+    'the tunnel to report connected on the new rung',
+    () => state().phase == ConnPhase.connected,
+    timeout: _connectTimeout,
+    diagnose: state,
+  );
 }
 
 /// Ensures the app is signed in, signing in through the form if it has to.
