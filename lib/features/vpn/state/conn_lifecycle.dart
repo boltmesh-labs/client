@@ -28,11 +28,14 @@ extension ConnectionLifecycle on ConnectionController {
   /// cannot trap the user still catch, but they log the second failure instead
   /// of treating the wipe as done.
   Future<void> _wipeDevice() async {
+    // Resolve the store once: the retry below must not re-read a provider the
+    // container may have disposed in the meantime.
+    final device = _device;
     try {
-      await _device.clearDevice();
+      await device.clearDevice();
     } catch (e) {
       AppLog.error('device wipe failed, retrying', e);
-      await _device.clearDevice();
+      await device.clearDevice();
     }
   }
 
@@ -81,6 +84,12 @@ extension ConnectionLifecycle on ConnectionController {
   Future<void> _teardownRevokedSession(int sessionEpoch) async {
     final release = await _mutex.acquire('session-revoked');
     try {
+      // The container can be disposed at any point between the listener
+      // queueing this cleanup and the last await below (app shutdown, or a
+      // harness unmounting the tree right after the logout that queued it).
+      // Every step here reads providers through `ref` and the terminal write
+      // touches `state`, so re-check liveness before each of them.
+      if (!_alive) return;
       // An in-flight lock-free discovery/probe belonging to the revoked
       // session must not dial once this queued teardown has run.
       _teardownEpoch++;
@@ -96,11 +105,13 @@ extension ConnectionLifecycle on ConnectionController {
       } catch (e) {
         AppLog.error('session-revoked stop failed', e);
       }
+      if (!_alive) return;
       try {
         await _wipeDevice();
       } catch (e) {
         AppLog.error('session-revoked clear device failed', e);
       }
+      if (!_alive) return;
       // An operation that was already inside _startWith may have published a
       // connected/working snapshot after the listener reset the state. Make
       // the terminal state authoritative after the serialized cleanup.

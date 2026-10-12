@@ -31,6 +31,21 @@ class _Tunnel extends support.FakeTunnel {
   _Tunnel(List<String> events) : super(events: events);
 }
 
+/// Tunnel whose stop parks until the test releases it, so the container can be
+/// disposed while the cleanup is inside the stop — the shape the app e2e hits
+/// when the harness unmounts the tree right after the logout that queued it.
+class _StoppingTunnel extends _Tunnel {
+  _StoppingTunnel(super.events, {required this.onStop});
+
+  final Future<void> Function() onStop;
+
+  @override
+  Future<void> stopVpn() async {
+    events.add('tunnel:stop');
+    await onStop();
+  }
+}
+
 Future<(ProviderContainer, _AuthDouble, _Store, List<String>)>
 connected() async {
   final events = <String>[];
@@ -85,6 +100,39 @@ void main() {
     expect(events, contains('tunnel:stop'));
     expect(await store.deviceId(), isNull);
   });
+
+  // The queued cleanup is only reachable through `ref`, and the container can
+  // go away before it runs (app shutdown) or while it awaits the stop (a
+  // harness unmounting the tree right after logout). It must then finish
+  // without touching the disposed Ref: an unhandled UnmountedRefException
+  // fails this test, and a leaked op mutex times it out.
+  test(
+    'session revocation teardown survives disposal while stopping',
+    () async {
+      final (container, auth, _, events) = await connected();
+      final ctl = container.read(connectionProvider.notifier);
+      final stopStarted = Completer<void>();
+      final letStopFinish = Completer<void>();
+      ctl.debugTunnel = _StoppingTunnel(
+        events,
+        onStop: () async {
+          if (!stopStarted.isCompleted) stopStarted.complete();
+          await letStopFinish.future;
+        },
+      );
+
+      auth.revoke();
+      await stopStarted.future;
+
+      container.dispose();
+      letStopFinish.complete();
+
+      final release = await ctl
+          .debugAcquireMutex('after-dispose')
+          .timeout(const Duration(seconds: 1));
+      release();
+    },
+  );
 
   test(
     'an invalidated connect cannot publish a tunnel after revocation',

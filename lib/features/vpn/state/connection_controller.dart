@@ -109,8 +109,14 @@ class ConnectionController extends Notifier<ConnState> {
   int _sessionEpoch = 0;
   bool _disposed = false;
 
-  bool _sessionIsCurrent(int epoch) =>
-      ref.mounted && !_disposed && epoch == _sessionEpoch;
+  /// True while this notifier can still read `ref`-backed providers and publish
+  /// `state`. False once its container was disposed, after which every
+  /// `ref.read` and `state =` throws `UnmountedRefException`. Anything that can
+  /// outlive the container — a queued teardown, a slow adapter call — must
+  /// re-check this on the far side of an await before touching either.
+  bool get _alive => ref.mounted && !_disposed;
+
+  bool _sessionIsCurrent(int epoch) => _alive && epoch == _sessionEpoch;
 
   /// Bumped on every explicit teardown: Disconnect, Reset/Forget-device, and
   /// session revocation. A lock-free operation spanning awaits — Quick

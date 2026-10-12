@@ -73,10 +73,17 @@ extension ConnectionTunnel on ConnectionController {
     _tunnelEpoch++;
     final gen = _tunnelEpoch;
     AppLog.info('tunnel stop ($reason) gen=$gen');
-    await _tunnel.stop(reason);
-    // Best-effort: no-op when nothing survives, real DOWN when a ghost does.
-    // Never throws (see [TunnelAdapter.killGhost]).
-    await _tunnel.killGhost();
+    // Resolve the adapter once, while the Ref may still be live: this can run
+    // from a teardown that outlives its container (see
+    // [_teardownRevokedSession]), and a second `_tunnel` read after the await
+    // would hit a disposed provider.
+    final tunnel = _tunnel;
+    await tunnel.stop(reason);
+    // The container can be disposed while the stop awaited. The stop above is
+    // the authoritative part; the ghost-kill is best effort (a no-op when
+    // nothing survives, a real DOWN when a ghost does, and it never throws —
+    // see [TunnelAdapter.killGhost]), so skip it rather than read a dead Ref.
+    if (_alive) await tunnel.killGhost();
     AppLog.info('tunnel stopped ($reason) gen=$gen');
   }
 
