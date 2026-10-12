@@ -231,8 +231,10 @@ python3 tool/e2e/test_harness.py
 A fixture that reports PASS while exercising nothing is worse than no fixture, so
 these cover the helper protocol `client.py` speaks — over the unix socket on
 Linux and the named pipe on Windows, where a `ctypes` `CreateNamedPipe` server
-stands in for the daemon — and the device clearing the runners do before the app
-starts.
+stands in for the daemon — the device clearing the runners do before the app
+starts, and one static check on the Windows runner scripts: a Python-style
+docstring there is not a docstring but a bare string expression, whose value
+joins the enclosing function's output and quietly corrupts what it returns.
 
 ## What it does not prove
 

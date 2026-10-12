@@ -470,5 +470,34 @@ class ClearDevicesTest(unittest.TestCase):
         self.assertEqual([c for c in calls if c[0] in ("DELETE", "POST")], [])
 
 
+class WindowsScriptTest(unittest.TestCase):
+    """Guards the Windows runner scripts against a PowerShell trap.
+
+    `\"\"\"text\"\"\"` is a docstring in Python but a *bare string expression* in
+    PowerShell: its value joins the enclosing function's output, so a function
+    that looks like it returns a parsed table returns that string first, and
+    the caller reads a nonsense value from a script that looks correct. It has
+    already cost a debugging round here - `run_windows_app.ps1` decided `.env`
+    set no API_BASE_URL, on the one host where the script can actually run - so
+    it is worth a static look before that round is repeated.
+    """
+
+    def test_no_python_style_docstrings(self) -> None:
+        offenders = []
+        for script in sorted(_HERE.glob("*.ps1")):
+            for number, line in enumerate(
+                script.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                stripped = line.strip()
+                if stripped.startswith('"""') or stripped.startswith("'''"):
+                    offenders.append(f"{script.name}:{number}: {stripped[:60]}")
+        self.assertEqual(
+            offenders,
+            [],
+            "a Python-style docstring in PowerShell is emitted into the "
+            "function's return value; use # comments instead",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

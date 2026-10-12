@@ -132,7 +132,12 @@ function Invoke-Native([scriptblock] $command) {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $command
+        # `| Out-Host` keeps the command's own output out of this function's
+        # return value - the exit code is the only thing it returns - while
+        # still showing it in the console and in a transcript. Without it the
+        # value is an array of the output followed by the code, which then
+        # reads as "failed" for a command that succeeded.
+        & $command | Out-Host
         return $LASTEXITCODE
     }
     finally {
@@ -155,6 +160,17 @@ function Test-InteractiveToken {
     return $sids -contains 'S-1-5-4'
 }
 
+# The account this process runs as, in DOMAIN\name form.
+#
+# Deliberately not "$env:USERDOMAIN\$env:USERNAME": in a network or service
+# logon - an SSH session, say - USERDOMAIN is WORKGROUP rather than the machine
+# name, and registering a task for `WORKGROUP\user` fails with "No mapping
+# between account names and security IDs was done". The token's own identity
+# names the account correctly for every logon type.
+function Get-AccountName {
+    return [Security.Principal.WindowsIdentity]::GetCurrent().Name
+}
+
 function Find-InteractiveSession {
     # A logged-on session with a desktop: the task this script registers can
     # only land in one of those. A disconnected RDP session still counts - it
@@ -166,8 +182,8 @@ function Find-InteractiveSession {
     return $false
 }
 
+# Reads a KEY=VALUE file, tolerating comments and quotes. Never sources it.
 function Read-KeyValues([string] $path) {
-    """Reads a KEY=VALUE file, tolerating comments and quotes. Never sources it."""
     $values = @{}
     foreach ($line in Get-Content -LiteralPath $path -ErrorAction SilentlyContinue) {
         $trimmed = "$line".Trim()
@@ -188,8 +204,8 @@ function Read-KeyValues([string] $path) {
     return $values
 }
 
+# The staging credentials: the environment wins, then a relaunch file, then .env.e2e.
 function Resolve-Credentials {
-    """The staging credentials: the environment wins, then a relaunch file, then .env.e2e."""
     if ($env:BOLTMESH_E2E_API_USER -and $env:BOLTMESH_E2E_API_PASSWORD) {
         return @{
             User = $env:BOLTMESH_E2E_API_USER
@@ -218,15 +234,14 @@ function Test-HelperRunning {
     return "$state" -match 'RUNNING'
 }
 
+# Where flutter_secure_storage keeps the app's session and device identity.
+#
+# A DPAPI-encrypted JSON file in the app's support directory, which
+# path_provider derives from this executable's CompanyName/ProductName
+# (windows/runner/Runner.rc: com.boltmesh/boltmesh). A debug build launched by
+# `flutter test` may carry no version resource at all, in which case the
+# product name falls back to the executable name - hence the second path.
 function Get-SecureStorePaths {
-    """Where flutter_secure_storage keeps the app's session and device identity.
-
-    A DPAPI-encrypted JSON file in the app's support directory, which
-    path_provider derives from this executable's CompanyName/ProductName
-    (windows/runner/Runner.rc: com.boltmesh/boltmesh). A debug build launched
-    by `flutter test` may carry no version resource at all, in which case the
-    product name falls back to the executable name - hence the second path.
-    """
     $appData = [Environment]::GetFolderPath('ApplicationData')
     return @(
         (Join-Path $appData 'com.boltmesh\boltmesh\flutter_secure_storage.dat'),
@@ -267,8 +282,8 @@ function Clear-Devices([string] $apiBase, [hashtable] $credentials, [string] $py
     if ($code -ne 0) { die "clearing the account's devices failed (exit $code)" }
 }
 
+# Runs the app end to end, here. Returns flutter's exit code.
 function Invoke-E2ERun {
-    """Runs the app end to end, here. Returns flutter's exit code."""
     $defines = Read-KeyValues $EnvFile
     $apiBase = $defines['API_BASE_URL']
     if (-not $apiBase) { die "$EnvFile sets no API_BASE_URL" }
@@ -310,8 +325,8 @@ function Invoke-E2ERun {
     return $code
 }
 
+# Re-runs this script inside the user's interactive session, via a limited task.
 function Invoke-InSession {
-    """Re-runs this script inside the user's interactive session, via a limited task."""
     if (-not (Find-InteractiveSession)) {
         die "no logged-on interactive session to run in. Log on at the console (or over RDP) and rerun, or use -NoRelaunch to run here anyway."
     }
@@ -351,7 +366,7 @@ function Invoke-InSession {
     # LogonType Interactive is the whole point: the task runs only in a
     # logged-on session, which is the only kind whose token carries the
     # Interactive Users group the pipe's DACL grants.
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    $principal = New-ScheduledTaskPrincipal -UserId (Get-AccountName) `
         -LogonType Interactive -RunLevel Limited
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2)
     Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `

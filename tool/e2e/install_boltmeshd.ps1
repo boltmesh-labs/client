@@ -88,7 +88,11 @@ function Invoke-Native([scriptblock] $command) {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $command
+        # `| Out-Host` keeps the command's own output out of this function's
+        # return value - the exit code is the only thing it returns - while
+        # still showing it in the console. Without it a caller that tests the
+        # result gets an array of the output followed by the code.
+        & $command | Out-Host
         return $LASTEXITCODE
     }
     finally {
