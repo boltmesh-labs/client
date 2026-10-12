@@ -1,5 +1,34 @@
 # Android AmneziaWG and stream test notes
 
+This is the **manual** complement to the automated end-to-end run
+(`tool/e2e/run_android_app.sh`, described in `tool/e2e/README.md`). Use the
+runner for the sign-in / ladder / switch / logout proof against a live node;
+these notes cover what it does not drive — the GUI by hand, and the
+stall/demotion a `user`-build emulator cannot induce without a server-side UDP
+block.
+
+## Known issue: SIGSEGV on the AWG → native owner switch
+
+The automated run reproduces a native crash the manual ladder never hit. Be on
+the AWG host (the obfuscated or stream rung), tear down, then start the **stock**
+plugin, and the app process dies with signal 11 right after the stock
+`GoBackend` brings `tun0` up:
+
+```text
+I/WireGuard/GoBackend: Bringing tunnel boltmesh0 UP
+I/Vpn: Established by com.boltmesh.boltmesh on tun0
+I/Zygote: Process <pid> exited due to signal 11 (Segmentation fault)
+```
+
+`AndroidTunnelAdapter.start` takes this path on its own (`switch Android VPN
+owner to stock WireGuard`), so a user moving from an obfuscated region to a
+stock one can reach it; the manual ladder walks native → awg → stream and never
+back. There is no Dart exception, and a `user`-build emulator writes no
+tombstone — reproduce on a `userdebug`/`eng` image to capture the stack. The
+prime suspect is the two-Go-runtime hazard this process already documents
+(`libwg-go.so` and `libawg-go.so` sharing one process; a thread that enters both
+dies with a SIGSEGV no handler sees).
+
 ## Build and attach the emulator
 
 The Android AWG JNI library is built from `android/awg-native` during each APK

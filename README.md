@@ -978,6 +978,8 @@ bash tool/verify_native.sh
 pwsh -File tool/verify_windows.ps1
 # Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
+# Android GUI end-to-end against a live node (attached device/emulator):
+tool/e2e/run_android_app.sh
 ```
 
 The Go helper has its own gates (`boltmeshd/`), including the two that keep the

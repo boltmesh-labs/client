@@ -1,9 +1,13 @@
 # End-to-end harness
 
-This proves the one thing unit tests cannot: that the real desktop app — Linux
-**or** Windows — driving the real privileged `boltmeshd`, brings a real
-WireGuard tunnel up to a real serving node and moves packets across it, on
-every rung the node serves.
+This proves the one thing unit tests cannot: that the real app — on Linux,
+Windows **or** Android — brings a real WireGuard tunnel up to a real serving
+node and moves packets across it, on every rung the node serves.
+
+The desktop hosts do it by driving the real privileged `boltmeshd`; Android has
+no helper and runs the same tunnel in-process over its `VpnService`, so where a
+desktop run proves the app-to-daemon boundary, an Android run proves the
+on-device path end to end.
 
 Both ends are real. The client half is the app, built from source and run under
 `integration_test/app_e2e.dart`; the node half is a **real running node** —
@@ -34,10 +38,12 @@ evidence that the node is up.
 
 ## Running it
 
-One program, `integration_test/app_e2e.dart`, runs on both platforms; only the
+One program, `integration_test/app_e2e.dart`, runs on every platform; only the
 runner differs, because what surrounds it — the helper's transport, the display,
-the keyring — is the platform's business, not the app's. Each platform below is
-two steps: privileged helper install, then the unprivileged run.
+the keyring, the device's VPN consent — is the platform's business, not the
+app's. On the desktop hosts each platform below is two steps: privileged helper
+install, then the unprivileged run. Android is one step, because the app owns
+the tunnel itself and the runner sets up the device state it needs.
 
 ### Linux
 
@@ -95,40 +101,74 @@ Each platform stops before a run it cannot usefully do: a stopped helper on
 Windows is one the app cannot reach (there is no socket activation), and a
 Linux run without the socket is the same.
 
-### Both
+### Android
+
+Needs `flutter`, `adb`, `python3`, an attached device or emulator, and an
+account on a serving node — nothing privileged, because the app owns the tunnel
+in-process rather than through a helper.
+
+```sh
+tool/e2e/run_android_app.sh
+```
+
+The runner picks the sole attached device (or `BOLTMESH_E2E_ANDROID_SERIAL` /
+`ANDROID_SERIAL` when there is more than one), then does the device setup the
+test cannot do for itself:
+
+- **Grants VPN consent.** `VpnService.prepare` pops a system dialog the first
+  time an app wants a TUN, and nothing inside the test can tap it, so the run
+  would hang on the dialog and read as a dead transport. The runner sets the
+  `ACTIVATE_VPN` appop up front, which makes `prepare` return null.
+- **Clears app data** for a fresh sign-in and device identity
+  (`BOLTMESH_E2E_KEEP_SESSION=1` keeps the store to exercise the restore path).
+- **Clears the account's devices**, exactly as the desktop runners do.
+
+The app is installed, the appop is granted, and then `flutter test` rebuilds
+and reinstalls the same package: a reinstall preserves both the appop and the
+cleared data.
+
+The credentials reach the app as `--dart-define-from-file`, not through the
+environment — the test code runs *on the device*, where the host environment
+does not exist. That embeds them in the debug APK on the emulator, which is the
+same trade the Windows relaunch makes with its work-directory file.
+
+### Credentials (every platform)
 
 Credentials are read from the environment when it carries both halves, and
 otherwise from the gitignored `.env.e2e` at the repo root (override the path
 with `BOLTMESH_E2E_CREDS_FILE`) — so a bare run needs no export first. They
 are never passed as a flag: the process list is world-readable, and a password
 there outlives the run. The relaunched Windows run receives them through a file
-in the invoking user's own work directory, which is the same trade.
+in the invoking user's own work directory, which is the same trade; the Android
+run passes them to the app with `--dart-define-from-file`.
 
 `.env` supplies the API URL as `--dart-define-from-file`, the same way `make run`
-does; point it elsewhere with `ENV_FILE=staging.env` on Linux, `-EnvFile` on
-Windows.
+does; point it elsewhere with `ENV_FILE=staging.env` on Linux and Android,
+`-EnvFile` on Windows.
 
-## Where the two hosts differ
+## Where the hosts differ
 
-The four tests above are identical on both platforms. What differs is the host,
+The four tests above are identical on every platform. What differs is the host,
 and it is all collected in one `_Host` seam at the bottom of
 `integration_test/app_e2e.dart`:
 
-| | Linux | Windows |
-| --- | --- | --- |
-| helper transport | Unix socket `--socket /run/boltmesh/boltmeshd.sock` | named pipe `--pipe \\.\pipe\boltmesh\boltmeshd` |
-| "the tunnel exists" | `ip link show boltmesh0` | the adapter table (`Get-NetAdapter -Name boltmesh0`) |
-| the data plane's counters | `wg show boltmesh0 transfer` | the daemon's own `status`, which is what a userspace AmneziaWG device gets instead of a kernel view |
-| in-tunnel ping | `ping -c 3 -W 3`, `0% packet loss` | `ping -n 3 -w 3000`, `(0% loss)` |
-| screenshots | ImageMagick `import` (the X display the app is on) | `tool/e2e/screenshot.ps1`, the primary screen |
-| a fresh session | a scratch keyring, isolated from the operator's | the app's `flutter_secure_storage.dat` removed |
-| Python interpreter | `python3` | `python` (`BOLTMESH_E2E_PYTHON` overrides both) |
+| | Linux | Windows | Android |
+| --- | --- | --- | --- |
+| helper transport | Unix socket `--socket /run/boltmesh/boltmeshd.sock` | named pipe `--pipe \\.\pipe\boltmesh\boltmeshd` | none — the app owns the `VpnService` TUN in-process |
+| "the tunnel exists" | `ip link show boltmesh0` | the adapter table (`Get-NetAdapter -Name boltmesh0`) | `NetworkInterface.list()` finds the app's `tun0` |
+| the data plane's counters | `wg show boltmesh0 transfer` | the daemon's own `status`, which is what a userspace AmneziaWG device gets instead of a kernel view | none readable — the app's counters stand, `kernelReceivedBytes` returns null |
+| in-tunnel ping | `ping -c 3 -W 3`, `0% packet loss` | `ping -n 3 -w 3000`, `(0% loss)` | `/system/bin/ping -c 3 -W 3`, `0% packet loss` |
+| screenshots | ImageMagick `import` (the X display the app is on) | `tool/e2e/screenshot.ps1`, the primary screen | none (the runner can `adb exec-out screencap -p`) |
+| a fresh session | a scratch keyring, isolated from the operator's | the app's `flutter_secure_storage.dat` removed | `pm clear` of the app |
+| Python interpreter | `python3` | `python` (`BOLTMESH_E2E_PYTHON` overrides both) | `python3` on the host, for device clearing only |
 
 The "tunnel exists" row is the one worth reading twice. The obfuscated rung on
 Windows runs an in-process AmneziaWG device over a Wintun adapter and registers
 no `boltmesh0` *service*, so a service probe would read "no tunnel" mid-ladder;
 the adapter is named `boltmesh0` on every rung, which is what makes it the
-Windows analogue of `ip link show`.
+Windows analogue of `ip link show`. Android has no such external view at all —
+`ip`, `wg` and `/proc/net/dev` are denied to the app uid — so its seam reads the
+interface table from inside the process, where the app's own tun is visible.
 
 ## The four tests
 
@@ -139,7 +179,8 @@ process and one store, so the session and the device identity carry across them
 1. **signs in** — types the real credentials into the real form and reaches the
    VPN tabs. A stored session short-circuits this and says so; each runner
    starts from a fresh store (a scratch keyring on Linux, no secure-storage
-   file on Windows), so a scripted run does drive the form.
+   file on Windows, `pm clear` on Android), so a scripted run does drive the
+   form.
 2. **walks the transport ladder native, awg, stream** — pins the controller to
    each rung in turn through its `debugForceRung` seam (a walk the health policy
    would only take on a blocked network, which a lab run cannot fabricate). The
@@ -149,8 +190,9 @@ process and one store, so the session and the device identity carry across them
    rung it waits for `connected`, checks the UI agrees (the header names the
    server, the button reads Disconnect), and asserts on bytes: the app's own
    received counter, the kernel's `wg` counters when the kernel owns the data
-   plane, and an in-tunnel ping to that rung's own node address with no loss.
-   Finishes with one power-control disconnect that must leave `boltmesh0` gone.
+   plane (Linux only; a userspace device has none, and the app's counters stand
+   in), and an in-tunnel ping to that rung's own node address with no loss.
+   Finishes with one power-control disconnect that must leave the tunnel gone.
 3. **switches server** — connects, then picks a *different* server in the
    Regions tab and asserts the live dial moved to it. The wait is on the
    controller's own arc, which only reaches `connected` again once the daemon
@@ -169,7 +211,7 @@ part-way leaves its row behind: the interface is gone, the row is not. The *next
 run then cannot provision and reports a device limit that the run reporting it
 never caused — a bad way to fail, because the run that broke is long gone.
 
-So both runner scripts delete the account's devices before the app starts, and
+So the runner scripts delete the account's devices before the app starts, and
 `tool/e2e/client.py` can do it on its own:
 
 ```sh
@@ -208,7 +250,9 @@ folklore:
   tree and its `ProviderContainer` are gone, so a controller-based net throws
   "container already disposed" and accomplishes nothing. The net does not gate on
   an interface-name probe, which a host may not be able to read, so a failed run
-  tears down exactly when it must.
+  tears down exactly when it must. Android needs no equivalent net at all: its
+  tunnel is in-process, so the `VpnService` dies with the test app rather than
+  following the device around.
 
 On Linux the app runs on a virtual display and an isolated keyring, which the
 script sets up because they are lab facts rather than app behaviour:
@@ -222,12 +266,15 @@ Session restore is exercised rather than avoided: a rerun against the same work
 directory comes up already signed in, and the test says so and skips the form.
 The device identity lives in that keyring too, so it is reused between runs,
 which the node's peer table requires — it is built from the public half the
-backend stored.
+backend stored. On Android the store is the app's own (cleared per run unless
+`BOLTMESH_E2E_KEEP_SESSION=1`), so the same rerun-with-restore applies there.
 
 `BOLTMESH_E2E_SHOT_DIR` (set by the script) makes the test screenshot the real
 window at each stage. It is best effort: on Linux that is ImageMagick's `import`
 reading the X display, on Windows `tool/e2e/screenshot.ps1` reading the primary
-screen. No tool, no pictures, still a valid run.
+screen. Android takes none — the test cannot hand a device screenshot to the
+host — but the runner can `adb exec-out screencap -p`. No tool, no pictures,
+still a valid run.
 
 ## Self-tests
 

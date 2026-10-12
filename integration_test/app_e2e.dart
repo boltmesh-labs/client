@@ -1,19 +1,27 @@
-// End-to-end for the **Linux and Windows desktop apps**: the real GUI signs in
-// against the real API, connects through the real privileged `boltmeshd`, and
-// the run passes only once a real WireGuard tunnel has carried bytes.
+// End-to-end for the **Linux, Windows and Android apps**: the real GUI signs in
+// against the real API, brings up a real WireGuard tunnel, and the run passes
+// only once that tunnel has carried bytes.
 //
 // `test/` cannot hold this. Everything there is deterministic and offline;
-// this one needs a live serving node, real credentials, the installed helper
+// this one needs a live serving node, real credentials, the tunnelling stack
 // and a display, so it is deliberately outside `flutter test` and is driven by
 // a runner script per platform (`tool/e2e/run_linux_app.sh` on Xvfb +
-// isolated keyring, `tool/e2e/run_windows_app.ps1` in an interactive session;
-// both pass the app's own `--dart-define`s).
+// isolated keyring, `tool/e2e/run_windows_app.ps1` in an interactive session,
+// `tool/e2e/run_android_app.sh` against an attached emulator/device; all three
+// pass the app's own `--dart-define`s).
 //
-// One program runs on both: the app already carries its own platform seam
+// One program runs on all three: the app already carries its own platform seam
 // (`createHelperSocket()` picks the Unix socket or the named pipe, over
-// identical framing), so what is left is the helper's endpoint, the local
-// tools a host happens to ship, and how a screenshot is taken — all of it
-// collected in [_Host] below rather than sprinkled through the four tests.
+// identical framing; Android has no helper at all and runs the data plane
+// in-process), so what is left is the tunnel transport, the local tools a host
+// happens to ship, and how a screenshot is taken — all of it collected in
+// [_Host] below rather than sprinkled through the four tests.
+//
+// On Android the run is the app itself under `flutter test -d <device>`, so the
+// credentials cannot come from the host's environment: `_requireEnv` reads the
+// `--dart-define`s the runner passes instead. The independent "the tunnel
+// exists" view is `NetworkInterface.list()`; Android has no `ip`/`wg` an
+// unprivileged app may call and no privileged helper to ask.
 //
 // The pass condition is deliberately the transport's, not the UI's: a run that
 // reached `connected` with zero received bytes proves nothing, because a local
@@ -179,7 +187,10 @@ void main() {
         isNotNull,
         reason: 'the dial payload must carry the node\'s ${rung.name} address',
       );
-      final ping = await Process.run('ping', _host.pingArgs(nodeTunnelIp!));
+      final ping = await Process.run(
+        _host.pingBinary,
+        _host.pingArgs(nodeTunnelIp!),
+      );
       // ignore: avoid_print
       print(
         'e2e: in-tunnel ping $nodeTunnelIp on ${rung.name} -> '
@@ -335,7 +346,10 @@ void main() {
       isNotNull,
       reason: 'the switched dial must carry the node\'s address as well',
     );
-    final movedPing = await Process.run('ping', _host.pingArgs(movedIp!));
+    final movedPing = await Process.run(
+      _host.pingBinary,
+      _host.pingArgs(movedIp!),
+    );
     // ignore: avoid_print
     print(
       'e2e: in-tunnel ping $movedIp after the switch -> ${movedPing.exitCode}\n'
@@ -418,7 +432,7 @@ void main() {
 
     // The tunnel should be gone.
     expect(
-      _host.tunnelExists(),
+      await _host.tunnelExists(),
       isFalse,
       reason: 'logout must tear down the tunnel',
     );
@@ -431,15 +445,17 @@ void main() {
 /// Everything the run needs from the host that is not the app.
 ///
 /// The app already carries its own platform seam, so the four tests above do
-/// not branch on the OS: only the helper's endpoint, the local tools a host
+/// not branch on the OS: only the tunnel transport, the local tools a host
 /// happens to ship, and the way a screenshot is taken differ. Those live here
-/// so one file covers both platforms instead of two copies drifting apart.
+/// so one file covers every platform instead of three copies drifting apart.
 sealed class _Host {
   const _Host();
 
   /// The host this run is on, selected once.
   static final _Host current = Platform.isWindows
       ? const _WindowsHost()
+      : Platform.isAndroid
+      ? const _AndroidHost()
       : const _LinuxHost();
 
   /// Interpreter that runs `tool/e2e/client.py`.
@@ -461,9 +477,11 @@ sealed class _Host {
   bool get helperEndpointExists;
 
   /// True when the tunnel is present on the host, read from the host's own
-  /// view (the link table on Linux, the adapter table on Windows) rather than
-  /// the daemon's: this is what "the box is clean again" means.
-  bool tunnelExists();
+  /// view (the link table on Linux, the adapter table on Windows, the interface
+  /// table on Android) rather than the daemon's: this is what "the box is clean
+  /// again" means. Async because Android's only unprivileged read of it is
+  /// `NetworkInterface.list()`.
+  Future<bool> tunnelExists();
 
   /// Bytes the data plane itself reports, or null where the host has no such
   /// read (the userspace obfuscated tun, an unprivileged process that cannot
@@ -472,6 +490,11 @@ sealed class _Host {
 
   /// ping's arguments for [ip] on this host.
   List<String> pingArgs(String ip);
+
+  /// The ping executable to run. The desktop hosts resolve `ping` from `PATH`;
+  /// Android names the binary outright, so the run does not depend on the
+  /// process `PATH` a sandboxed app happens to carry.
+  String get pingBinary => 'ping';
 
   /// The substring ping prints when it lost nothing, in its own dialect.
   String get zeroLossMarker;
@@ -500,12 +523,12 @@ class _LinuxHost extends _Host {
       FileSystemEntityType.notFound;
 
   @override
-  bool tunnelExists() =>
+  Future<bool> tunnelExists() async =>
       Process.runSync('ip', ['link', 'show', _tunnelInterface]).exitCode == 0;
 
   @override
   Future<int?> kernelReceivedBytes() async {
-    if (!tunnelExists()) return null;
+    if (!await tunnelExists()) return null;
     final result = await Process.run('wg', [
       'show',
       _tunnelInterface,
@@ -556,7 +579,7 @@ class _WindowsHost extends _Host {
       Process.runSync('sc.exe', ['query', 'boltmeshd']).exitCode == 0;
 
   @override
-  bool tunnelExists() {
+  Future<bool> tunnelExists() async {
     // The adapter table, not the SCM: the obfuscated rung runs an in-process
     // AmneziaWG device over a Wintun adapter and registers no `boltmesh0`
     // service, so a service probe would read "no tunnel" mid-ladder. The
@@ -620,6 +643,78 @@ class _WindowsHost extends _Host {
       'the \$boltmesh0 tunnel)';
 }
 
+/// The Android host: the app *is* the tunnel.
+///
+/// There is no privileged helper, and none of the desktop probes work here —
+/// `ip`, `wg` and `/proc/net/dev` are all denied to the app uid. So the host
+/// view is Dart's own interface table: the `VpnService` TUN the app owns is
+/// visible to it, which is the analogue of `ip link show`. The data plane is
+/// in-process, so there is no second counters reader either and the app's own
+/// counters stand alone. `client.py` teardown is correctly unreachable from
+/// here (no helper endpoint, and the script is not on the device): a leftover
+/// tunnel dies with the app process rather than following the box the way a
+/// desktop helper's full-tunnel would.
+class _AndroidHost extends _Host {
+  const _AndroidHost();
+
+  /// Matches the OS interface a `VpnService` TUN gets. `boltmesh0` is only the
+  /// app's logical tunnel name; the kernel interface is `tun0`, and a one-VPN
+  /// app only ever owns one. The digit is load-bearing: `tunl0` is the kernel's
+  /// default IPIP interface and is present on a stock device, so a bare `tun`
+  /// prefix would read it as a live tunnel forever and the down-check would
+  /// never settle.
+  static final _tunName = RegExp(r'^tun\d');
+
+  @override
+  List<String> get helperArgs => const [];
+
+  @override
+  bool get helperEndpointExists => false;
+
+  @override
+  Future<bool> tunnelExists() async {
+    try {
+      for (final iface in await NetworkInterface.list()) {
+        if (_tunName.hasMatch(iface.name)) return true;
+      }
+    } on SocketException {
+      // An interface table this process cannot read is "unknown", and every
+      // caller uses this only to confirm a tunnel is *gone*. Reporting "gone"
+      // on an unreadable table cannot leave a live tunnel behind, so fall
+      // through to false and let the controller-state assertions carry it.
+    }
+    return false;
+  }
+
+  @override
+  Future<int?> kernelReceivedBytes() async => null;
+
+  @override
+  List<String> pingArgs(String ip) => ['-c', '3', '-W', '3', ip];
+
+  @override
+  String get pingBinary => '/system/bin/ping';
+
+  @override
+  String get zeroLossMarker => '0% packet loss';
+
+  @override
+  Future<void> screenshot(String path) async {
+    // A picture of the device screen belongs to the host, not the app: the
+    // test cannot reach `screencap` and hand the file to the runner, so an
+    // Android run takes none. Best effort by contract, so this is not a
+    // failure — the host can grab one with `adb exec-out screencap -p` if it
+    // wants one.
+    // ignore: avoid_print
+    print('e2e: screenshots are not captured in an Android run (path $path)');
+  }
+
+  @override
+  String get teardownHint =>
+      'adb shell am force-stop com.boltmesh.boltmesh (the VpnService dies with '
+      'the app process)';
+}
+
 /// The daemon's own view of the tunnel, read through `client.py` so the
 /// teardown and status reads survive the widget tree being gone.
 Future<Map<String, dynamic>?> _daemonStatus() async {
@@ -680,10 +775,10 @@ Future<void> _noTunnelLeftBehind() async {
     await Process.run(_host.python, [client, ..._host.helperArgs, '--down']);
   }
   final deadline = DateTime.now().add(const Duration(seconds: 30));
-  while (_host.tunnelExists() && DateTime.now().isBefore(deadline)) {
+  while (await _host.tunnelExists() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
-  if (_host.tunnelExists()) {
+  if (await _host.tunnelExists()) {
     // ignore: avoid_print
     print(
       'WARNING: $_tunnelInterface is still up. Tear it down with:\n'
@@ -697,16 +792,16 @@ Future<void> _expectTunnelDown(
   WidgetTester tester,
   ConnState Function() state,
 ) async {
-  await _pumpUntil(
+  await _pumpUntilAsync(
     tester,
     'the tunnel to go down',
-    () => state().phase == ConnPhase.idle && !_host.tunnelExists(),
+    () async => state().phase == ConnPhase.idle && !await _host.tunnelExists(),
     timeout: _connectTimeout,
     diagnose: state,
   );
   expect(state().phase, ConnPhase.idle);
   expect(
-    _host.tunnelExists(),
+    await _host.tunnelExists(),
     isFalse,
     reason: '$_tunnelInterface must not outlive the session',
   );
@@ -933,6 +1028,32 @@ Future<void> _pumpUntil(
   }
 }
 
+/// [_pumpUntil] for a condition that itself has to await.
+///
+/// Android's tunnel probe is `NetworkInterface.list()`, which is asynchronous,
+/// so the down-check in [_expectTunnelDown] cannot be a plain `bool Function()`.
+/// The clock and the failure reporting are the same as [_pumpUntil]'s on
+/// purpose.
+Future<void> _pumpUntilAsync(
+  WidgetTester tester,
+  String what,
+  Future<bool> Function() done, {
+  required Duration timeout,
+  ConnState Function()? diagnose,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!await done()) {
+    if (DateTime.now().isAfter(deadline)) {
+      final detail = diagnose?.call();
+      fail(
+        'timed out after ${timeout.inSeconds}s waiting for $what.'
+        '${detail == null ? '' : '\nlast state: ${_describe(detail)}'}',
+      );
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+  }
+}
+
 /// One line of the controller's own view, so a failure names a cause instead
 /// of only a phase.
 String _describe(ConnState s) =>
@@ -966,14 +1087,37 @@ Future<void> _shot(String name) async {
 }
 
 String _requireEnv(String name) {
-  final value = Platform.environment[name];
+  final value = switch (name) {
+    'BOLTMESH_E2E_API_USER' => _envOrDefine(name, _defineApiUser),
+    'BOLTMESH_E2E_API_PASSWORD' => _envOrDefine(name, _defineApiPassword),
+    _ => Platform.environment[name],
+  };
   if (value == null || value.isEmpty) {
     fail(
-      '$name is not set. The staging credentials go through the environment, '
-      'never a flag or a checked-in file; export them, or run this through '
-      'tool/e2e/run_linux_app.sh / tool/e2e/run_windows_app.ps1, which loads '
-      '.env.e2e automatically.',
+      '$name is not set. The staging credentials go through the environment or '
+      'the runner\'s --dart-defines, never a flag or a checked-in file; export '
+      'them, or run this through tool/e2e/run_linux_app.sh, '
+      'run_windows_app.ps1 or run_android_app.sh, which load .env.e2e '
+      'automatically.',
     );
   }
   return value;
+}
+
+/// The staging credentials as compile-time `--dart-define`s.
+///
+/// A desktop run hands the credentials to the test process through the
+/// environment, but an Android run *is* the app: the test code executes on the
+/// device, where the host's environment does not exist. There the runner passes
+/// them with `--dart-define-from-file`, which embeds them in the debug APK on
+/// the emulator — the price of a credential the on-device process can read, and
+/// the same trade the Windows relaunch makes with its work-directory file.
+const _defineApiUser = String.fromEnvironment('BOLTMESH_E2E_API_USER');
+const _defineApiPassword = String.fromEnvironment('BOLTMESH_E2E_API_PASSWORD');
+
+/// The environment first, then the compile-time define; empty counts as unset.
+String? _envOrDefine(String name, String define) {
+  final fromEnv = Platform.environment[name];
+  if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+  return define.isEmpty ? null : define;
 }
