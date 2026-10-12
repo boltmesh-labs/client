@@ -80,7 +80,7 @@ android sdk install "build-tools;36.0.0"
 android sdk install "system-images;android-36;google_apis;x86_64"
 android sdk install "ndk;28.2.13676358"
 
-android emulator create medium_phone
+avdmanager create avd --force --name "medium_phone" --package "system-images;android-36;google_apis;x86_64" --tag "google_apis" --abi "x86_64"
 android emulator start medium_phone
 ```
 
@@ -96,6 +96,8 @@ The emulator runs on the Windows host; forward its adb port so a remote
 Host (Windows):
 
 ```dos
+adb root
+adb shell
 adb tcpip 5555
 ssh -R 5555:127.0.0.1:5555 revolver1@192.168.1.113
 ```
