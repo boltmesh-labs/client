@@ -34,15 +34,18 @@
 // BOLTMESH_E2E_API_USER / BOLTMESH_E2E_API_PASSWORD.
 //
 // The four tests run in order and build on each other: sign in, walk the
-// transport ladder (native, awg, stream), switch server, log out. Each calls
-// `app.main()` for a fresh widget tree, but the keyring persists across tests
-// in a run, so the session is restored between them — which is itself the
-// restore path being exercised.
+// transport ladder up and back down (native, awg, stream, native), switch
+// server, log out. Each calls `app.main()` for a fresh widget tree, but the
+// keyring persists across tests in a run, so the session is restored between
+// them — which is itself the restore path being exercised.
 //
 // The ladder walk drives the real controller through every rung with its
 // `debugForceRung` seam: the controller starts on the node's floor and only
 // demotes on health evidence a lab run cannot fabricate, so the seam is what
-// lets one run prove all three data planes really carry bytes.
+// lets one run prove all three data planes really carry bytes. It descends
+// again on purpose: the rung change back *into* stock hands Android's single
+// VpnService from the in-process AWG host to the stock plugin, which the
+// upward walk never does.
 
 library;
 
@@ -80,7 +83,9 @@ void main() {
     await _shot('01-signed-in');
   });
 
-  testWidgets('walks the transport ladder native, awg, stream', (tester) async {
+  testWidgets('walks the transport ladder native, awg, stream, native', (
+    tester,
+  ) async {
     await _launch(tester);
     final container = _container(tester);
     final ctl = container.read(connectionProvider.notifier);
@@ -99,10 +104,18 @@ void main() {
     // advertised ladder is exercised: the point of this run is that every data
     // plane really carries bytes, not that the walk is re-picked here (that is
     // the state suites' job).
+    //
+    // The walk ends by coming back down to `native`: the rung change *into*
+    // stock is the only transition the upward walk never makes (it hands the
+    // single Android VpnService from the in-process AWG host back to the stock
+    // plugin), and it is where the two-Go-runtime bug bites. Without it that
+    // transition only surfaces by luck, in whichever later test happens to land
+    // on stock after an obfuscated rung.
     const ladder = [
       TransportRung.native,
       TransportRung.awg,
       TransportRung.stream,
+      TransportRung.native,
     ];
     for (var i = 0; i < ladder.length; i++) {
       final rung = ladder[i];
@@ -130,7 +143,7 @@ void main() {
       );
       // ignore: avoid_print
       print('e2e: connected on the ${rung.name} rung');
-      await _shot('03-connected-${rung.name}');
+      await _shot('03-connected-$i-${rung.name}');
 
       // The UI has to agree with the state it renders: this is a GUI run, so a
       // controller that reached `connected` behind a stuck spinner would pass a
@@ -140,6 +153,11 @@ void main() {
       );
       expect(find.text(l10n.homeDisconnect), findsOneWidget);
       expect(find.textContaining(l10n.homeStatusConnected), findsWidgets);
+
+      // One diagnostic read of the host's interface table while a tunnel is up.
+      // It is what tells the down-check's `tunnelExists` it is looking at the
+      // right name: a passing down-check alone cannot prove `tun0` is ever seen.
+      if (i == 0) await _host.logTunnelInterfaces();
 
       // --- bytes actually crossed the tunnel ------------------------------
       await _pumpUntil(
@@ -203,7 +221,7 @@ void main() {
         reason: 'the in-tunnel ping must succeed on the ${rung.name} rung',
       );
       expect((ping.stdout as String), contains(_host.zeroLossMarker));
-      await _shot('04-tunnel-verified-${rung.name}');
+      await _shot('04-tunnel-verified-$i-${rung.name}');
     }
 
     // --- one GUI disconnect leaves the host as it was --------------------
@@ -488,6 +506,16 @@ sealed class _Host {
   /// open the device).
   Future<int?> kernelReceivedBytes();
 
+  /// Logs the host's interface table once while a tunnel is up, best effort.
+  ///
+  /// A diagnostic, not an assertion: the desktop hosts deliberately tolerate a
+  /// host that cannot read the tunnel by name, and Android's [tunnelExists] only
+  /// has to bite on the *down* check — so this exists to answer, with evidence
+  /// rather than a guess, whether the app's `tun0` is really what
+  /// `NetworkInterface.list()` reports while connected. No-op where the host has
+  /// no such read.
+  Future<void> logTunnelInterfaces() async {}
+
   /// ping's arguments for [ip] on this host.
   List<String> pingArgs(String ip);
 
@@ -688,6 +716,20 @@ class _AndroidHost extends _Host {
 
   @override
   Future<int?> kernelReceivedBytes() async => null;
+
+  @override
+  Future<void> logTunnelInterfaces() async {
+    try {
+      final names = [
+        for (final iface in await NetworkInterface.list()) iface.name,
+      ];
+      // ignore: avoid_print
+      print('e2e: Android interface table while connected: $names');
+    } on SocketException catch (e) {
+      // ignore: avoid_print
+      print('e2e: Android interface table unreadable ($e)');
+    }
+  }
 
   @override
   List<String> pingArgs(String ip) => ['-c', '3', '-W', '3', ip];

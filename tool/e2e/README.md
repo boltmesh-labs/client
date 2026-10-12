@@ -181,18 +181,22 @@ process and one store, so the session and the device identity carry across them
    starts from a fresh store (a scratch keyring on Linux, no secure-storage
    file on Windows, `pm clear` on Android), so a scripted run does drive the
    form.
-2. **walks the transport ladder native, awg, stream** — pins the controller to
-   each rung in turn through its `debugForceRung` seam (a walk the health policy
-   would only take on a blocked network, which a lab run cannot fabricate). The
-   first rung comes up through the Home power control; the others are restarts
-   through the controller, reusing the bound session rather than spending the
-   backend's shared write budget on a disconnect+connect pair per rung. For each
-   rung it waits for `connected`, checks the UI agrees (the header names the
-   server, the button reads Disconnect), and asserts on bytes: the app's own
-   received counter, the kernel's `wg` counters when the kernel owns the data
-   plane (Linux only; a userspace device has none, and the app's counters stand
-   in), and an in-tunnel ping to that rung's own node address with no loss.
-   Finishes with one power-control disconnect that must leave the tunnel gone.
+2. **walks the transport ladder native, awg, stream, native** — pins the
+   controller to each rung in turn through its `debugForceRung` seam (a walk the
+   health policy would only take on a blocked network, which a lab run cannot
+   fabricate). The first rung comes up through the Home power control; the
+   others are restarts through the controller, reusing the bound session rather
+   than spending the backend's shared write budget on a disconnect+connect pair
+   per rung. For each rung it waits for `connected`, checks the UI agrees (the
+   header names the server, the button reads Disconnect), and asserts on bytes:
+   the app's own received counter, the kernel's `wg` counters when the kernel
+   owns the data plane (Linux only; a userspace device has none, and the app's
+   counters stand in), and an in-tunnel ping to that rung's own node address
+   with no loss. It then descends back to `native`: the change *into* stock is
+   the one transition the upward walk never makes — it hands Android's single
+   VpnService from the in-process AWG host back to the stock plugin — so leaving
+   it out let that hand-off regress unexercised. Finishes with one power-control
+   disconnect that must leave the tunnel gone.
 3. **switches server** — connects, then picks a *different* server in the
    Regions tab and asserts the live dial moved to it. The wait is on the
    controller's own arc, which only reaches `connected` again once the daemon
