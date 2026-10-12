@@ -1,17 +1,24 @@
-// End-to-end for the **Linux desktop app**: the real GUI signs in against the
-// real API, connects through the real privileged `boltmeshd`, and the run
-// passes only once a real WireGuard tunnel has carried bytes.
+// End-to-end for the **Linux and Windows desktop apps**: the real GUI signs in
+// against the real API, connects through the real privileged `boltmeshd`, and
+// the run passes only once a real WireGuard tunnel has carried bytes.
 //
 // `test/` cannot hold this. Everything there is deterministic and offline;
 // this one needs a live serving node, real credentials, the installed helper
-// and a display, so it is deliberately outside `flutter test` and is run by
-// `tool/e2e/run_linux_app.sh` (Xvfb + an isolated keyring + the app's own
-// `--dart-define`s).
+// and a display, so it is deliberately outside `flutter test` and is driven by
+// a runner script per platform (`tool/e2e/run_linux_app.sh` on Xvfb +
+// isolated keyring, `tool/e2e/run_windows_app.ps1` in an interactive session;
+// both pass the app's own `--dart-define`s).
+//
+// One program runs on both: the app already carries its own platform seam
+// (`createHelperSocket()` picks the Unix socket or the named pipe, over
+// identical framing), so what is left is the helper's endpoint, the local
+// tools a host happens to ship, and how a screenshot is taken — all of it
+// collected in [_Host] below rather than sprinkled through the four tests.
 //
 // The pass condition is deliberately the transport's, not the UI's: a run that
 // reached `connected` with zero received bytes proves nothing, because a local
 // address in the same namespace short-circuits routing (see tool/e2e/README).
-// So it asserts on counters, on the kernel's own view, and on an in-tunnel
+// So it asserts on counters, on the data plane's own view, and on an in-tunnel
 // ping, then tears the tunnel back down — this box is the client host, so a
 // leftover full-tunnel would outlive the run.
 //
@@ -20,9 +27,9 @@
 //
 // The four tests run in order and build on each other: sign in, walk the
 // transport ladder (native, awg, stream), switch server, log out. Each calls
-// `app.main()` for a fresh widget tree, but the keyring persists across tests in
-// a run, so the session is restored between them — which is itself the restore
-// path being exercised.
+// `app.main()` for a fresh widget tree, but the keyring persists across tests
+// in a run, so the session is restored between them — which is itself the
+// restore path being exercised.
 //
 // The ladder walk drives the real controller through every rung with its
 // `debugForceRung` seam: the controller starts on the node's floor and only
@@ -31,8 +38,10 @@
 
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:boltmesh/features/vpn/ui/home/power_button.dart';
@@ -137,25 +146,25 @@ void main() {
         'e2e: ${rung.name} reports rx=$received tx=${state().txBytes} bytes',
       );
 
-      // The kernel's own counters, when the kernel owns the data plane. The
+      // The data plane's own counters, when the host can read them. The
       // obfuscated rung is a userspace AmneziaWG tun, and even the kernel-owned
       // rungs are not always readable from this unprivileged process, so a
       // missing read is reported rather than failed: the app's counters (read
       // from the helper) are the equivalent evidence there.
-      final kernelRx = await _kernelReceivedBytes();
-      if (kernelRx == null) {
+      final planeRx = await _host.kernelReceivedBytes();
+      if (planeRx == null) {
         // ignore: avoid_print
         print(
-          'e2e: no kernel $_tunnelInterface wg view on ${rung.name}; the app\'s '
-          'counters above stand as the evidence',
+          'e2e: no host-side $_tunnelInterface counter view on ${rung.name}; '
+          'the app\'s counters above stand as the evidence',
         );
       } else {
         // ignore: avoid_print
-        print('e2e: kernel $_tunnelInterface received $kernelRx bytes');
+        print('e2e: host-side $_tunnelInterface received $planeRx bytes');
         expect(
-          kernelRx,
+          planeRx,
           greaterThan(0),
-          reason: 'the kernel device exists, so it must have moved bytes too',
+          reason: 'the data plane exists, so it must have moved bytes too',
         );
       }
 
@@ -169,13 +178,7 @@ void main() {
         isNotNull,
         reason: 'the dial payload must carry the node\'s ${rung.name} address',
       );
-      final ping = await Process.run('ping', [
-        '-c',
-        '3',
-        '-W',
-        '3',
-        nodeTunnelIp!,
-      ]);
+      final ping = await Process.run('ping', _host.pingArgs(nodeTunnelIp!));
       // ignore: avoid_print
       print(
         'e2e: in-tunnel ping $nodeTunnelIp on ${rung.name} -> '
@@ -187,7 +190,7 @@ void main() {
         isZero,
         reason: 'the in-tunnel ping must succeed on the ${rung.name} rung',
       );
-      expect((ping.stdout as String), contains('0% packet loss'));
+      expect((ping.stdout as String), contains(_host.zeroLossMarker));
       await _shot('04-tunnel-verified-${rung.name}');
     }
 
@@ -386,7 +389,7 @@ void main() {
 
     // The tunnel should be gone.
     expect(
-      _interfaceExists(),
+      _host.tunnelExists(),
       isFalse,
       reason: 'logout must tear down the tunnel',
     );
@@ -395,6 +398,215 @@ void main() {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/// Everything the run needs from the host that is not the app.
+///
+/// The app already carries its own platform seam, so the four tests above do
+/// not branch on the OS: only the helper's endpoint, the local tools a host
+/// happens to ship, and the way a screenshot is taken differ. Those live here
+/// so one file covers both platforms instead of two copies drifting apart.
+sealed class _Host {
+  const _Host();
+
+  /// The host this run is on, selected once.
+  static final _Host current = Platform.isWindows
+      ? const _WindowsHost()
+      : const _LinuxHost();
+
+  /// Interpreter that runs `tool/e2e/client.py`.
+  ///
+  /// Windows ships `python` and no `python3`; `BOLTMESH_E2E_PYTHON` overrides
+  /// both for a host that names it otherwise (a pyenv shim, a `py -3` alias).
+  String get python {
+    final override = Platform.environment['BOLTMESH_E2E_PYTHON'];
+    if (override != null && override.isNotEmpty) return override;
+    return Platform.isWindows ? 'python' : 'python3';
+  }
+
+  /// `client.py`'s endpoint flag: the transport the helper listens on here,
+  /// matching what the app itself dials.
+  List<String> get helperArgs;
+
+  /// True when this host's helper endpoint is there to answer, so a teardown
+  /// attempt is worth making.
+  bool get helperEndpointExists;
+
+  /// True when the tunnel is present on the host, read from the host's own
+  /// view (the link table on Linux, the adapter table on Windows) rather than
+  /// the daemon's: this is what "the box is clean again" means.
+  bool tunnelExists();
+
+  /// Bytes the data plane itself reports, or null where the host has no such
+  /// read (the userspace obfuscated tun, an unprivileged process that cannot
+  /// open the device).
+  Future<int?> kernelReceivedBytes();
+
+  /// ping's arguments for [ip] on this host.
+  List<String> pingArgs(String ip);
+
+  /// The substring ping prints when it lost nothing, in its own dialect.
+  String get zeroLossMarker;
+
+  /// Writes a screenshot of the real window to [path]. Best effort: it is a
+  /// lab convenience, not a requirement, so a failure is reported and the run
+  /// continues.
+  Future<void> screenshot(String path);
+
+  /// What an operator should run by hand for a tunnel the run left up.
+  String get teardownHint;
+}
+
+/// The host this run is on. Read once per call site so the tests stay readable.
+final _Host _host = _Host.current;
+
+class _LinuxHost extends _Host {
+  const _LinuxHost();
+
+  @override
+  List<String> get helperArgs => ['--socket', helperSocketPath];
+
+  @override
+  bool get helperEndpointExists =>
+      FileSystemEntity.typeSync(helperSocketPath) !=
+      FileSystemEntityType.notFound;
+
+  @override
+  bool tunnelExists() =>
+      Process.runSync('ip', ['link', 'show', _tunnelInterface]).exitCode == 0;
+
+  @override
+  Future<int?> kernelReceivedBytes() async {
+    if (!tunnelExists()) return null;
+    final result = await Process.run('wg', [
+      'show',
+      _tunnelInterface,
+      'transfer',
+    ]);
+    if (result.exitCode != 0) return null;
+    final firstLine = '${result.stdout}'.trim().split('\n').first.trim();
+    if (firstLine.isEmpty) return null;
+    final fields = firstLine.split(RegExp(r'\s+'));
+    // `transfer` prints "<peer>\t<received>\t<sent>"; this device has one peer.
+    if (fields.length < 2) return null;
+    return int.tryParse(fields[1]);
+  }
+
+  @override
+  List<String> pingArgs(String ip) => ['-c', '3', '-W', '3', ip];
+
+  @override
+  String get zeroLossMarker => '0% packet loss';
+
+  @override
+  Future<void> screenshot(String path) async {
+    // ImageMagick's `import` reads the X display the app is on; see the
+    // runner's Xvfb.
+    final result = await Process.run('import', [
+      '-window',
+      'root',
+      '-silent',
+      path,
+    ]);
+    await _reportShot(result, path);
+  }
+
+  @override
+  String get teardownHint =>
+      'sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
+      'sudo ip link del $_tunnelInterface';
+}
+
+class _WindowsHost extends _Host {
+  const _WindowsHost();
+
+  @override
+  List<String> get helperArgs => ['--pipe', helperPipePath];
+
+  @override
+  bool get helperEndpointExists =>
+      Process.runSync('sc.exe', ['query', 'boltmeshd']).exitCode == 0;
+
+  @override
+  bool tunnelExists() {
+    // The adapter table, not the SCM: the obfuscated rung runs an in-process
+    // AmneziaWG device over a Wintun adapter and registers no `boltmesh0`
+    // service, so a service probe would read "no tunnel" mid-ladder. The
+    // adapter is named `boltmesh0` on every rung, which is what makes this the
+    // Windows analogue of `ip link show boltmesh0`.
+    final result = Process.runSync('powershell', [
+      '-NoProfile',
+      '-Command',
+      'if (Get-NetAdapter -Name \'$_tunnelInterface\' -ErrorAction '
+          'SilentlyContinue) { \'UP\' } else { \'DOWN\' }',
+    ]);
+    return result.exitCode == 0 && '${result.stdout}'.contains('UP');
+  }
+
+  @override
+  Future<int?> kernelReceivedBytes() async {
+    // There is no `wg show` on Windows, and the obfuscated rung's Wintun
+    // device has no kernel counters to read at all. The daemon's own `status`
+    // is the counters then — it reads them off the data plane it owns — and it
+    // is also a read from a different process than the app's, which is the
+    // point of having one.
+    final status = await _daemonStatus();
+    final rx = status?['rxBytes'];
+    return rx is int ? rx : null;
+  }
+
+  @override
+  List<String> pingArgs(String ip) => ['-n', '3', '-w', '3000', ip];
+
+  @override
+  String get zeroLossMarker => '(0% loss)';
+
+  @override
+  Future<void> screenshot(String path) async {
+    // No X display and no ImageMagick on a stock Windows box: capture the
+    // primary screen, which is where the app's window is.
+    final here = Directory.current.path;
+    final result = await Process.run('powershell', [
+      '-NoProfile',
+      '-File',
+      '$here/tool/e2e/screenshot.ps1',
+      '-Path',
+      path,
+    ]);
+    await _reportShot(result, path);
+  }
+
+  @override
+  String get teardownHint =>
+      'run boltmeshd.exe -cleanup from an elevated shell (it stops and removes '
+      'the \$boltmesh0 tunnel)';
+}
+
+/// The daemon's own view of the tunnel, read through `client.py` so the
+/// teardown and status reads survive the widget tree being gone.
+Future<Map<String, dynamic>?> _daemonStatus() async {
+  final here = Directory.current.path;
+  final client = '$here/tool/e2e/client.py';
+  if (!File(client).existsSync()) return null;
+  final result = await Process.run(_host.python, [
+    client,
+    ..._host.helperArgs,
+    '--status',
+  ]);
+  if (result.exitCode != 0) return null;
+  final decoded = jsonDecode('${result.stdout}');
+  return decoded is Map<String, dynamic> ? decoded : null;
+}
+
+/// Reports one screenshot attempt, whatever came of it.
+Future<void> _reportShot(ProcessResult result, String path) async {
+  // ignore: avoid_print
+  print(
+    result.exitCode == 0
+        ? 'e2e: screenshot $path'
+        : 'e2e: screenshot failed (${result.exitCode}): '
+              '${(result.stderr as String).trim()}',
+  );
+}
 
 /// Launches the app and returns once the first frame is drawn.
 Future<void> _launch(WidgetTester tester) async {
@@ -415,36 +627,33 @@ ProviderContainer _container(WidgetTester tester) {
 /// Deliberately does *not* go through the app's controller: `addTearDown` runs
 /// after the widget tree and its `ProviderContainer` are gone, so reading a
 /// provider here throws "container already disposed" and the net accomplishes
-/// nothing. It goes to the helper's socket instead, which is alive regardless
-/// of app state — otherwise a failed test leaves a full-tunnel on the host and
-/// every later test connects through a stale one.
+/// nothing. It goes to the helper's transport instead, which is alive
+/// regardless of app state — otherwise a failed test leaves a full-tunnel on
+/// the host and every later test connects through a stale one.
 Future<void> _noTunnelLeftBehind() async {
   final here = Directory.current.path;
   final client = '$here/tool/e2e/client.py';
-  const socket = '/run/boltmesh/boltmeshd.sock';
-  // Not gated on `_interfaceExists()`. On a host where the test cannot see the
-  // tunnel device by name, that gate would skip the teardown exactly when a
-  // failed run needs it, leaving a live full-tunnel for the next suite. A
-  // `down` with nothing up is what the helper already tolerates.
-  if (File(client).existsSync() &&
-      FileSystemEntity.typeSync(socket) != FileSystemEntityType.notFound) {
-    await Process.run('python3', [client, '--socket', socket, '--down']);
+  // Not gated on `tunnelExists()`. On a host where the test cannot see the
+  // tunnel by name, that gate would skip the teardown exactly when a failed
+  // run needs it, leaving a live full-tunnel for the next suite. A `down`
+  // with nothing up is what the helper already tolerates.
+  if (File(client).existsSync() && _host.helperEndpointExists) {
+    await Process.run(_host.python, [client, ..._host.helperArgs, '--down']);
   }
   final deadline = DateTime.now().add(const Duration(seconds: 30));
-  while (_interfaceExists() && DateTime.now().isBefore(deadline)) {
+  while (_host.tunnelExists() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
-  if (_interfaceExists()) {
+  if (_host.tunnelExists()) {
     // ignore: avoid_print
     print(
       'WARNING: $_tunnelInterface is still up. Tear it down with:\n'
-      '  sudo wg-quick down /run/boltmesh/wg$_tunnelInterface.conf || '
-      'sudo ip link del $_tunnelInterface',
+      '  ${_host.teardownHint}',
     );
   }
 }
 
-/// Asserts the tunnel is down and the interface is gone from the host.
+/// Asserts the tunnel is down and gone from the host.
 Future<void> _expectTunnelDown(
   WidgetTester tester,
   ConnState Function() state,
@@ -452,13 +661,13 @@ Future<void> _expectTunnelDown(
   await _pumpUntil(
     tester,
     'the tunnel to go down',
-    () => state().phase == ConnPhase.idle && !_interfaceExists(),
+    () => state().phase == ConnPhase.idle && !_host.tunnelExists(),
     timeout: _connectTimeout,
     diagnose: state,
   );
   expect(state().phase, ConnPhase.idle);
   expect(
-    _interfaceExists(),
+    _host.tunnelExists(),
     isFalse,
     reason: '$_tunnelInterface must not outlive the session',
   );
@@ -487,9 +696,10 @@ Finder _powerButton(WidgetTester tester) {
 ///  * **Waiting for the button to be enabled.** Connect is hard-disabled while
 ///    the backend-health poll reports `unreachable`, which on a headless lab box
 ///    is a real possibility: `connectivity_plus` reads NetworkManager over
-///    D-Bus, and a session without one reports no link. A tap on a disabled
-///    button hit-tests cleanly and does nothing, so without this wait the run
-///    would burn the whole connect timeout and then blame the transport.
+///    D-Bus on Linux, and a session without one reports no link. A tap on a
+///    disabled button hit-tests cleanly and does nothing, so without this wait
+///    the run would burn the whole connect timeout and then blame the
+///    transport.
 Future<void> _connect(WidgetTester tester, ConnState Function() state) async {
   final power = _powerButton(tester);
   await _pumpUntil(
@@ -583,8 +793,9 @@ Future<void> _reconnect(
 /// was about to replace.
 ///
 /// A stored session skips the form, and that is the session-restore path being
-/// exercised rather than worked around. The runner script starts from a fresh
-/// keyring, so a scripted run does drive the form itself.
+/// exercised rather than worked around. Each runner script starts from a fresh
+/// store (a scratch keyring on Linux, no secure-storage file on Windows), so a
+/// scripted run does drive the form itself.
 Future<void> _ensureSignedIn(WidgetTester tester) async {
   await _pumpUntil(
     tester,
@@ -685,51 +896,15 @@ String? _rungNodeIp(ConnState s, TransportRung rung) {
   return rung == TransportRung.awg ? dial.awgDns : dial.wgDns;
 }
 
-/// Bytes the kernel's own device received, or null when it has none (the
-/// userspace obfuscated path, where `wg show` has nothing to read).
-Future<int?> _kernelReceivedBytes() async {
-  if (!_interfaceExists()) return null;
-  final result = await Process.run('wg', [
-    'show',
-    _tunnelInterface,
-    'transfer',
-  ]);
-  if (result.exitCode != 0) return null;
-  final firstLine = '${result.stdout}'.trim().split('\n').first.trim();
-  if (firstLine.isEmpty) return null;
-  final fields = firstLine.split(RegExp(r'\s+'));
-  // `transfer` prints "<peer>\t<received>\t<sent>"; this device has one peer.
-  if (fields.length < 2) return null;
-  return int.tryParse(fields[1]);
-}
-
-bool _interfaceExists() => _ipLink(['show', _tunnelInterface]).exitCode == 0;
-
-ProcessResult _ipLink(List<String> args) =>
-    Process.runSync('ip', ['link', ...args]);
-
 /// Screenshots of the real window, for a human to look at afterwards.
 ///
-/// Best effort: ImageMagick's `import` is a lab convenience, not a
+/// Best effort: the tool that takes them is a lab convenience, not a
 /// requirement, so its absence must not fail a run.
 Future<void> _shot(String name) async {
   final dir = Platform.environment['BOLTMESH_E2E_SHOT_DIR'];
   if (dir == null || dir.isEmpty) return;
   await Directory(dir).create(recursive: true);
-  final file = '$dir/$name.png';
-  final result = await Process.run('import', [
-    '-window',
-    'root',
-    '-silent',
-    file,
-  ]);
-  // ignore: avoid_print
-  print(
-    result.exitCode == 0
-        ? 'e2e: screenshot $file'
-        : 'e2e: screenshot failed (${result.exitCode}): '
-              '${(result.stderr as String).trim()}',
-  );
+  await _host.screenshot('$dir/$name.png');
 }
 
 String _requireEnv(String name) {
@@ -738,7 +913,8 @@ String _requireEnv(String name) {
     fail(
       '$name is not set. The staging credentials go through the environment, '
       'never a flag or a checked-in file; export them, or run this through '
-      'tool/e2e/run_linux_app.sh, which loads .env.e2e automatically.',
+      'tool/e2e/run_linux_app.sh / tool/e2e/run_windows_app.ps1, which loads '
+      '.env.e2e automatically.',
     );
   }
   return value;

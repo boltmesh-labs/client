@@ -217,7 +217,7 @@ XDG_DATA_HOME="$workdir/xdg" \
 BOLTMESH_E2E_API_USER="$api_user" \
 BOLTMESH_E2E_API_PASSWORD="$api_password" \
 BOLTMESH_E2E_SHOT_DIR="$shot_dir" \
-  flutter test integration_test/linux_app_e2e.dart \
+  flutter test integration_test/app_e2e.dart \
     -d linux \
     --dart-define-from-file="$env_file" \
     --no-enable-impeller

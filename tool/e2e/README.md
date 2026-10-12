@@ -1,11 +1,12 @@
 # End-to-end harness
 
-This proves the one thing unit tests cannot: that the real Linux desktop app,
-driving the real privileged `boltmeshd`, brings a real WireGuard tunnel up to a
-real serving node and moves packets across it — on every rung the node serves.
+This proves the one thing unit tests cannot: that the real desktop app — Linux
+**or** Windows — driving the real privileged `boltmeshd`, brings a real
+WireGuard tunnel up to a real serving node and moves packets across it, on
+every rung the node serves.
 
 Both ends are real. The client half is the app, built from source and run under
-`integration_test/linux_app_e2e.dart`; the node half is a **real running node** —
+`integration_test/app_e2e.dart`; the node half is a **real running node** —
 one you already have, registered against the real API, heartbeating, and serving
 its own ingress. There is no stub control plane and no second copy of the agent:
 a node that has not registered has no WireGuard public key, cannot be bound to a
@@ -16,7 +17,7 @@ would prove less, not more.
   this host                          real node (test1, test2, ...)
   ┌────────────────────────┐          ┌────────────────────────────┐
   │ Flutter app            │          │ agentd                     │
-  │   ↓ helper socket      │  TLS 1.3 │   wg0 (kernel wgctrl)      │
+  │   ↓ helper socket/pipe │  TLS 1.3 │   wg0 (kernel wgctrl)      │
   │ boltmeshd              │─────────▶│   stream ingress :443      │
   │   wg-quick → boltmesh0 │          │                            │
   └───────────┬────────────┘          └─────────────┬──────────────┘
@@ -33,16 +34,15 @@ evidence that the node is up.
 
 ## Running it
 
+One program, `integration_test/app_e2e.dart`, runs on both platforms; only the
+runner differs, because what surrounds it — the helper's transport, the display,
+the keyring — is the platform's business, not the app's. Each platform below is
+two steps: privileged helper install, then the unprivileged run.
+
+### Linux
+
 Needs `flutter`, `Xvfb`, `gnome-keyring-daemon`, `secret-tool`, `python3`, and a
 Go toolchain, plus `sudo` for the one privileged step: installing the helper.
-
-Credentials are read from the environment when it carries both halves, and
-otherwise from the gitignored `.env.e2e` at the repo root (override the path
-with `BOLTMESH_E2E_CREDS_FILE`) — so a bare run needs no export first. They
-are never passed as a flag: the process list is world-readable, and a password
-there outlives the run.
-
-Two steps — privileged install, then the unprivileged run:
 
 ```sh
 sudo tool/e2e/install_boltmeshd.sh
@@ -56,18 +56,84 @@ current helper code. `run_linux_app.sh` runs entirely as the normal user (it
 refuses root and `sudo`, because `flutter` itself refuses root). Both need
 this user enrolled in the `boltmesh` group.
 
+### Windows
+
+Needs `flutter` with the Windows desktop target, a Go toolchain, and `python`,
+plus elevation for the one privileged step: installing the helper.
+
+```powershell
+pwsh -File tool/e2e/install_boltmeshd.ps1      # elevated
+
+pwsh -File tool/e2e/run_windows_app.ps1        # unprivileged
+```
+
+`install_boltmeshd.ps1` builds `boltmeshd.exe` from source, stages the four
+files the helper loads from beside itself (`boltmeshd.exe`, `wintun.dll`,
+`wireguard_svc.exe`, `wireguard.dll`), and runs `boltmeshd.exe -install`, which
+registers the service and starts it. It must be that service: the runner's
+`com.boltmesh/helper` channel authenticates the pipe's server process against
+the one the SCM reports for the `boltmeshd` service, so a helper started by
+hand (`-console`) is refused by the app even though its pipe exists. Logs:
+`%ProgramData%\BoltMesh\logs\boltmeshd.log`.
+
+`run_windows_app.ps1` runs the app unprivileged, like the Linux twin does.
+Because a named pipe's DACL grants access to Interactive Users, a process whose
+token lacks that group — one started over SSH, by a service, or by an ordinary
+scheduled task — cannot open the pipe at all. When the script is not already in
+the interactive session it therefore re-executes itself there through a
+limited-privilege scheduled task, streams the log, and reports the exit code.
+That is also why it never elevates the app: the point of the run is that the
+unprivileged GUI talks to the privileged helper.
+
+Each platform stops before a run it cannot usefully do: a stopped helper on
+Windows is one the app cannot reach (there is no socket activation), and a
+Linux run without the socket is the same.
+
+### Both
+
+Credentials are read from the environment when it carries both halves, and
+otherwise from the gitignored `.env.e2e` at the repo root (override the path
+with `BOLTMESH_E2E_CREDS_FILE`) — so a bare run needs no export first. They
+are never passed as a flag: the process list is world-readable, and a password
+there outlives the run. The relaunched Windows run receives them through a file
+in the invoking user's own work directory, which is the same trade.
+
 `.env` supplies the API URL as `--dart-define-from-file`, the same way `make run`
-does; point it elsewhere with `ENV_FILE=staging.env`.
+does; point it elsewhere with `ENV_FILE=staging.env` on Linux, `-EnvFile` on
+Windows.
+
+## Where the two hosts differ
+
+The four tests above are identical on both platforms. What differs is the host,
+and it is all collected in one `_Host` seam at the bottom of
+`integration_test/app_e2e.dart`:
+
+| | Linux | Windows |
+| --- | --- | --- |
+| helper transport | Unix socket `--socket /run/boltmesh/boltmeshd.sock` | named pipe `--pipe \\.\pipe\boltmesh\boltmeshd` |
+| "the tunnel exists" | `ip link show boltmesh0` | the adapter table (`Get-NetAdapter -Name boltmesh0`) |
+| the data plane's counters | `wg show boltmesh0 transfer` | the daemon's own `status`, which is what a userspace AmneziaWG device gets instead of a kernel view |
+| in-tunnel ping | `ping -c 3 -W 3`, `0% packet loss` | `ping -n 3 -w 3000`, `(0% loss)` |
+| screenshots | ImageMagick `import` (the X display the app is on) | `tool/e2e/screenshot.ps1`, the primary screen |
+| a fresh session | a scratch keyring, isolated from the operator's | the app's `flutter_secure_storage.dat` removed |
+| Python interpreter | `python3` | `python` (`BOLTMESH_E2E_PYTHON` overrides both) |
+
+The "tunnel exists" row is the one worth reading twice. The obfuscated rung on
+Windows runs an in-process AmneziaWG device over a Wintun adapter and registers
+no `boltmesh0` *service*, so a service probe would read "no tunnel" mid-ladder;
+the adapter is named `boltmesh0` on every rung, which is what makes it the
+Windows analogue of `ip link show`.
 
 ## The four tests
 
 Four tests, in order, each building on the last. They share one `flutter test`
-process and one keyring, so the session and the device identity carry across
-them — which is also what puts the restore path inside what is covered.
+process and one store, so the session and the device identity carry across them
+— which is also what puts the restore path inside what is covered.
 
 1. **signs in** — types the real credentials into the real form and reaches the
-   VPN tabs. A stored session short-circuits this and says so; the runner script
-   starts from a fresh keyring, so a scripted run does drive the form.
+   VPN tabs. A stored session short-circuits this and says so; each runner
+   starts from a fresh store (a scratch keyring on Linux, no secure-storage
+   file on Windows), so a scripted run does drive the form.
 2. **walks the transport ladder native, awg, stream** — pins the controller to
    each rung in turn through its `debugForceRung` seam (a walk the health policy
    would only take on a blocked network, which a lab run cannot fabricate). The
@@ -93,7 +159,7 @@ part-way leaves its row behind: the interface is gone, the row is not. The *next
 run then cannot provision and reports a device limit that the run reporting it
 never caused — a bad way to fail, because the run that broke is long gone.
 
-So `run_linux_app.sh` deletes the account's devices before the app starts, and
+So both runner scripts delete the account's devices before the app starts, and
 `tool/e2e/client.py` can do it on its own:
 
 ```sh
@@ -134,7 +200,7 @@ folklore:
   an interface-name probe, which a host may not be able to read, so a failed run
   tears down exactly when it must.
 
-The app runs on a virtual display and an isolated keyring, both of which the
+On Linux the app runs on a virtual display and an isolated keyring, which the
 script sets up because they are lab facts rather than app behaviour:
 
 | | Why |
@@ -149,8 +215,9 @@ which the node's peer table requires — it is built from the public half the
 backend stored.
 
 `BOLTMESH_E2E_SHOT_DIR` (set by the script) makes the test screenshot the real
-window at each stage with ImageMagick's `import`. It is best effort: no
-`import`, no pictures, still a valid run.
+window at each stage. It is best effort: on Linux that is ImageMagick's `import`
+reading the X display, on Windows `tool/e2e/screenshot.ps1` reading the primary
+screen. No tool, no pictures, still a valid run.
 
 ## Self-tests
 
@@ -162,8 +229,10 @@ python3 tool/e2e/test_harness.py
 ```
 
 A fixture that reports PASS while exercising nothing is worse than no fixture, so
-these cover the helper protocol `client.py` speaks and the device clearing
-`run_linux_app.sh` runs before the app starts.
+these cover the helper protocol `client.py` speaks — over the unix socket on
+Linux and the named pipe on Windows, where a `ctypes` `CreateNamedPipe` server
+stands in for the daemon — and the device clearing the runners do before the app
+starts.
 
 ## What it does not prove
 

@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Socket-level utilities for the app e2e harness.
+"""Helper-transport utilities for the app e2e harness.
 
-The end-to-end run itself is the Linux desktop app under
-`integration_test/linux_app_e2e.dart`, driven by `run_linux_app.sh`. This script
-is the utility that run wraps: it clears the account's devices before the app
-starts, so a run that failed part-way cannot leave a device row that makes the
-next run report a device limit, and it tears a live tunnel down from a test's
-`addTearDown` net, which runs after the widget tree and its provider container
-are gone.
+The end-to-end run itself is the desktop app under
+`integration_test/app_e2e.dart`, driven by `run_linux_app.sh` /
+`run_windows_app.ps1`. This script is the utility those runners wrap: it clears
+the account's devices before the app starts, so a run that failed part-way
+cannot leave a device row that makes the next run report a device limit, and it
+tears a live tunnel down from a test's `addTearDown` net, which runs after the
+widget tree and its provider container are gone.
 
 It speaks the same newline-delimited JSON request/response protocol that
-`lib/features/vpn/data/helper_client.dart` speaks, so what is exercised is the
-real daemon over its real socket rather than a test double.
+`lib/features/vpn/data/helper_client.dart` speaks, over the same transport the
+app dials — the Unix socket on Linux, the named pipe on Windows — so what is
+exercised is the real daemon over its real transport rather than a test double.
 
-`--down` and `--status` need nothing but the socket, so teardown and status
+`--down` and `--status` need nothing but the transport, so teardown and status
 reads cannot fail merely because the API or the node has gone away.
 """
 
@@ -50,17 +51,21 @@ class StagingError(RuntimeError):
 
 
 class Helper:
-    """One connection to boltmeshd, one request per call."""
+    """One connection to boltmeshd, one request per call.
 
-    def __init__(self, path: str) -> None:
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.connect(path)
+    The endpoint is either a Unix socket path (Linux) or a named pipe
+    (Windows); both carry the same newline-delimited JSON, which is the point of
+    the app's own transport seam having two implementations.
+    """
+
+    def __init__(self, endpoint: str) -> None:
+        self._conn = _connect(endpoint)
         self._buf = b""
         self._seq = 0
 
     def close(self) -> None:
         try:
-            self._sock.close()
+            self._conn.close()
         except OSError:
             pass
 
@@ -72,7 +77,7 @@ class Helper:
 
     def _readline(self) -> bytes:
         while b"\n" not in self._buf:
-            chunk = self._sock.recv(65536)
+            chunk = self._conn.recv(65536)
             if not chunk:
                 raise HelperError("eof", "the helper closed the connection")
             self._buf += chunk
@@ -84,7 +89,7 @@ class Helper:
         self._seq += 1
         request = {"v": PROTOCOL_VERSION, "id": str(self._seq), "op": op, "caps": CAPS}
         request.update(fields)
-        self._sock.sendall(json.dumps(request).encode("utf-8") + b"\n")
+        self._conn.sendall(json.dumps(request).encode("utf-8") + b"\n")
 
         response = json.loads(self._readline())
         if not response.get("ok"):
@@ -94,6 +99,129 @@ class Helper:
 
     def capabilities(self) -> list[str]:
         return self.call("ping").get("caps", [])
+
+
+# --- transports ------------------------------------------------------------
+
+
+class _UnixConn:
+    """One Unix-socket connection to the helper."""
+
+    def __init__(self, path: str) -> None:
+        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self._sock.connect(path)
+        except OSError as exc:
+            self._sock.close()
+            raise HelperError("unavailable", f"helper socket unavailable: {exc}") from None
+
+    def sendall(self, data: bytes) -> None:
+        self._sock.sendall(data)
+
+    def recv(self, size: int) -> bytes:
+        return self._sock.recv(size)
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
+class _PipeConn:
+    """One named-pipe connection to the helper, through ctypes.
+
+    `dart:io` has no Windows named-pipe client either — the Flutter app proxies
+    the same exchange through `windows/runner/helper_pipe_io.cpp` — so this speaks
+    CreateFileW/WriteFile/ReadFile directly. Stdlib only: a pywin32 dependency
+    for one framed exchange would be a worse trade than thirty lines of ctypes.
+    """
+
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+    OPEN_EXISTING = 3
+    # CreateFileW reports failure by returning -1, which ctypes hands back as
+    # the unsigned 64-bit handle value; NULL is the other failure form.
+    INVALID_HANDLE_VALUE = 0xFFFFFFFFFFFFFFFF
+
+    def __init__(self, name: str) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self._ctypes = ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        kernel32.WriteFile.argtypes = [
+            wintypes.HANDLE, wintypes.LPCVOID, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+        ]
+        kernel32.ReadFile.argtypes = [
+            wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+        ]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32 = kernel32
+
+        # The pipe exists only while the daemon's service runs, so a connect
+        # right after an install or a restart can race it. WaitNamedPipe waits
+        # for the name to appear, so the race costs at most one wait rather
+        # than a nameless "the helper is not there".
+        kernel32.WaitNamedPipeW(name, 5000)
+        handle = kernel32.CreateFileW(
+            name, self.GENERIC_READ | self.GENERIC_WRITE, 0, None,
+            self.OPEN_EXISTING, 0, None,
+        )
+        if handle is None or handle == self.INVALID_HANDLE_VALUE:
+            err = ctypes.get_last_error()
+            raise HelperError(
+                "unavailable", f"helper pipe {name} unavailable: error {err}"
+            ) from None
+        self._handle = handle
+
+    def sendall(self, data: bytes) -> None:
+        written = self._ctypes.wintypes.DWORD()
+        buf = self._ctypes.create_string_buffer(data)
+        if not self._kernel32.WriteFile(
+            self._handle, buf, len(data), self._ctypes.byref(written), None
+        ):
+            raise HelperError("unavailable", "the helper pipe write failed")
+        if written.value != len(data):
+            raise HelperError("unavailable", "the helper pipe write was short")
+
+    def recv(self, size: int) -> bytes:
+        read = self._ctypes.wintypes.DWORD()
+        buf = self._ctypes.create_string_buffer(size)
+        if not self._kernel32.ReadFile(
+            self._handle, buf, size, self._ctypes.byref(read), None
+        ):
+            raise HelperError("unavailable", "the helper pipe read failed")
+        return buf.raw[: read.value]
+
+    def close(self) -> None:
+        try:
+            self._kernel32.CloseHandle(self._handle)
+        except OSError:
+            pass
+
+
+def _is_pipe(endpoint: str) -> bool:
+    r"""True when [endpoint] names a named pipe rather than a unix socket.
+
+    A named pipe path always starts with a UNC prefix (`\\.\pipe\...`), which no
+    filesystem path does, so the endpoint names its own transport.
+    """
+    return endpoint.startswith("\\\\")
+
+
+def _connect(endpoint: str) -> _UnixConn | _PipeConn:
+    """Opens the transport [endpoint] names: a pipe on Windows, a unix socket else."""
+    if _is_pipe(endpoint):
+        return _PipeConn(endpoint)
+    return _UnixConn(endpoint)
 
 
 # --- the API ----------------------------------------------------------------
@@ -210,18 +338,19 @@ def clear_devices(base: str, token: str, *, dry_run: bool = False) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--socket", help="boltmeshd's unix socket path")
+    ap.add_argument("--socket", help="boltmeshd's unix socket path (Linux)")
+    ap.add_argument("--pipe", help="boltmeshd's named pipe path (Windows)")
     ap.add_argument("--api-user", help="API user")
     ap.add_argument("--api-password", help="API password")
-    ap.add_argument("--api-base", help="API base URL, for the modes that read no socket")
+    ap.add_argument("--api-base", help="API base URL, for the modes that read no helper")
 
     ap.add_argument("--down", action="store_true",
-                    help="tear the tunnel down and exit. Needs only --socket")
+                    help="tear the tunnel down and exit. Needs only --socket or --pipe")
     ap.add_argument("--status", action="store_true",
                     help="print the daemon's own view of the tunnel and exit. The "
                          "kernel's `wg show` cannot read a userspace AmneziaWG device, "
-                         "so this is the equivalent read when the region is obfuscated. "
-                         "Needs only --socket")
+                         "so this is the equivalent read when the region is obfuscated "
+                         "or the host is Windows. Needs only --socket or --pipe")
     ap.add_argument("--clear-devices", action="store_true",
                     help="delete every device on the account and exit, so a run starts "
                          "from a known count. A run that fails part-way leaves its "
@@ -244,17 +373,32 @@ def main() -> int:
                       dry_run=args.dry_run)
         return 0
 
-    if not args.socket:
-        ap.error("--socket is required for --down and --status")
+    if args.socket and args.pipe:
+        ap.error("pass --socket or --pipe, not both; they are the same transport "
+                 "on different platforms")
+    endpoint = args.pipe or args.socket
+    if not endpoint:
+        ap.error("--socket (Linux) or --pipe (Windows) is required for "
+                 "--down and --status")
 
     if args.status:
-        with Helper(args.socket) as helper:
+        with Helper(endpoint) as helper:
             response = helper.call("status")
         print(json.dumps(response.get("status") or {}), flush=True)
         return 0
 
     if args.down:
-        with Helper(args.socket) as helper:
+        try:
+            helper = Helper(endpoint)
+        except HelperError as exc:
+            # No helper to talk to is the state `down` is meant to reach, so a
+            # teardown that finds nothing is a success, not a failure. This is
+            # the path a test's addTearDown net takes after a run that died
+            # before the tunnel ever came up.
+            print(f"no helper to tear down ({exc}); treating as already down",
+                  flush=True)
+            return 0
+        with helper:
             try:
                 helper.call("down")
                 print("tunnel down", flush=True)

@@ -126,6 +126,15 @@ e2e-linux-app: ## Run the Linux desktop app end to end (live node; needs BOLTMES
 e2e-install-helper: ## Build and install boltmeshd from source (sudo; run before e2e-linux-app)
 	sudo tool/e2e/install_boltmeshd.sh
 
+# The Windows pair: the install is elevated, the run is not. The runner
+# relaunches itself into the interactive session when it has to, because the
+# named pipe's DACL will not open for an SSH token. See tool/e2e/README.md.
+e2e-windows-app: ## Run the Windows desktop app end to end (live node; needs BOLTMESH_E2E_API_*)
+	pwsh -File tool/e2e/run_windows_app.ps1
+
+e2e-windows-install-helper: ## Build and install boltmeshd.exe from source (elevated; run before e2e-windows-app)
+	pwsh -File tool/e2e/install_boltmeshd.ps1
+
 # Also not part of `check`: needs root for Suricata, a live serving node and the
 # e2e's requirements. See tool/suricata/README.md.
 suricata-wireguard: ## Prove Suricata visibility of native/awg/stream (root; live node)
