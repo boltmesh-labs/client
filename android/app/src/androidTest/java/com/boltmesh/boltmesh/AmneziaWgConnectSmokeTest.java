@@ -71,11 +71,11 @@ public final class AmneziaWgConnectSmokeTest {
   public void awgHostConfinesNativeCallsToItsDedicatedThread() {
     Context context = ApplicationProvider.getApplicationContext();
     // Every libawg-go.so entry point is confined to TunnelHost's private
-    // thread: two Go runtimes share this process (the stock plugin's
-    // libwg-go.so and ours) and a thread that entered one must never enter
-    // the other — the runtime reads the wrong thread state as its own and
-    // dies with a SIGSEGV no catch block can see. These calls run here on
-    // the instrumentation thread, so each must fail fast instead.
+    // thread (see AndroidAwgHost.awgThreadName): the backend's handle map is
+    // unguarded and its native entry wants one stable thread identity, so an
+    // arbitrary caller must be refused rather than left to corrupt state.
+    // These calls run here on the instrumentation thread, so each must fail
+    // fast instead.
     assertThrows(
         IllegalStateException.class, () -> AndroidAwgHost.INSTANCE.status());
     assertThrows(

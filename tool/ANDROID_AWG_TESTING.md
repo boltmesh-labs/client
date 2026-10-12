@@ -7,12 +7,12 @@ these notes cover what it does not drive — the GUI by hand, and the
 stall/demotion a `user`-build emulator cannot induce without a server-side UDP
 block.
 
-## Known issue: SIGSEGV on the AWG → native owner switch
+## Fixed: SIGSEGV on the AWG → native owner switch
 
-The automated run reproduces a native crash the manual ladder never hit. Be on
-the AWG host (the obfuscated or stream rung), tear down, then start the **stock**
-plugin, and the app process dies with signal 11 right after the stock
-`GoBackend` brings `tun0` up:
+The automated run used to reproduce a native crash the manual ladder never hit:
+be on the AWG host (the obfuscated or stream rung), tear down, then start the
+**stock** rung, and the process died with signal 11 right after the stock
+`GoBackend` brought `tun0` up:
 
 ```text
 I/WireGuard/GoBackend: Bringing tunnel boltmesh0 UP
@@ -20,14 +20,11 @@ I/Vpn: Established by com.boltmesh.boltmesh on tun0
 I/Zygote: Process <pid> exited due to signal 11 (Segmentation fault)
 ```
 
-`AndroidTunnelAdapter.start` takes this path on its own (`switch Android VPN
-owner to stock WireGuard`), so a user moving from an obfuscated region to a
-stock one can reach it; the manual ladder walks native → awg → stream and never
-back. There is no Dart exception, and a `user`-build emulator writes no
-tombstone — reproduce on a `userdebug`/`eng` image to capture the stack. The
-prime suspect is the two-Go-runtime hazard this process already documents
-(`libwg-go.so` and `libawg-go.so` sharing one process; a thread that enters both
-dies with a SIGSEGV no handler sees).
+That path is gone. Every Android rung — stock included — now runs on the
+in-process AWG host, so there is no second engine to start and no owner switch
+to make; `AndroidTunnelAdapter` always takes the AWG path. The root cause and
+the experiment that ruled out the original explanation (cgo symbol preemption)
+are recorded in `tool/android-debug/README.md`. Nothing else here depends on it.
 
 ## Build and attach the emulator
 
@@ -78,8 +75,11 @@ notification.
 - At the start of this verification test2 was online with zero peers. The final
   live check is complete; no capacity recovery or device deregistration was
   performed.
-- The release instrumentation XML reports 3/3 tests passed, and direct
-  `adb shell am instrument -w -r ...` returns `OK (3 tests)`. On the remote TCP
+- The release instrumentation XML reported 3/3 tests passed, and direct
+  `adb shell am instrument -w -r ...` returned `OK (3 tests)`. That was the
+  suite as it stood then; it is now `AmneziaWgConnectSmokeTest` alone (2 tests),
+  the stock-bridge and WireGuard-model smoke tests having been deleted along
+  with the code they covered. On the remote TCP
   ADB emulator, Gradle's `connectedReleaseAndroidTest` still exits nonzero; this
   appears to be a UTP/remote-device result issue, not a failed test assertion.
   Recheck on the CI-local API 30/35 emulators when CI is next intentionally run;

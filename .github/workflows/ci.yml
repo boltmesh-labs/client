@@ -319,9 +319,10 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # Reflection names and the API 30 Config.parse path are easy to break
-      # in a dependency update and are not observable by a debug-only build.
-      # Run the instrumentation tests against the minified release APK.
+      # The AWG config parser, the native shim's symbol names and the
+      # instrumentation runner itself are easy to break in a dependency update,
+      # and none of them is observable in a debug-only build. Run the
+      # instrumentation tests against the minified release APK.
       - name: Run Android release smoke tests (API ${{ matrix.api-level }})
         uses: reactivecircus/android-emulator-runner@v2
         with:

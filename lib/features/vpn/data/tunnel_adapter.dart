@@ -20,9 +20,11 @@ import 'stream_server_resolver_stub.dart'
 import 'stream_transport.dart';
 import 'tunnel_tuning.dart';
 
-/// True where the plugin has no handshake source of its own and the native
-/// `com.boltmesh/handshake` host channel answers it (Android). Linux and
-/// Windows read handshakes from the `boltmeshd` helper instead.
+/// True where a native host channel would answer the plugin's otherwise missing
+/// handshake source. Only Android ever did; it reads its handshake from the
+/// in-process AWG host's status now and does not use this adapter at all, so
+/// nothing implements `com.boltmesh/handshake` today. Linux and Windows read
+/// handshakes from the `boltmeshd` helper instead.
 bool get _hostHandshakeSupported =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
@@ -152,15 +154,17 @@ abstract class TunnelAdapter {
 /// `instance` is resolved lazily because the plugin throws
 /// UnsupportedError on unsupported platforms (web).
 ///
-/// `wireguard_flutter_plus` exposes only byte counters, so handshakes come
-/// from our own channel (the plugin is never forked): Android's `MainActivity`
-/// answers the `com.boltmesh/handshake` host channel with the GoBackend peer
-/// `latestHandshakeEpochMillis`. Linux and Windows do not use this adapter at
-/// all (they run through the privileged `boltmeshd` helper, see
-/// [HelperTunnelAdapter]). Apple still asks the host channel as a placeholder
-/// for its future handler (see `client/README.md`) — there a missing handler
-/// resolves as unknown, and [handshakeReaderSupported] reports false so the
-/// null never counts as a never-handshook stall.
+/// `wireguard_flutter_plus` exposes only byte counters, so handshakes would come
+/// from our own channel (the plugin is never forked), which Android's
+/// `MainActivity` once answered with the GoBackend peer
+/// `latestHandshakeEpochMillis`. Android reads its handshake from the in-process
+/// AWG host's status now (see `AndroidTunnelAdapter`) and no longer uses this
+/// adapter, so nothing implements the channel. Linux and Windows do not use this
+/// adapter either (they run through the privileged `boltmeshd` helper, see
+/// [HelperTunnelAdapter]). Apple asks the host channel as a placeholder for its
+/// future handler (see `client/README.md`) — there a missing handler resolves as
+/// unknown, and [handshakeReaderSupported] reports false so the null never counts
+/// as a never-handshook stall.
 class WireGuardTunnelAdapter implements TunnelAdapter {
   WireGuardTunnelAdapter() : _handshakeReader = null;
 
@@ -571,8 +575,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
           .timeout(TunnelTuning.stopTimeout);
       AppLog.info('Android AWG tunnel stopped ($reason)');
     } catch (e) {
-      // The AWG backend may never have been initialized. It is safe to proceed
-      // to the stock backend, but retain unknown rather than claiming success.
+      // The AWG backend may never have been initialized. It is safe to proceed,
+      // but retain unknown rather than claiming success.
       AppLog.info('Android AWG stop unavailable ($reason): $e');
     }
   }

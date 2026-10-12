@@ -193,9 +193,10 @@ process and one store, so the session and the device identity carry across them
    owns the data plane (Linux only; a userspace device has none, and the app's
    counters stand in), and an in-tunnel ping to that rung's own node address
    with no loss. It then descends back to `native`: the change *into* stock is
-   the one transition the upward walk never makes — it hands Android's single
-   VpnService from the in-process AWG host back to the stock plugin — so leaving
-   it out let that hand-off regress unexercised. Finishes with one power-control
+   the one transition the upward walk never makes — it tears the obfuscated rung
+   down and brings a stock config up on the same single VpnService, through the
+   same in-process host — so leaving it out let that hand-off regress
+   unexercised. Finishes with one power-control
    disconnect that must leave the tunnel gone.
 3. **switches server** — connects, then picks a *different* server in the
    Regions tab and asserts the live dial moved to it. The wait is on the

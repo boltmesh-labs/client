@@ -12,23 +12,26 @@ import java.nio.charset.StandardCharsets
 
 /// Process-lifetime owner for Android's in-process AmneziaWG backend.
 ///
-/// Stock regions continue to use wireguard_flutter_plus. This host is used only
-/// when the selected region's wg-quick config carries the AWG directives. The
-/// upstream backend builds Android's VpnService TUN, starts the pinned
-/// amneziawg-go device over that descriptor, and protects its UDP sockets from
-/// being routed back into the VPN.
+/// This host serves *every* Android rung — stock, obfuscated and stream — and
+/// the `wireguard_flutter_plus` plugin's own backend is never constructed (see
+/// `AndroidTunnelAdapter`). Its engine parses a stock wg-quick config
+/// unchanged, so a separate stock data plane would buy nothing and would only
+/// add a second Go runtime to the process. The upstream backend builds
+/// Android's VpnService TUN, starts the pinned amneziawg-go device over that
+/// descriptor, and protects its UDP sockets from being routed back into the VPN.
 internal object AndroidAwgHost {
   private const val tunnelName = "boltmesh0"
   private const val foregroundServiceClass =
     "orban.group.wireguard_flutter.VpnForegroundService"
 
   /// Name of the process-wide thread that owns every libawg-go.so call (see
-  /// TunnelHost's awgScope). Two Go runtimes share this process and a thread
-  /// that entered one must never enter the other, so every entry point below
-  /// checks confinement first and fails with a catchable error instead of
-  /// the SIGSEGV the runtime dies with. A name check rather than recorded
-  /// identity keeps this stateless: recording the first caller would let a
-  /// test (or any stray call) claim ownership and break the real thread.
+  /// TunnelHost's awgScope). Confinement outlives the single-runtime fix that
+  /// removed the stock engine, for two reasons: the backend's handle map is
+  /// unguarded, and its native entry wants one stable thread identity. Every
+  /// entry point below checks it first and fails with a catchable error rather
+  /// than corrupting state from an arbitrary caller. A name check rather than
+  /// recorded identity keeps this stateless: recording the first caller would
+  /// let a test (or any stray call) claim ownership and break the real thread.
   internal const val awgThreadName = "BoltMeshAwg"
 
   private fun checkAwgThread() {

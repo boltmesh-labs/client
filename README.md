@@ -138,7 +138,7 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | stock plugin + in-process AWG/stream (`VpnService`) | not needed | build, lint, minified bridge + API 30/35 instrumentation | **AWG and stream emulator proofs passed** |
+| **Android** | in-process AWG, every rung (`VpnService`) | not needed | build, lint, minified release instrumentation (API 30/35) | **AWG and stream emulator proofs passed** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
 | **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
@@ -225,7 +225,8 @@ Not everything was blocked, and the parts that were not are landed and tested:
   sticky across process death: the overlay stops a null restart before it can
   create or update a notification.
   Doze/app-standby and OEM battery managers may defer the service; the
-  WireGuard tunnel itself is in-kernel and keeps passing traffic regardless.
+  WireGuard tunnel itself lives in the app process and keeps passing traffic
+  regardless.
 - **Android background healing**: the app runs on a process-cached
   `FlutterEngine` (`MainActivity.provideFlutterEngine`,
   `shouldDestroyEngineWithHost = false`), so swiping the task away destroys
@@ -237,14 +238,13 @@ Not everything was blocked, and the parts that were not are landed and tested:
   cannot cancel them. A true process death (force-stop / OOM) no longer
   resurrects the keep-alive service; the next app launch cold-starts and runs
   `reconcileColdStart`.
-- **Android minified bridge**: `TunnelHost` reflects a small, explicit set of
-  plugin/backend fields. `android/app/proguard-rules.pro` keeps those field
-  names for R8; Flutter's generated plugin rules may still obfuscate the
-  owner classes, while production accesses them through `javaClass`. PR CI
-  builds a minified release APK and runs the
-  `MinifiedTunnelBridgeTest` instrumentation smoke test, so a plugin update
-  cannot silently turn handshake, active-peer, or ghost-kill reads into
-  unknown/empty results again.
+- **Android minified release**: the release APK is minified, and CI runs the
+  instrumentation suite against that minified build, so R8 cannot silently
+  break the AWG config parser, the native JNI shim's symbol names, or the
+  instrumentation runner itself (`AmneziaWgConnectSmokeTest`, on API 30 and
+  35). `TunnelHost` no longer reflects into the plugin, so
+  `android/app/proguard-rules.pro` keeps only what the JNI shim resolves and
+  the runner needs.
 - **iOS/macOS**: the tunnel is a **Network Extension**, so the app itself is
   only half of it. The `networkextension` (Packet Tunnel) and App Group
   entitlements are declared in `ios/Runner/Runner.entitlements` and
@@ -912,16 +912,19 @@ rest of the pipeline (which files, when, verify) is unchanged.
 
 ## Handshake readers
 
-`wireguard_flutter_plus` exposes only byte counters, so the app reads
-handshakes through its own channel, `com.boltmesh/handshake` →
-`getLastHandshake` (the plugin is never forked). Contract:
-`getLastHandshake` returns epoch seconds (double) of the last completed
-handshake, or null when unknown (null never heals — only the
-degraded-stage path acts). Dart side: `lib/features/vpn/data/` —
-`tunnel_adapter.dart`, whose `handshakeReaderSupported` gates the
-never-handshook branch. Every `isHandshakeStale` call site must pass it: the
-default is `true`, which reads a permanent null as "never handshook" and tears
-down a live tunnel on exactly the platforms that have no reader.
+`wireguard_flutter_plus` exposes only byte counters, so a handshake read needs a
+source of its own. Android reads it from the in-process AWG host's status — the
+`statusAwg` reply's `lastHandshake`, see `AndroidTunnelAdapter` — and Linux and
+Windows read it from the `boltmeshd` helper's status. The app's own
+`com.boltmesh/handshake` → `getLastHandshake` channel served the stock plugin's
+`GoBackend` and is no longer implemented on any platform; Apple still asks it as
+a placeholder for its future handler, where a missing handler resolves as
+unknown. A null never heals — only the degraded-stage path acts. Dart side:
+`lib/features/vpn/data/` — `tunnel_adapter.dart`, whose
+`handshakeReaderSupported` gates the never-handshook branch. Every
+`isHandshakeStale` call site must pass it: the default is `true`, which reads a
+permanent null as "never handshook" and tears down a live tunnel on exactly the
+platforms that have no reader.
 
 - **Linux and Windows**: work today via the privileged `boltmeshd` helper
   (`boltmeshd/`). On Linux it reads the peer handshake with `wgctrl` and
@@ -1021,8 +1024,7 @@ so a Windows-only C++ break fails the `validate-native` job too. It is not
 executed on Linux — the test drives overlapped named-pipe I/O, which Wine
 emulates incompletely. Android is
 additionally checked by `./gradlew :app:lintDebug` and the minified-release
-`MinifiedTunnelBridgeTest` plus API 30 `WireGuardConnectSmokeTest`
-instrumentation tests in `validate-android`. The Android CI matrix runs the
+`AmneziaWgConnectSmokeTest` instrumentation tests in `validate-android`. The Android CI matrix runs the
 release smoke tests on API 30 and 35.
 
 Apple is the one platform with no executed test of any kind — no emulator, no

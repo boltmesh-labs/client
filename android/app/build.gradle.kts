@@ -87,9 +87,10 @@ android {
 
     buildTypes {
         release {
-            // TunnelHost's backend bridge uses a deliberately small reflection
-            // ABI. Keep the release build minified while preserving the exact
-            // field names in proguard-rules.pro.
+            // Keep the release build minified: the release instrumentation
+            // suite runs against this APK, so R8's treatment of the AWG
+            // parser, the native shim and the instrumentation runner is
+            // exercised rather than assumed (see proguard-rules.pro).
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
