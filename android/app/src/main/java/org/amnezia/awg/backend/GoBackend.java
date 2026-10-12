@@ -529,11 +529,10 @@ public final class GoBackend implements Backend {
                     owner.currentTunnel = null;
                     owner.currentTunnelHandle = -1;
                     owner.currentConfig = null;
-                    // The framework delivers onDestroy on the main thread, and
-                    // two Go runtimes share this process: a thread that entered
-                    // one must never enter the other (see TunnelHost). Hand the
-                    // native teardown to the confined libawg-go thread rather
-                    // than entering it here.
+                    // The framework delivers onDestroy on the main thread.
+                    // Every libawg-go call belongs on the host's own thread
+                    // (see TunnelHost.runOnAwgThread), so hand the native
+                    // teardown over rather than entering it here.
                     if (handle != -1)
                         TunnelHost.INSTANCE.runOnAwgThread(() -> awgTurnOff(handle));
                     tunnel.onStateChange(State.DOWN);

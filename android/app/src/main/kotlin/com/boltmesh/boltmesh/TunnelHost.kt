@@ -59,26 +59,23 @@ internal object TunnelHost {
   private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val main = Handler(Looper.getMainLooper())
 
-  /// The only thread that may enter libawg-go.so, and the scope for the four
-  /// AWG handlers below ([startAwg][stopAwg][statusAwg][killAwgGhost]).
+  /// The only thread that enters libawg-go.so, and the scope for the four AWG
+  /// handlers below ([startAwg][stopAwg][statusAwg][killAwgGhost]).
   ///
-  /// Two Go `c-shared` libraries live in this process — the stock plugin's
-  /// libwg-go.so and our libawg-go.so — and they export the same cgo runtime
-  /// symbols (`crosscall2`, `_cgo_*`, `x_cgo_*`), so one preempts the other's
-  /// references: a call can execute the other library's code on a thread that
-  /// never entered it (see `tool/android-debug/README.md`). Confining every
-  /// libawg-go entry point to this one private thread keeps the runtime state
-  /// on the right thread — the stock backend runs on the shared
-  /// [Dispatchers.IO] pool, and before this a recycled worker died inside
-  /// `runtime.cgocallback` (null + 0x38) on every failover — and it serializes
-  /// the backend's unguarded handle map. It is necessary but **not
-  /// sufficient**: the stock↔AWG owner switch still faults through the
-  /// preemption path, with no Java thread crossing for confinement to stop.
-  /// The stock-touching calls above it must stay on [ioScope]: running them
-  /// here would pollute this thread for the stock runtime. Everything that
+  /// Android runs every rung on this one Go runtime: the stock plugin's
+  /// libwg-go.so is never loaded (its attach-time backend construction is
+  /// dropped by the source overlay in `android/build.gradle.kts`). Two
+  /// initialized Go runtimes in one process replace each other's
+  /// process-global signal handlers, so the app faulted on the stock↔AWG
+  /// owner switch; see `tool/android-debug/README.md`.
+  ///
+  /// Keeping every libawg-go entry point on this private thread still buys
+  /// two things: it serializes the backend's unguarded handle map, and it
+  /// keeps the native entry on one stable thread identity. Everything that
   /// enters libawg-go belongs here — including the vendored `VpnService`'s
   /// teardown, which the framework delivers on the main thread and which
-  /// [runOnAwgThread] forwards.
+  /// [runOnAwgThread] forwards. The stock-touching lookups above it stay on
+  /// [ioScope].
   private val awgThread = Executors.newSingleThreadExecutor { r ->
     Thread(r, AndroidAwgHost.awgThreadName).apply { isDaemon = true }
   }

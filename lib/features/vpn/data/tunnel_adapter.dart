@@ -449,19 +449,22 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }
 }
 
-/// Android can use two in-process Go backends: the existing plugin for stock
-/// WireGuard and BoltMesh's AWG host for obfuscated regions. This adapter
-/// selects by config shape and keeps status/teardown directed to the backend
-/// that currently owns Android's single VpnService TUN.
+/// Android runs *every* rung through BoltMesh's in-process AmneziaWG host.
+///
+/// Android can host only one owning VpnService TUN, and this app gives it to
+/// the AWG host's vendored `org.amnezia.awg.backend.GoBackend` for the stock,
+/// obfuscated and stream rungs alike — its engine parses a stock config
+/// unchanged (every obfuscation directive defaults off), so a separate stock
+/// data plane buys nothing. The `wireguard_flutter_plus` plugin's own backend
+/// is deliberately never used: constructing it loads `libwg-go.so`, and two
+/// Go runtimes in one process fight over process-global state (signal
+/// handlers, altstack), so the app faults the moment a stock tunnel is brought
+/// up after the AWG runtime is live. See `tool/android-debug/README.md`.
 class AndroidTunnelAdapter implements TunnelAdapter {
   AndroidTunnelAdapter({
-    WireGuardTunnelAdapter? stock,
     Future<String> Function(String server)? resolveStreamServer,
-  }) : _stock = stock ?? WireGuardTunnelAdapter(),
-       _resolveStreamServer =
+  }) : _resolveStreamServer =
            resolveStreamServer ?? stream_resolver.resolveStreamServer;
-
-  final WireGuardTunnelAdapter _stock;
 
   /// Resolves the stream node's host to a literal address before the start.
   /// Injectable so the hand-off is testable without a real lookup.
@@ -472,20 +475,18 @@ class AndroidTunnelAdapter implements TunnelAdapter {
   @visibleForTesting
   static const awgChannel = MethodChannel('com.boltmesh/tunnel');
 
-  static final _awgDirective = RegExp(
-    r'^\s*Jc\s*=',
-    caseSensitive: false,
-    multiLine: true,
-  );
-
   @override
-  bool get isReady => _stock.isReady;
+  bool get isReady => true;
 
   @override
   Stream<VpnStage> get stages => const Stream<VpnStage>.empty();
 
   @override
-  Future<void> ensureInitialized() => _stock.ensureInitialized();
+  Future<void> ensureInitialized() async {
+    // Nothing to do: the AWG host is process-scoped and loads libawg-go on the
+    // first start. The plugin's backend is never constructed (see the class
+    // docs), so there is nothing to warm up.
+  }
 
   /// Android has no privileged daemon, but its in-process native bridge is a
   /// real stream data plane, so it advertises the token the ladder gates on.
@@ -498,7 +499,23 @@ class AndroidTunnelAdapter implements TunnelAdapter {
   bool get handshakeReaderSupported => true;
 
   @override
-  Future<bool> requestConsent() => _stock.requestConsent();
+  Future<bool> requestConsent() async {
+    // The AWG host's VpnService needs the same OS consent the plugin's would,
+    // and TunnelHost services the round-trip itself — so consent no longer
+    // drags in the plugin's backend (which is what loads libwg-go).
+    try {
+      return await awgChannel.invokeMethod<bool>('requestVpnConsent') ?? true;
+    } on MissingPluginException {
+      // No native host (plain `flutter test`): nothing to consent to, and
+      // `start` fails on its own terms if the platform is wrong.
+      return true;
+    } catch (e) {
+      // Fail closed: guessing "granted" would push the dialog back inside
+      // `start`'s timeout, the exact failure the split exists to avoid.
+      AppLog.error('vpn consent request failed', e);
+      return false;
+    }
+  }
 
   @override
   Future<void> start({
@@ -508,57 +525,42 @@ class AndroidTunnelAdapter implements TunnelAdapter {
     TunnelTransport? transport,
   }) async {
     // The stream rung points the peer endpoint at the bridge's loopback
-    // address. It always runs on the AWG host — the in-process engine that
-    // owns the VpnService the bridge protects its TLS socket through — even
-    // when the inner config is stock: the plugin's data plane owns its own
-    // VpnService and cannot carry the bridge. The AWG engine parses a stock
-    // config unchanged (every obfuscation directive defaults off).
-    if (transport != null || _awgDirective.hasMatch(wgQuickConfig)) {
-      // Android allows one owning VPN TUN. Tear down either previous engine
-      // before transferring ownership to the other one — and before resolving
-      // the node, so the query cannot follow a still-live tunnel.
-      await _stopAwg('restart Android AWG tunnel');
-      await _stock.stop('switch Android VPN owner to AWG');
-      final spec = transport?.toSpecJson();
-      if (spec != null) {
-        // Hand the bridge a literal address: once the TUN exists the app's
-        // resolver follows it, so the node's hostname would resolve through
-        // the very tunnel the bridge is needed to bring up. Resolving here,
-        // before the native start, keeps the query on the physical network.
-        spec['server'] = await _resolveStreamServer(spec['server']! as String);
-      }
-      try {
-        await awgChannel
-            .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
-              'wgQuickConfig': wgQuickConfig,
-              if (spec != null) 'streamSpec': jsonEncode(spec),
-            })
-            .timeout(TunnelTuning.opTimeout);
-      } catch (_) {
-        // A failed or timed-out start must not leave a live TUN behind that
-        // the controller has already given up on, or the app and the device
-        // disagree about the connection. The native side serializes stop
-        // after an in-flight start, so this cannot race the start's cleanup.
-        await _stopAwg('start failed');
-        rethrow;
-      }
-      _awgActive = true;
-      return;
+    // address: the AWG host owns the VpnService the bridge protects its TLS
+    // socket through. A stock config needs no separate handling — the same
+    // engine parses it unchanged.
+    // Android allows one owning VPN TUN, so a previous rung is torn down
+    // before this one takes it — and before resolving the node, so the query
+    // cannot follow a still-live tunnel.
+    await _stopAwg('restart Android tunnel');
+    final spec = transport?.toSpecJson();
+    if (spec != null) {
+      // Hand the bridge a literal address: once the TUN exists the app's
+      // resolver follows it, so the node's hostname would resolve through the
+      // very tunnel the bridge is needed to bring up. Resolving here, before
+      // the native start, keeps the query on the physical network.
+      spec['server'] = await _resolveStreamServer(spec['server']! as String);
     }
-
-    await _stopAwg('switch Android VPN owner to stock WireGuard');
-    await _stock.start(
-      serverAddress: serverAddress,
-      wgQuickConfig: wgQuickConfig,
-      providerBundleId: providerBundleId,
-    );
-    _awgActive = false;
+    try {
+      await awgChannel
+          .invokeMapMethod<String, Object?>('startAwg', <String, Object?>{
+            'wgQuickConfig': wgQuickConfig,
+            if (spec != null) 'streamSpec': jsonEncode(spec),
+          })
+          .timeout(TunnelTuning.opTimeout);
+    } catch (_) {
+      // A failed or timed-out start must not leave a live TUN behind that the
+      // controller has already given up on, or the app and the device
+      // disagree about the connection. The native side serializes stop after
+      // an in-flight start, so this cannot race the start's cleanup.
+      await _stopAwg('start failed');
+      rethrow;
+    }
+    _awgActive = true;
   }
 
   @override
   Future<void> stop(String reason) async {
     await _stopAwg(reason);
-    await _stock.stop(reason);
     _awgActive = false;
   }
 
@@ -605,7 +607,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
       _awgActive = false;
       return VpnStage.disconnected;
     }
-    return _stock.readStage();
+    // No status and nothing known to have been up: unknown, never a stall.
+    return null;
   }
 
   @override
@@ -618,11 +621,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
         'txBytes': status['txBytes'] ?? 0,
       };
     }
-    if (_awgActive) {
-      _awgActive = false;
-      return null;
-    }
-    return _stock.readTraffic();
+    _awgActive = false;
+    return null;
   }
 
   @override
@@ -637,11 +637,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
         isUtc: true,
       );
     }
-    if (_awgActive) {
-      _awgActive = false;
-      return null;
-    }
-    return _stock.readHandshake();
+    _awgActive = false;
+    return null;
   }
 
   @override
@@ -660,11 +657,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
       if (session is! bool) return null;
       return session;
     }
-    if (_awgActive) {
-      _awgActive = false;
-      return null;
-    }
-    return _stock.readStreamSession();
+    _awgActive = false;
+    return null;
   }
 
   @override
@@ -679,11 +673,8 @@ class AndroidTunnelAdapter implements TunnelAdapter {
         endpoint: (status['endpoint'] as String?)?.trim() ?? '',
       );
     }
-    if (_awgActive) {
-      _awgActive = false;
-      return null;
-    }
-    return _stock.getActivePeer();
+    _awgActive = false;
+    return null;
   }
 
   @override
@@ -699,8 +690,7 @@ class AndroidTunnelAdapter implements TunnelAdapter {
       AppLog.info('Android AWG ghost kill unavailable (ignoring): $e');
     }
     _awgActive = false;
-    final stockKilled = await _stock.killGhost();
-    return awgKilled && stockKilled;
+    return awgKilled;
   }
 }
 

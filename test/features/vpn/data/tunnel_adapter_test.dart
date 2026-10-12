@@ -412,72 +412,61 @@ void main() {
       messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, null);
     });
 
-    test(
-      'routes obfuscated configs to AWG after releasing stock TUN',
-      () async {
-        final tunnel = HangingTunnel([]);
-        final adapter = AndroidTunnelAdapter(
-          stock: WireGuardTunnelAdapter.test(tunnel),
-        );
-        final calls = <String>[];
-        messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
-          call,
-        ) async {
-          calls.add(call.method);
-          return <String, Object?>{'up': call.method == 'startAwg'};
-        });
-
-        await adapter.start(
-          serverAddress: '198.51.100.1',
-          wgQuickConfig: awgConfig,
-          providerBundleId: '',
-        );
-
-        expect(calls, ['stopAwg', 'startAwg']);
-        expect(tunnel.stops, 1);
-        expect(tunnel.configs, isEmpty);
-      },
-    );
-
-    test('keeps stock configs on wireguard_flutter_plus', () async {
-      final tunnel = HangingTunnel([]);
-      final adapter = AndroidTunnelAdapter(
-        stock: WireGuardTunnelAdapter.test(tunnel),
-      );
+    test('runs obfuscated and stock configs on the AWG host alike', () async {
+      // One Go runtime, always: the stock plugin's backend is never touched,
+      // because constructing it loads a second Go runtime that faults the
+      // process on the next stock tunnel.
+      final adapter = AndroidTunnelAdapter();
       final calls = <String>[];
       messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
         call,
       ) async {
         calls.add(call.method);
-        return <String, Object?>{'up': false};
+        return <String, Object?>{'up': call.method == 'startAwg'};
       });
 
+      await adapter.start(
+        serverAddress: '198.51.100.1',
+        wgQuickConfig: awgConfig,
+        providerBundleId: '',
+      );
+      expect(calls, ['stopAwg', 'startAwg']);
+
+      calls.clear();
       await adapter.start(
         serverAddress: '198.51.100.1',
         wgQuickConfig: stockConfig,
         providerBundleId: '',
       );
-
-      expect(calls, ['stopAwg']);
-      expect(tunnel.configs, [stockConfig]);
+      expect(calls, ['stopAwg', 'startAwg']);
     });
 
     test('advertises the stream capability of its native bridge', () {
-      final adapter = AndroidTunnelAdapter(
-        stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
-      );
+      final adapter = AndroidTunnelAdapter();
       expect(adapter.daemonCapabilities, contains(capStreamTransport));
+    });
+
+    test('requests OS consent through the AWG host channel', () async {
+      final adapter = AndroidTunnelAdapter();
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        return true;
+      });
+
+      expect(await adapter.requestConsent(), isTrue);
+      expect(calls, ['requestVpnConsent']);
     });
 
     test(
       'routes the stream rung through AWG with the transport spec',
       () async {
-        // The stream rung always runs on the AWG host, even for a stock inner
-        // config: that host owns the VpnService the bridge protects its TLS
-        // socket through, and its engine parses a stock config unchanged.
-        final tunnel = HangingTunnel([]);
+        // The stream rung points the peer endpoint at the bridge's loopback
+        // address; the AWG host owns the VpnService the bridge protects its
+        // TLS socket through, and its engine parses a stock config unchanged.
         final adapter = AndroidTunnelAdapter(
-          stock: WireGuardTunnelAdapter.test(tunnel),
           resolveStreamServer: (server) async {
             expect(server, 'node.example:443');
             return '203.0.113.9:443';
@@ -511,7 +500,6 @@ void main() {
           transport: transport,
         );
 
-        expect(tunnel.configs, isEmpty);
         final spec = jsonDecode(
           startArgs!['streamSpec'] as String,
         ) as Map<String, Object?>;
@@ -530,9 +518,7 @@ void main() {
     test('stops the native tunnel when a stream start fails', () async {
       // A start the controller has given up on must not leave a live TUN
       // behind, or the app and the device start disagreeing about the state.
-      final tunnel = HangingTunnel([]);
       final adapter = AndroidTunnelAdapter(
-        stock: WireGuardTunnelAdapter.test(tunnel),
         resolveStreamServer: (_) async => '203.0.113.9:443',
       );
       final calls = <String>[];
@@ -573,9 +559,7 @@ void main() {
     test(
       'reads liveness and the handshake from the active AWG backend',
       () async {
-        final adapter = AndroidTunnelAdapter(
-          stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
-        );
+        final adapter = AndroidTunnelAdapter();
         messenger.setMockMethodCallHandler(
           AndroidTunnelAdapter.awgChannel,
           (call) async => <String, Object?>{
@@ -601,10 +585,29 @@ void main() {
       },
     );
 
-    test('reads the stream session state from the AWG backend', () async {
-      final adapter = AndroidTunnelAdapter(
-        stock: WireGuardTunnelAdapter.test(HangingTunnel([])),
+    test('reports unknown, then disconnected, with no AWG status', () async {
+      final adapter = AndroidTunnelAdapter();
+      // Nothing known to have been up: unknown, not dead.
+      expect(await adapter.readStage(), isNull);
+      expect(await adapter.readTraffic(), isNull);
+
+      // Come up, then lose the status channel: the last known rung was up, so
+      // the read is a disconnect rather than an unknown stall.
+      messenger.setMockMethodCallHandler(
+        AndroidTunnelAdapter.awgChannel,
+        (call) async => <String, Object?>{'up': true, 'stage': 'connected'},
       );
+      expect(await adapter.readStage(), VpnStage.connected);
+
+      messenger.setMockMethodCallHandler(
+        AndroidTunnelAdapter.awgChannel,
+        (call) async => null,
+      );
+      expect(await adapter.readStage(), VpnStage.disconnected);
+    });
+
+    test('reads the stream session state from the AWG backend', () async {
+      final adapter = AndroidTunnelAdapter();
       // A live stream transport reports its session state: false while
       // the bridge's TLS session is still establishing, true once it
       // has completed. The health tick reads this to keep a rung still

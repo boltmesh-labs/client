@@ -38,7 +38,46 @@ val prepareWireguardAndroid = tasks.register("prepareWireguardAndroid") {
         check(pluginSource.isFile) {
             "wireguard_flutter_plus source layout changed; update the Android service patch"
         }
-        val source = pluginSource.readText()
+        var source = pluginSource.readText()
+
+        // BoltMesh: the plugin constructs its stock GoBackend from
+        // onAttachedToEngine, and that constructor loads libwg-go.so. This app
+        // runs every rung on its own in-process AWG host; a second Go runtime
+        // in the process replaces the first one's process-global signal
+        // handlers, so the app faults as soon as a stock tunnel comes up after
+        // the AWG runtime is live. Drop the attach-time init so the stock
+        // backend is never built and libwg-go is never loaded. The block is
+        // matched by its exact text so a plugin upgrade that reshapes it fails
+        // here rather than silently reintroducing the second runtime.
+        val backendInitStart =
+            "    scope.launch(Dispatchers.IO) {\n" +
+                "        try {\n" +
+                "            backend = createBackend()"
+        val backendInitStartIndex = source.indexOf(backendInitStart)
+        check(backendInitStartIndex >= 0) {
+            "wireguard_flutter_plus attach-time backend init changed; " +
+                "review the BoltMesh Gradle patch"
+        }
+        val backendInitEnd =
+            "        } catch (e: Exception) {\n" +
+                "            Log.e(TAG, \"Error initializing backend or restoring config\", e)\n" +
+                "        }\n" +
+                "    }\n"
+        val backendInitEndIndex = source.indexOf(backendInitEnd, backendInitStartIndex)
+        check(backendInitEndIndex >= 0) {
+            "wireguard_flutter_plus attach-time backend init tail changed; " +
+                "review the BoltMesh Gradle patch"
+        }
+        source =
+            source.substring(0, backendInitStartIndex) +
+            "    // BoltMesh: the stock WireGuard backend is never constructed on\n" +
+            "    // Android — every rung runs on the in-process AWG host, so\n" +
+            "    // libwg-go.so must never load (see android/build.gradle.kts).\n" +
+            source.substring(backendInitEndIndex + backendInitEnd.length)
+        check(!source.contains("backend = createBackend()")) {
+            "wireguard_flutter_plus still constructs its stock backend on attach"
+        }
+
         val marker = "class VpnForegroundService : Service() {"
         val markerIndex = source.indexOf(marker)
         check(markerIndex >= 0) {
