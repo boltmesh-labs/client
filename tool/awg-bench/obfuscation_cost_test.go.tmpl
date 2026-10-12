@@ -1,0 +1,60 @@
+//go:build boltmesh_awg
+
+package device
+
+// This file is not compiled in place. run.sh copies it into the AmneziaWG
+// engine's device package as zz_obfuscation_cost_test.go, and only that engine
+// gets -tags boltmesh_awg, so the build tag below keeps it out of the stock
+// engine (which has no such code to measure). The cost these two benchmarks
+// report is the fork's entire per-packet addition over upstream, so it is
+// measured directly rather than inferred from a whole-packet figure that the
+// test harness drowns out.
+
+import "testing"
+
+// BenchmarkAWGHeaderProtection is what the fork adds around the transport
+// crypto on both paths: one RWMutex read-lock and a check for an all-zero key,
+// per packet. A plain -- non-obfuscated -- config leaves the key zero, so this
+// is the cheap branch, and that is the branch the rung in question takes.
+//
+// receive.go calls it once per received packet and send.go once per sent one,
+// so a packet forwarded one way pays it twice.
+func BenchmarkAWGHeaderProtection(b *testing.B) {
+	pair := boltmeshPair(b)
+	dev := pair[0].dev
+	salt := make([]byte, HeaderCipherNonceSize)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cip, err := dev.HeaderProtectionCipher(salt)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if cip != nil {
+			b.Fatal("header protection is configured; this benchmark wants a plain config")
+		}
+	}
+}
+
+// BenchmarkAWGTypeScan is the fork's other per-packet addition, on the receive
+// path only. Upstream switches on the first byte to learn the message type;
+// the fork instead recovers the type and any padding from size and header
+// ranges, which costs four range lookups and a four-byte hash per datagram.
+func BenchmarkAWGTypeScan(b *testing.B) {
+	pair := boltmeshPair(b)
+	dev := pair[0].dev
+
+	// A full-size transport datagram, tagged so the transport range matches and
+	// the function returns down the path a real packet takes.
+	packet := make([]byte, MessageTransportSize+boltmeshPayload)
+	packet[0] = byte(MessageTransportType)
+	typeHash := make([]byte, 4)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		size, msgType, padding := dev.DeterminePacketTypeAndPadding(packet, typeHash)
+		if size != MessageTransportSize || msgType != MessageTransportType || padding != 0 {
+			b.Fatalf("scan returned (%d, %d, %d) for a transport datagram", size, msgType, padding)
+		}
+	}
+}

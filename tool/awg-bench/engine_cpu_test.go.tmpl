@@ -1,0 +1,146 @@
+package device
+
+// This file is not compiled in place. run.sh copies it into each engine's device
+// package as zz_engine_cpu_test.go, substituting __ENGINE__ for that module's
+// import path, so both engines are measured by byte-identical code. It stays
+// outside package device here (as a .tmpl) to keep the repo's Go tooling away
+// from a file that cannot build on its own.
+
+import (
+	"syscall"
+	"testing"
+
+	"__ENGINE__/tun/tuntest"
+)
+
+// boltmeshPayload is the plaintext size of a full-size tunneled packet.
+const boltmeshPayload = 1420
+
+// boltmeshWarmup lets the handshake settle and the buffer pools fill before
+// anything is measured.
+const boltmeshWarmup = 64
+
+// boltmeshCPUNanos is the calling process's user+system CPU time, in
+// nanoseconds.
+//
+// Wall time is the wrong instrument for a whole-packet comparison. The test TUN
+// is a pair of Go channels and each packet is handed between two devices, so a
+// per-op wall figure is dominated by goroutine wake-ups (and, measured, by the
+// runtime's own clock calls and scheduler spinning): a per-packet engine cost of
+// a few microseconds vanishes into it. CPU time answers the question actually
+// asked, and it is quieter.
+func boltmeshCPUNanos() int64 {
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		return 0
+	}
+	return (ru.Utime.Sec+ru.Stime.Sec)*1e9 + (ru.Utime.Usec+ru.Stime.Usec)*1e3
+}
+
+// boltmeshEngineCPU drives one packet across a two-device tunnel and reports the
+// CPU it cost. Every iteration blocks on the receive, so unlike the upstream
+// throughput benchmark it spins no CPU in the harness and drops no packets.
+func boltmeshEngineCPU(b *testing.B, realSocket bool) {
+	pair := genTestPair(b, realSocket)
+	pair.Send(b, Ping, nil)
+	pair.Send(b, Pong, nil)
+
+	msg := tuntest.Ping(pair[0].ip, pair[1].ip)
+	out := pair[1].tun.Outbound
+	in := pair[0].tun.Inbound
+
+	for i := 0; i < boltmeshWarmup; i++ {
+		out <- msg
+		<-in
+	}
+
+	b.SetBytes(int64(len(msg)))
+	b.ResetTimer()
+
+	start := boltmeshCPUNanos()
+	for i := 0; i < b.N; i++ {
+		out <- msg
+		<-in
+	}
+	elapsed := boltmeshCPUNanos() - start
+
+	b.StopTimer()
+	b.ReportMetric(float64(elapsed)/float64(b.N), "cpu-ns/op")
+}
+
+// BenchmarkEngineCPU is one packet across a real loopback tunnel, UDP syscalls
+// included. Those syscalls cost the same in both engines, so they dilute the
+// relative difference rather than bias it.
+func BenchmarkEngineCPU(b *testing.B) { boltmeshEngineCPU(b, true) }
+
+// BenchmarkEngineCPUInMemory swaps the real socket for the in-memory bind,
+// taking the kernel UDP stack out of the measurement so the engine is a larger
+// share of the CPU being compared.
+func BenchmarkEngineCPUInMemory(b *testing.B) { boltmeshEngineCPU(b, false) }
+
+// boltmeshPair returns a handshaken device pair over the in-memory bind.
+func boltmeshPair(b *testing.B) testPair {
+	pair := genTestPair(b, false)
+	pair.Send(b, Ping, nil)
+	pair.Send(b, Pong, nil)
+	return pair
+}
+
+// boltmeshKeypair returns the peer keypair a device is currently using. Its
+// ciphers are what the transport path encrypts and decrypts every packet with.
+func boltmeshKeypair(b *testing.B, p *testPeer) *Keypair {
+	for _, peer := range p.dev.peers.keyMap {
+		peer.keypairs.RLock()
+		kp := peer.keypairs.current
+		peer.keypairs.RUnlock()
+		if kp != nil {
+			return kp
+		}
+	}
+	b.Fatal("no current keypair after the handshake")
+	return nil
+}
+
+// BenchmarkTransportSeal is the send half of the per-packet crypto: the
+// chacha20poly1305 seal of a full-size packet into a transport message. It is
+// the engine's dominant per-packet cost, and both engines share this code.
+func BenchmarkTransportSeal(b *testing.B) {
+	pair := boltmeshPair(b)
+	kp := boltmeshKeypair(b, &pair[0])
+
+	nonce := make([]byte, kp.send.NonceSize())
+	payload := make([]byte, boltmeshPayload)
+	dst := make([]byte, 0, len(payload)+kp.send.Overhead())
+
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = kp.send.Seal(dst[:0], nonce, payload, nil)
+	}
+}
+
+// BenchmarkTransportOpen is the receive half. One side seals, the other opens,
+// because the two peers' keypairs hold complementary ciphers: a plaintext
+// sealed with one side's send cipher only verifies under the other's receive
+// cipher.
+func BenchmarkTransportOpen(b *testing.B) {
+	pair := boltmeshPair(b)
+	sender := boltmeshKeypair(b, &pair[0])
+	receiver := boltmeshKeypair(b, &pair[1])
+
+	nonce := make([]byte, sender.send.NonceSize())
+	sealed := sender.send.Seal(nil, nonce, make([]byte, boltmeshPayload), nil)
+	dst := make([]byte, 0, boltmeshPayload)
+
+	b.SetBytes(int64(boltmeshPayload))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out, err := receiver.receive.Open(dst[:0], nonce, sealed, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(out) != boltmeshPayload {
+			b.Fatalf("opened %d bytes, want %d", len(out), boltmeshPayload)
+		}
+	}
+}
