@@ -2,8 +2,8 @@
 
 How the **AWG/stream → stock WireGuard owner switch on Android** was traced to a
 SIGSEGV, and what actually causes it. The switch is the rung change back *into*
-`native` — hand Android's single `VpnService` from the in-process AWG host
-(`libawg-go.so`) back to the stock plugin (`libwg-go.so`).
+`native` — bringing a stock tunnel up after an obfuscated or stream rung has been
+live.
 
 This directory holds the two small tools the investigation needed, because the
 usual ones do not work here (see [Why the usual tools fail](#why-the-usual-tools-fail)).
@@ -13,13 +13,15 @@ usual ones do not work here (see [Why the usual tools fail](#why-the-usual-tools
 On the descent to `native`, after an `awg` or `stream` rung:
 
 ```text
-I WireGuard/GoBackend: Bringing tunnel boltmesh0 UP
+I AmneziaWG/GoBackend: Bringing tunnel boltmesh0 DOWN
+I WireGuard/GoBackend: Bringing tunnel boltmesh0 UP      <- the stock backend starts
 D WireGuard/GoBackend: Requesting to start VpnService
-D WireGuard/GoBackend: Go backend f333402          <- libwg-go's wgVersion()
+D WireGuard/GoBackend: Go backend f333402                <- libwg-go's wgVersion()
 I Zygote: Process NNNN exited due to signal 11 (Segmentation fault)
 ```
 
-The app dies with no Dart exception. Reproduced on every run; the upward walk
+The app dies with no Dart exception, ~130 ms after the stock device starts, and
+with **no tombstone** (see below). Reproduced on every run; the upward walk
 (`native → awg → stream`) is fine.
 
 ## The two Go runtimes
@@ -27,35 +29,39 @@ The app dies with no Dart exception. Reproduced on every run; the upward walk
 The process links **two** Go `c-shared` libraries:
 
 - `libwg-go.so` — the stock plugin's backend (`com.wireguard.android:tunnel`),
-  loaded on a `Dispatchers.IO` worker when the plugin creates its `GoBackend`.
-- `libawg-go.so` — BoltMesh's AWG host (`android/awg-native/`), loaded on the
-  private `BoltMeshAwg` thread when the first obfuscated/stream rung starts.
+  constructed by the plugin's `onAttachedToEngine` when the engine attaches.
+- `libawg-go.so` — BoltMesh's AWG host (`android/awg-native/`), loaded when the
+  first obfuscated/stream rung starts.
 
-## Root cause: symbol preemption
+## Root cause: two initialized Go runtimes in one process
 
-The two libraries export **45 of the same global symbols**, and they are the
-whole cgo runtime surface:
+Each Go runtime installs **process-global** state: its `SIGSEGV`/`SIGBUS`/`SIGURG`
+handlers, its `sigaltstack`, its timers, its `pthread`/`%fs` TLS scheme. The
+second runtime to initialize **replaces the first one's**, and the first runtime
+keeps running as if it still owned them. So once both are live, the next thing
+that exercises the stale half faults — here, the stock backend *starting its
+device* after the AWG runtime is up:
 
-```text
-crosscall1  crosscall2  _cgo_topofstack  _cgo_sys_thread_start
-_cgo_wait_runtime_init_done  _cgo_get_context_function  _cgo_panic  _cgo_yield
-x_cgo_init  x_cgo_inittls  x_cgo_mmap  x_cgo_munmap  x_cgo_getstackbound
-x_cgo_callers  x_cgo_notify_runtime_init_done  x_cgo_bindm  x_cgo_setenv
-fatalf  main.main  ...
-```
+- The crash carries **no tombstone**: a Go handler owns the signal, so bionic's
+  `debuggerd` never runs.
+- The faulting **stock** thread's RIP lands in **libawg-go.so's executable
+  segment** — it is libawg's handler running over a signal from libwg's runtime,
+  reading libwg's TLS as its own `g`.
 
-Both are loaded with global visibility in the app's linker namespace, so the
-later-loaded **`libawg-go` preempts `libwg-go`'s own references**. When the stock
-backend calls into libwg-go, its cgo/runtime callbacks land in **libawg-go's**
-copy — code that reads libawg's runtime state, which was never set up on that
-thread — and the process faults.
+This is not a symbol-binding problem, and it is not something thread confinement
+can fix (the two runtimes are already on different threads). Two Go runtimes
+simply cannot share a process.
 
-This is not a per-thread "a thread that entered one runtime must never enter the
-other" problem (the model in `TunnelHost.kt`): the crashing thread never touched
-libawg-go. The two libraries share one symbol namespace, so control crosses
-between them without any Java thread doing so. That is why confining every
-libawg-go entry point to a private thread (`TunnelHost.runOnAwgThread`,
-`AndroidAwgHost.checkAwgThread`) does not fix it.
+### The symbol-preemption theory was disproven
+
+The overlapping dynamic symbols are real — the two libraries export **46 of the
+same** cgo runtime symbols (`crosscall1/2`, `_cgo_*`, `x_cgo_*`, `fatalf`,
+`main.main`, `_cgo_yield`, `x_crosscall2_ptr`, …). It is tempting to blame them.
+It was tested directly: `libawg-go.so` was rebuilt with a linker version script
+exporting only its JNI entry points and its own `awg*` C API, leaving **zero**
+cgo runtime symbols global (`llvm-readelf --dyn-syms` confirmed). The debug APK
+was rebuilt, installed, and re-run — **the descent crashed identically**. Symbol
+visibility is not the cause.
 
 ## Evidence
 
@@ -70,14 +76,10 @@ END leader killed by signal 11 after 7 fault(s)
 
 - The mapping is **libawg-go.so's executable segment**: its size (`~3.03 MB`)
   matches libawg's `R E` segment (`0x2e5d70`); libwg's is only `~2.04 MB`
-  (`0x1f3190`). The apk offset lands in libawg's range, not libwg's.
-- `tid 9534` is the thread that **loaded `libwg-go.so`** and ran the stock
-  `WireGuard/GoBackend`; its last log is `Go backend f333402` — libwg's
-  `wgVersion()` — immediately before the fault.
-- `comm=DefaultDispatch` is a `Dispatchers.IO` worker: a thread that had never
-  entered libawg-go.
-
-The symbol overlap above is what lets that happen.
+  (`0x1f3190`).
+- `tid 9534` is the thread that ran the stock `WireGuard/GoBackend`; its last log
+  is `Go backend f333402` — libwg's `wgVersion()` — immediately before the fault.
+- `comm=DefaultDispatch` is a `Dispatchers.IO` worker.
 
 ## Why the usual tools fail
 
@@ -110,43 +112,45 @@ adb shell chmod 755 /data/local/tmp/ptrace_catch
 adb shell /data/local/tmp/ptrace_catch "$(adb shell pidof com.boltmesh.boltmesh)"
 ```
 
-### `xver` — reproduce the conflict without a VPN
+### `xver` — probe the two libraries without the app
 
-Loads both libraries and calls each one's version function, in one of three
-orders:
+Loads both libraries and drives their version functions (and, for the `*turnon`
+modes, a real TUN device) in different orders:
 
 ```sh
 adb push build/android-debug/x86_64/xver /data/local/tmp/
 adb push <libwg-go.so> /data/local/tmp/libwg-go.so
 adb push <libawg-go.so> /data/local/tmp/libawg-go.so
-adb shell 'cd /data/local/tmp && ./xver libwg-go.so libawg-go.so same-thread'
+# absolute paths: a bare name is not on the device's library search path
+adb shell 'cd /data/local/tmp && ./xver /data/local/tmp/libwg-go.so \
+  /data/local/tmp/libawg-go.so same-thread'
 ```
 
-- `same-thread` — load+use libwg, then libawg **on the same thread**. Crashes
-  100% (fault addr `0x38` inside libawg's `cgocallback`), which is the pre-fix
-  `native → awg` signature.
-- `wg-first` / `awg-first` — load and use each on its **own** thread. Clean in
-  both orders; only calling into the *other* runtime's deeper cgo path (as the
-  app does) trips it.
+- `same-thread` — **one thread enters both runtimes**. Crashes 100% (fault addr
+  `0x38` inside the second library's `cgocallback`, and *this* one does leave a
+  tombstone). This is the inherent one-thread/two-runtime `%fs` conflict, which
+  is why the Java side confines each runtime to its own thread; it is not the
+  app's crash, and no symbol-visibility change touches it.
+- `wg-first` / `awg-first` / `wg-again` / `awg-again` — leaf `*Version` calls in
+  various orders; clean in every combination, which is exactly why the version
+  script looked like a fix until the real app was run.
+- `turnon` / `turnon-awg` — the intended deep repro. `wgTurnOn` will not stand a
+  device up from a plain process on current images (`CreateUnmonitoredTUNFromFD:
+  bad file descriptor`), so these modes do not reproduce; the app run is the
+  decider.
 
-The prebuilt `lib*.so` pair is in the debug APK, or extract them with:
+## The fix: one Go runtime
 
-```sh
-unzip -o build/app/outputs/flutter-apk/app-debug.apk 'lib/<abi>/*.so' -d /tmp/apklibs
-```
+Never load `libwg-go` on Android. Every rung — stock, obfuscated and stream —
+runs on the in-process AWG engine, whose config parser accepts a stock wg-quick
+config unchanged:
 
-## Fix options
+- `lib/features/vpn/data/tunnel_adapter.dart` — `AndroidTunnelAdapter` always
+  takes the AWG path (`start`/`stop`/reads/`killGhost`/`requestConsent`), and
+  never touches the plugin's backend.
+- `android/build.gradle.kts` — the source overlay drops the plugin's
+  attach-time `createBackend()` call, so the stock `GoBackend` is never built and
+  `libwg-go.so` is never loaded.
 
-- **One runtime (guaranteed).** Never enter `libwg-go` on Android: run the
-  native rung through the in-process AWG engine (it parses stock configs
-  unchanged) and stop the stock plugin from constructing its `GoBackend`, so
-  `libwg-go` is never loaded.
-- **Stop the preemption (small, needs validation).** Make `libawg-go` stop
-  exporting the overlapping cgo symbols (a linker version script localizing
-  `crosscall*`, `_cgo_*`, `x_cgo_*`, `fatalf`, `main.main`; keep only the `awg*`
-  JNI exports global) so `libwg-go` binds its own — wired through
-  `tool/build_awg_android.py`. Or load `libawg-go` with `RTLD_LOCAL` so it never
-  enters the global scope.
-
-`integration_test/app_e2e.dart` walks the ladder back down to `native` so this
-transition is exercised on every run; it is the regression test for either fix.
+`integration_test/app_e2e.dart` walks the ladder back down to `native`, so this
+transition is exercised on every run — it is the regression test for the fix.
