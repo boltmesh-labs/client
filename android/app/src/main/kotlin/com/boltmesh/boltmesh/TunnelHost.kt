@@ -62,24 +62,40 @@ internal object TunnelHost {
   /// The only thread that may enter libawg-go.so, and the scope for the four
   /// AWG handlers below ([startAwg][stopAwg][statusAwg][killAwgGhost]).
   ///
-  /// Two Go runtimes live in this process — the stock plugin's libwg-go.so
-  /// and our libawg-go.so — and a Go runtime binds the calling thread on
-  /// first entry, so a thread that entered one runtime must never enter the
-  /// other. The stock plugin runs its backend on the shared [Dispatchers.IO]
-  /// pool, and so did these handlers: once the pool recycled a worker the
-  /// stock backend had used, the first AWG JNI call read the stock runtime's
-  /// thread state as its own and died with a SIGSEGV inside
-  /// `runtime.cgocallback` (null + 0x38, identical PC on every native→AWG
-  /// failover, no Go traceback because the runtime never engaged). This
-  /// private thread only ever enters ours, which also serializes the
-  /// backend's unguarded handle map. The stock-touching calls above it must
-  /// stay on [ioScope]: running them here would pollute this thread for the
-  /// stock runtime and crash in the other direction.
+  /// Two Go `c-shared` libraries live in this process — the stock plugin's
+  /// libwg-go.so and our libawg-go.so — and they export the same cgo runtime
+  /// symbols (`crosscall2`, `_cgo_*`, `x_cgo_*`), so one preempts the other's
+  /// references: a call can execute the other library's code on a thread that
+  /// never entered it (see `tool/android-debug/README.md`). Confining every
+  /// libawg-go entry point to this one private thread keeps the runtime state
+  /// on the right thread — the stock backend runs on the shared
+  /// [Dispatchers.IO] pool, and before this a recycled worker died inside
+  /// `runtime.cgocallback` (null + 0x38) on every failover — and it serializes
+  /// the backend's unguarded handle map. It is necessary but **not
+  /// sufficient**: the stock↔AWG owner switch still faults through the
+  /// preemption path, with no Java thread crossing for confinement to stop.
+  /// The stock-touching calls above it must stay on [ioScope]: running them
+  /// here would pollute this thread for the stock runtime. Everything that
+  /// enters libawg-go belongs here — including the vendored `VpnService`'s
+  /// teardown, which the framework delivers on the main thread and which
+  /// [runOnAwgThread] forwards.
   private val awgThread = Executors.newSingleThreadExecutor { r ->
     Thread(r, AndroidAwgHost.awgThreadName).apply { isDaemon = true }
   }
   private val awgScope =
     CoroutineScope(SupervisorJob() + awgThread.asCoroutineDispatcher())
+
+  /// Runs [task] on the confined libawg-go thread (see [awgThread]).
+  ///
+  /// For a caller the framework runs off that thread — `VpnService.onDestroy`
+  /// is delivered on the main thread — whose body still has to enter
+  /// libawg-go. Entering it in place would put a second Java thread into the
+  /// runtime, which is the one thing the confinement exists to prevent, so it
+  /// is handed here instead. Public rather than `private` because the vendored
+  /// `org.amnezia.awg.backend.GoBackend`'s service callback is the caller.
+  fun runOnAwgThread(task: Runnable) {
+    awgThread.execute(task)
+  }
 
   /// Application context captured on the first [register]; used only to read
   /// the plugin's persisted `vpn_prefs` config.

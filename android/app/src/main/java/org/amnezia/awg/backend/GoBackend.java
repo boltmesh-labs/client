@@ -24,6 +24,7 @@ import org.amnezia.awg.crypto.KeyFormatException;
 import org.amnezia.awg.util.NonNullForAll;
 
 import com.boltmesh.boltmesh.StreamSocketProtector;
+import com.boltmesh.boltmesh.TunnelHost;
 
 import java.net.InetAddress;
 import java.util.Collections;
@@ -431,7 +432,13 @@ public final class GoBackend implements Backend {
             service.protect(awgGetSocketV4(currentTunnelHandle));
             service.protect(awgGetSocketV6(currentTunnelHandle));
 
-            launchStatusJob();
+            // Only when a status callback is registered. The poll enters
+            // libawg-go, and this app never registers one (status is read
+            // through `statusAwg` on the confined thread), so without this
+            // guard it would be dead work from a thread the confinement does
+            // not own (see TunnelHost.awgThread).
+            if (statusCallback != null)
+                launchStatusJob();
         } else {
             if (currentTunnelHandle == -1) {
                 Log.w(TAG, "Tunnel already down");
@@ -518,11 +525,17 @@ public final class GoBackend implements Backend {
             if (owner != null) {
                 final Tunnel tunnel = owner.currentTunnel;
                 if (tunnel != null) {
-                    if (owner.currentTunnelHandle != -1)
-                        awgTurnOff(owner.currentTunnelHandle);
+                    final int handle = owner.currentTunnelHandle;
                     owner.currentTunnel = null;
                     owner.currentTunnelHandle = -1;
                     owner.currentConfig = null;
+                    // The framework delivers onDestroy on the main thread, and
+                    // two Go runtimes share this process: a thread that entered
+                    // one must never enter the other (see TunnelHost). Hand the
+                    // native teardown to the confined libawg-go thread rather
+                    // than entering it here.
+                    if (handle != -1)
+                        TunnelHost.INSTANCE.runOnAwgThread(() -> awgTurnOff(handle));
                     tunnel.onStateChange(State.DOWN);
                 }
             }
