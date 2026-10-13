@@ -200,17 +200,13 @@ abstract final class ConnectionTuning {
   /// Maximum time to wait for liveness after probing a cheaper transport.
   static const rungPromotionProbeTimeout = Duration(seconds: 45);
 
-  /// Attempt-1 budget for an in-tunnel switch/rotate POST: shorter than
-  /// Dio's 15s receive timeout so the direct-network fallback stays snappy.
-  static const throughTunnelAttempt = Duration(seconds: 10);
-
   /// In-tunnel probe budget on the *recovery* paths only (failover discovery
   /// and switch). The path is already suspect when these run — a stall that
   /// survived a same-server restart — so a dead tunnel is abandoned after
-  /// [recoveryProbeTimeout] instead of waiting out the full
-  /// [throughTunnelAttempt]. Manual switch/rotate keep the longer budget:
-  /// the tunnel is healthy there and a slow-but-alive path must not be
-  /// flapped.
+  /// [recoveryProbeTimeout]. Manual switch/rotate carry no separate budget:
+  /// they are bounded by `VpnApi.requestDeadline` (5s), the hard cap on every
+  /// control-plane request — already well under Dio's 10s receive timeout, so
+  /// the direct-network fallback stays snappy without its own constant.
   static const recoveryProbeTimeout = Duration(seconds: 3);
 
   /// Budget for the Layer 1 in-tunnel gateway echo (UDP DNS to `wg_dns`).
@@ -219,7 +215,7 @@ abstract final class ConnectionTuning {
   static const gatewayProbeTimeout = Duration(seconds: 2);
 
   /// Budget for the Layer 3 control-plane probe (`GET …/health` on its
-  /// own Dio). Shorter than Dio's 15s receive timeout; the two probes
+  /// own Dio). Shorter than Dio's 10s receive timeout; the two probes
   /// combined (2s + 5s) still fit inside one 10s health tick.
   static const controlProbeTimeout = Duration(seconds: 5);
 

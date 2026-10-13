@@ -2,11 +2,11 @@ part of 'connection_controller.dart';
 
 extension ConnectionTransport on ConnectionController {
   /// Runs one control-plane attempt with an optional extra [timeout]
-  /// (null = Dio's own budgets, i.e. the raw-network attempt). Returns the
-  /// result, or null on a pure transport failure — timeout, unreachable,
-  /// TLS/cert rejection — so the caller can retry over another path.
-  /// App-level rejections rethrow: they prove the backend reachable, so the
-  /// tunnel must never be stopped for them.
+  /// (null = no outer bound; Dio's own timeouts and `VpnApi`'s 5s request
+  /// deadline still apply). Returns the result, or null on a pure transport
+  /// failure — timeout, unreachable, TLS/cert rejection — so the caller can
+  /// retry over another path. App-level rejections rethrow: they prove the
+  /// backend reachable, so the tunnel must never be stopped for them.
   ///
   /// The timeout aborts the in-flight request via [CancelToken] (rather than
   /// leaving it running): a timed-out attempt must not later land and bind a
@@ -76,20 +76,13 @@ extension ConnectionTransport on ConnectionController {
   /// Through-tunnel probe first: when a tunnel is up, the control-plane
   /// call is attempted before any stop. Loopback APIs never travel inside
   /// the tunnel (split-tunnel keeps them direct), so the probe goes out
-  /// without a short timeout there — but still without stopping first. The
-  /// tunnel is stopped only when the probe fails with a transport error
-  /// (backend unreachable through the current path); app-level errors never
-  /// stop the tunnel.
+  /// without stopping first. The tunnel is stopped only when the probe fails
+  /// with a transport error (backend unreachable through the current path);
+  /// app-level errors never stop the tunnel.
   bool _tryThroughTunnelFirst(bool wasConnected) {
     if (debugForceThroughTunnel != null) return debugForceThroughTunnel!;
     return wasConnected && _tunnel.isReady;
   }
-
-  /// Timeout for the through-tunnel probe. Loopback APIs bypass the tunnel,
-  /// so no short budget is needed there; the direct call keeps Dio's own
-  /// timeouts.
-  Duration? _probeTimeout() =>
-      Env.isLoopbackApi ? null : ConnectionTuning.throughTunnelAttempt;
 
   /// True when the backend still looks reachable from cached poll state
   /// (no transport failure and a recent successful poll). Used to suppress
@@ -102,16 +95,16 @@ extension ConnectionTransport on ConnectionController {
     quietFor: ConnectionTuning.backendQuietFor,
   );
 
-  /// In-tunnel probe: [call] with [timeout] (defaulting to the shared
-  /// [_probeTimeout]), null only on transport failure. Recovery callers pass
-  /// [ConnectionTuning.recoveryProbeTimeout] so an already-suspect path is
-  /// abandoned sooner. App-level errors rethrow so the caller can keep the
-  /// tunnel up.
+  /// In-tunnel probe: [call] with [timeout] (null = no outer budget, leaving
+  /// the request to `VpnApi.requestDeadline`), null only on transport failure.
+  /// Recovery callers pass [ConnectionTuning.recoveryProbeTimeout] so an
+  /// already-suspect path is abandoned sooner. App-level errors rethrow so the
+  /// caller can keep the tunnel up.
   Future<T?> _probeThroughTunnel<T>(
     Future<T> Function(CancelToken cancel) call,
     String label, {
     Duration? timeout,
-  }) => _attempt('$label probe', call, timeout: timeout ?? _probeTimeout());
+  }) => _attempt('$label probe', call, timeout: timeout);
 
   /// Shared switch/rotate ladder: probe through the live tunnel first, then
   /// over the raw network, stopping the tunnel only when the backend is
@@ -150,7 +143,7 @@ extension ConnectionTransport on ConnectionController {
     var probeTransportFailure = false;
     if (_tryThroughTunnelFirst(wasConnected)) {
       AppLog.info('$stopLabel attempt in-tunnel');
-      dial = await post(timeout: probeTimeout ?? _probeTimeout());
+      dial = await post(timeout: probeTimeout);
       probeTransportFailure = dial == null;
       if (dial == null) {
         AppLog.info('$stopLabel falling back to direct network');

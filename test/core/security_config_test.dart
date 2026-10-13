@@ -116,6 +116,21 @@ void main() {
     });
   });
 
+  group('control-plane sockets', () {
+    // A pooled socket opened before the tunnel comes up is bound to the
+    // physical network; after the route moves to `tun0`, the next write on it
+    // carries the pre-tunnel source, which WireGuard drops. Request-scoped
+    // sockets keep the source matched to the route in force.
+    test('baseDio disables keep-alive', () {
+      expect(baseDio().options.persistentConnection, isFalse);
+    });
+
+    test('pinnedDio disables keep-alive', () {
+      final dio = pinnedDio(BaseOptions(baseUrl: 'https://x/health'));
+      expect(dio.options.persistentConnection, isFalse);
+    });
+  });
+
   group('resolveProviderBundleId', () {
     test('non-apple platforms pass empty string', () {
       for (final p in [

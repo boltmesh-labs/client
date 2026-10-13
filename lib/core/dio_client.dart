@@ -243,6 +243,12 @@ Dio baseDio() {
       connectTimeout: const Duration(seconds: 5),
       receiveTimeout: const Duration(seconds: 10),
       headers: {'Content-Type': 'application/json'},
+      // No pooled sockets: a connection opened before the tunnel comes up is
+      // bound to the physical network, and the next write on it would be
+      // injected into `tun0` still carrying the pre-tunnel source, which
+      // WireGuard's single-host `AllowedIPs` drops. A fresh socket per request
+      // picks up the source matching the route in force.
+      persistentConnection: false,
     ),
   );
   configureTlsPinning(dio);
@@ -258,7 +264,10 @@ Dio pinnedDio(BaseOptions options, {bool releaseMode = kReleaseMode}) {
   if (isInsecureReleaseBuild(baseUrl, releaseMode: releaseMode)) {
     throw StateError(_insecureReleaseMessage);
   }
-  final dio = Dio(options);
+  // Same no-pooled-sockets rule as [baseDio]: this client also targets the
+  // backend (the `/health` probe), so a socket opened before a VPN transition
+  // must not outlive it.
+  final dio = Dio(options.copyWith(persistentConnection: false));
   configureTlsPinning(dio);
   dio.interceptors.add(
     InterceptorsWrapper(
