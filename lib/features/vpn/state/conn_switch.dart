@@ -13,11 +13,11 @@ extension ConnectionSwitch on ConnectionController {
   Future<void> _switchServerOp({
     required String? regionId,
     required String? serverId,
-    // False only for the auto-picked Quick Connect path: an automatic
-    // region choice must not constrain later failover to that region.
-    bool explicitTarget = true,
     // False for one-shot Auto moves: the picked target is dialed without
-    // pinning, so the state stays unpinned and later connects re-pick.
+    // pinning, so the state stays unpinned and later connects re-pick. A
+    // pinned target is always the explicit one — no caller pins a target it
+    // considers automatic — so this single flag also carries the explicit bit
+    // written by [selectTarget].
     bool pinTarget = true,
     // Quick Connect's snapshot of [_teardownEpoch]: a Disconnect that landed
     // during its lock-free discovery must win over this queued switch.
@@ -41,7 +41,7 @@ extension ConnectionSwitch on ConnectionController {
       // Regions tab highlights it. One-shot Auto moves (pinTarget false)
       // stay unpinned.
       if (pinTarget) {
-        selectTarget(serverId: serverId, explicitTarget: explicitTarget);
+        selectTarget(serverId: serverId, explicitTarget: pinTarget);
       }
       snap = snap.copyWith(
         message:
@@ -83,7 +83,7 @@ extension ConnectionSwitch on ConnectionController {
         // between them. Never release/re-acquire here: that breaks the
         // serialization the mutex exists to guarantee.
         if (pinTarget) {
-          selectTarget(serverId: serverId, explicitTarget: explicitTarget);
+          selectTarget(serverId: serverId, explicitTarget: pinTarget);
         }
         await _provision(
           regionId: regionId,
@@ -95,10 +95,7 @@ extension ConnectionSwitch on ConnectionController {
         if (pinTarget) {
           final dial = snap.dial;
           if (dial != null) {
-            selectTarget(
-              serverId: dial.serverId,
-              explicitTarget: explicitTarget,
-            );
+            selectTarget(serverId: dial.serverId, explicitTarget: pinTarget);
           }
         }
         return;
@@ -117,7 +114,7 @@ extension ConnectionSwitch on ConnectionController {
       final DialParams dial;
       if (publicKey == null) {
         if (pinTarget) {
-          selectTarget(serverId: serverId, explicitTarget: explicitTarget);
+          selectTarget(serverId: serverId, explicitTarget: pinTarget);
         }
         dial = await _bindFreshKey(
           deviceId,
@@ -195,7 +192,7 @@ extension ConnectionSwitch on ConnectionController {
       if (pinTarget) {
         selectTarget(
           serverId: serverId ?? dial.serverId,
-          explicitTarget: explicitTarget,
+          explicitTarget: pinTarget,
         );
       }
     } catch (e) {

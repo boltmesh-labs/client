@@ -84,7 +84,6 @@ class PreviewConnectionController extends ConnectionController {
   Future<void> switchServer({
     required String? regionId,
     required String? serverId,
-    bool explicitTarget = true,
     bool pinTarget = true,
   }) async {}
 

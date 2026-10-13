@@ -31,7 +31,6 @@ class _FakeConnectionController extends ConnectionController {
   Future<void> switchServer({
     required String? regionId,
     required String? serverId,
-    bool explicitTarget = true,
     bool pinTarget = true,
   }) async {}
 

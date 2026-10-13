@@ -441,16 +441,15 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> quickConnect() => _quickConnectOp();
 
   /// Restart the tunnel onto another region/server. [pinTarget] false
-  /// dials one-shot without pinning (Auto moves keep the state unpinned).
+  /// dials one-shot without pinning (Auto moves keep the state unpinned); a
+  /// pinned target is always the explicit one.
   Future<void> switchServer({
     required String? regionId,
     required String? serverId,
-    bool explicitTarget = true,
     bool pinTarget = true,
   }) => _switchServerOp(
     regionId: regionId,
     serverId: serverId,
-    explicitTarget: explicitTarget,
     pinTarget: pinTarget,
   );
 

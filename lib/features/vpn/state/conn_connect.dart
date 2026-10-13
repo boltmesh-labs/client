@@ -462,7 +462,6 @@ extension ConnectionConnect on ConnectionController {
       await _switchServerOp(
         regionId: best.id,
         serverId: null,
-        explicitTarget: false,
         pinTarget: false,
         expectedTeardown: teardownEpoch,
       );
