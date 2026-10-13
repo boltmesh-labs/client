@@ -111,13 +111,13 @@ RecoveryDecision decided(
 /// that should have gone to the control plane.
 const _localOnly = {
   RecoveryDecision.pauseNoNetwork,
-  RecoveryDecision.suppressLiveEcho,
+  RecoveryDecision.suppressHealthy,
   RecoveryDecision.moveServer,
   RecoveryDecision.probeControlPlane,
 };
 
 const _healSteps = {
-  RecoveryDecision.stepTransportRung,
+  RecoveryDecision.demoteTransport,
   RecoveryDecision.restartTunnel,
 };
 
@@ -173,7 +173,7 @@ void main() {
               ? (r.moveBudgetLeft
                     ? RecoveryDecision.moveServer
                     : RecoveryDecision.probeControlPlane)
-              : RecoveryDecision.suppressLiveEcho,
+              : RecoveryDecision.suppressHealthy,
           reason: 'serverDown=${r.serverDown} row=$r',
         );
       }
@@ -185,7 +185,7 @@ void main() {
           for (final canHeal in [true, false]) {
             final cell = pin(r, lowerRung: lowerRung, canHeal: canHeal);
             if (r.gateway == true && !r.serverDown) {
-              expect(local(cell), RecoveryDecision.suppressLiveEcho);
+              expect(local(cell), RecoveryDecision.suppressHealthy);
               continue;
             }
             // Positive local evidence is the node verdict (an echo run and a
@@ -251,12 +251,12 @@ void main() {
       for (final api in [true, false, null]) {
         expect(
           decided(row(gateway: true), api: api),
-          RecoveryDecision.suppressLiveEcho,
+          RecoveryDecision.suppressHealthy,
         );
         // ...but not on top of the backend's dead-node verdict.
         expect(
           decided(row(gateway: true, serverDown: true), api: api),
-          isNot(RecoveryDecision.suppressLiveEcho),
+          isNot(RecoveryDecision.suppressHealthy),
         );
       }
     });
@@ -322,7 +322,7 @@ void main() {
               // and otherwise a plain rebuild — never a wait, since a heal is
               // affordable here.
               lowerRung
-                  ? RecoveryDecision.stepTransportRung
+                  ? RecoveryDecision.demoteTransport
                   : moveBudgetLeft
                   ? RecoveryDecision.moveServer
                   : RecoveryDecision.restartTunnel,
@@ -367,7 +367,7 @@ void main() {
                   neverHandshake: true,
                 ),
               ]) {
-                if (verdict != RecoveryDecision.stepTransportRung) continue;
+                if (verdict != RecoveryDecision.demoteTransport) continue;
                 expect(
                   canHeal && lowerRung && !r.serverDown,
                   isTrue,
@@ -396,7 +396,7 @@ void main() {
                 api: api,
                 echoRun: true,
               ),
-              isNot(RecoveryDecision.stepTransportRung),
+              isNot(RecoveryDecision.demoteTransport),
               reason: 'api=$api lower=$lowerRung canHeal=$canHeal',
             );
           }
@@ -417,7 +417,7 @@ void main() {
             if (_healSteps.contains(verdict)) {
               expect(_moveSteps, isNot(contains(verdict)));
             }
-            if (verdict == RecoveryDecision.stepTransportRung) {
+            if (verdict == RecoveryDecision.demoteTransport) {
               expect(_moveSteps, isNot(contains(verdict)));
             }
           }
@@ -455,7 +455,7 @@ void main() {
             decided(r, api: api),
             isNot(
               anyOf(
-                RecoveryDecision.stepTransportRung,
+                RecoveryDecision.demoteTransport,
                 RecoveryDecision.moveServer,
                 RecoveryDecision.escalateToServer,
               ),
@@ -471,7 +471,7 @@ void main() {
               api: api,
               echoRun: true,
             ),
-            RecoveryDecision.stepTransportRung,
+            RecoveryDecision.demoteTransport,
             reason: 'api=$api row=$r',
           );
         }
@@ -532,7 +532,7 @@ void main() {
       expect(local(row(), echoRun: true), RecoveryDecision.probeControlPlane);
       expect(
         decided(row(), api: true, echoRun: true),
-        RecoveryDecision.stepTransportRung,
+        RecoveryDecision.demoteTransport,
       );
     });
 
@@ -545,7 +545,7 @@ void main() {
       for (final api in [false, null, true]) {
         expect(
           decided(row(), api: api, echoRun: true),
-          RecoveryDecision.stepTransportRung,
+          RecoveryDecision.demoteTransport,
           reason: 'api=$api',
         );
       }
@@ -576,11 +576,11 @@ void main() {
       );
       expect(
         decided(unprobeable, api: false, hardStale: true),
-        RecoveryDecision.stepTransportRung,
+        RecoveryDecision.demoteTransport,
       );
       expect(
         decided(unprobeable, api: true, hardStale: true),
-        RecoveryDecision.stepTransportRung,
+        RecoveryDecision.demoteTransport,
       );
       // A never-completed handshake reaches the same verdict by the same route:
       // the ceiling it is measured against is the corroboration gate, so the
@@ -630,7 +630,7 @@ void main() {
       // the API answering it becomes a rung step (item 1's gate), and with a
       // lower rung available it is a demotion rather than a move.
       expect(local(row(lowerRung: false)), RecoveryDecision.probeControlPlane);
-      expect(decided(row(), api: true), RecoveryDecision.stepTransportRung);
+      expect(decided(row(), api: true), RecoveryDecision.demoteTransport);
       expect(
         decided(row(lowerRung: false), api: true),
         RecoveryDecision.moveServer,

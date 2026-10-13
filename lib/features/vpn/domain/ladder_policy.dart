@@ -23,7 +23,7 @@ import 'diagnosis_policy.dart';
 ///    from a powered-off node, and a restart costs no move budget.
 ///  * Only then does the bounded same-server heal run, and it demotes the
 ///    transport only on positive evidence that this transport is blocked (see
-///    [RecoveryDecision.stepTransportRung]).
+///    [RecoveryDecision.demoteTransport]).
 ///  * A stall that survives a heal escalates to a server move, and a stall with
 ///    no budget left waits or surfaces instead of flapping the tunnel.
 ///
@@ -39,7 +39,7 @@ enum RecoveryDecision {
   /// Layer 1: the in-tunnel echo answered, so the data path is alive. Do not
   /// touch a working tunnel (a backend-attributed dead node excepted — see
   /// [classifyFailure]).
-  suppressLiveEcho,
+  suppressHealthy,
 
   /// Local evidence confirms the current path is dead and no rung step is
   /// available, so the same-server heal would only rebuild the config this
@@ -55,7 +55,7 @@ enum RecoveryDecision {
   /// that never completed past its grace) when a rung below is affordable; it
   /// does not wait for the control plane, which is routed through the very rung
   /// under test and so cannot corroborate a blocked transport.
-  stepTransportRung,
+  demoteTransport,
 
   /// Restart the tunnel on its current rung. A blackout or an unattributed
   /// stall justifies the restart, but not a transport change.
@@ -126,7 +126,7 @@ RecoveryDecision decideLocalRecovery({
 }) {
   if (!hasNetwork) return RecoveryDecision.pauseNoNetwork;
   if (gatewayAlive == true && !serverConfirmedDown) {
-    return RecoveryDecision.suppressLiveEcho;
+    return RecoveryDecision.suppressHealthy;
   }
   // Local evidence alone, with the control plane deliberately null: a probe
   // made while this tunnel still routes traffic can fail *because* the path is
@@ -182,7 +182,7 @@ RecoveryDecision decideRecoveryStep({
   // function that could heal or move a tunnel whose own path just answered
   // would be a trap for the next caller.
   if (gatewayAlive == true && !serverConfirmedDown) {
-    return RecoveryDecision.suppressLiveEcho;
+    return RecoveryDecision.suppressHealthy;
   }
   final cause = classifyFailure(
     hasNetwork: true,
@@ -239,6 +239,6 @@ RecoveryDecision decideRecoveryStep({
   final locallyDead =
       cause == ConnectionFailureCause.tunnelPathDead || neverHandshookPastGrace;
   return canStepRung && locallyDead
-      ? RecoveryDecision.stepTransportRung
+      ? RecoveryDecision.demoteTransport
       : RecoveryDecision.restartTunnel;
 }

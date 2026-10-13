@@ -433,7 +433,7 @@ extension ConnectionHealth on ConnectionController {
           recoveryDetail: why,
         );
         return;
-      case RecoveryDecision.suppressLiveEcho:
+      case RecoveryDecision.suppressHealthy:
         AppLog.info('health suppressed ($why) gateway echo alive');
         // Nothing will run, so the recovery banner would outlive the tick on a
         // proven-alive tunnel. Only this tick's own note is dropped: a note from
@@ -560,7 +560,7 @@ extension ConnectionHealth on ConnectionController {
         return;
       // `localConfirmed` lets the heal run on local evidence; this branch is only
       // reachable when there is not yet enough evidence for a direct move.
-      case RecoveryDecision.stepTransportRung:
+      case RecoveryDecision.demoteTransport:
       case RecoveryDecision.restartTunnel:
         await _autoHeal(
           why,
@@ -568,7 +568,7 @@ extension ConnectionHealth on ConnectionController {
           localConfirmed: localEvidence,
           // The demotion is the policy's output, not a flag recomputed here:
           // one branch decides both the step and whether it may change rungs.
-          demoteTransport: step == RecoveryDecision.stepTransportRung,
+          demoteTransport: step == RecoveryDecision.demoteTransport,
           recoveryReason: recoveryReason,
           expectedSession: sessionEpoch,
           expectedEpoch: epoch,
@@ -576,7 +576,7 @@ extension ConnectionHealth on ConnectionController {
         );
         return;
       case RecoveryDecision.pauseNoNetwork:
-      case RecoveryDecision.suppressLiveEcho:
+      case RecoveryDecision.suppressHealthy:
       case RecoveryDecision.probeControlPlane:
         throw StateError('unreachable recovery step ${step.name}');
     }
