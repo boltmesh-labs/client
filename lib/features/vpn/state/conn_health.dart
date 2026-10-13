@@ -412,6 +412,23 @@ extension ConnectionHealth on ConnectionController {
     // while the echo probe was in flight.
     final hasNetwork = await _hasLink();
     if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
+    // Both dead-path fast-tracks move servers before/without a control-plane
+    // answer, and must stop the tunnel first so `_autoFailover`'s discovery and
+    // switch travel the direct network instead of probing the path already known
+    // bad. One handler for both so the two licences cannot drift; the suffix
+    // keeps them distinct in the log.
+    Future<void> moveServerForDeadPath(String suffix) async {
+      AppLog.info('health fast-track ($why) path dead$suffix');
+      await _autoFailover(
+        why,
+        tunnelPathDead: true,
+        hardStalled: hardStalled || serverDown,
+        expectedSession: sessionEpoch,
+        expectedEpoch: epoch,
+        expectedDial: dial,
+      );
+    }
+
     switch (decideLocalRecovery(
       hasNetwork: hasNetwork,
       gatewayAlive: gateway,
@@ -454,15 +471,7 @@ extension ConnectionHealth on ConnectionController {
       // servers before it: `_autoFailover` stops the tunnel first and its
       // discovery/switch then travel the direct network.
       case RecoveryDecision.moveServer:
-        AppLog.info('health fast-track ($why) path dead -> direct failover');
-        await _autoFailover(
-          why,
-          tunnelPathDead: true,
-          hardStalled: hardStalled || serverDown,
-          expectedSession: sessionEpoch,
-          expectedEpoch: epoch,
-          expectedDial: dial,
-        );
+        await moveServerForDeadPath(' -> direct failover');
         return;
       case RecoveryDecision.probeControlPlane:
         break;
@@ -483,7 +492,7 @@ extension ConnectionHealth on ConnectionController {
       now: now,
       quietFor: ConnectionTuning.backendQuietFor,
     );
-    final step = decideRecoveryStep(
+    final decision = decideRecoveryStep(
       gatewayAlive: gateway,
       apiReachable: apiReachable,
       serverConfirmedDown: serverDown,
@@ -495,21 +504,13 @@ extension ConnectionHealth on ConnectionController {
       moveBudgetLeft: moveBudgetLeft,
       escalateToMove: escalateToMove,
     );
-    switch (step) {
+    switch (decision) {
       // Same rung-before-move rule as the gate above, and it matters more here:
       // this one is reached with a *live* control-plane answer, which is the
       // signature of a blocked transport rather than a dead node — the backend
       // is up while the tunnel's own path is not.
       case RecoveryDecision.moveServer:
-        AppLog.info('health fast-track ($why) path dead, api up -> failover');
-        await _autoFailover(
-          why,
-          tunnelPathDead: true,
-          hardStalled: hardStalled || serverDown,
-          expectedSession: sessionEpoch,
-          expectedEpoch: epoch,
-          expectedDial: dial,
-        );
+        await moveServerForDeadPath(', api up -> failover');
         return;
       // Without positive local path-dead evidence, a move still requires a
       // positive control-plane result. A failed/unknown probe alone is not a
@@ -568,7 +569,7 @@ extension ConnectionHealth on ConnectionController {
           localConfirmed: localEvidence,
           // The demotion is the policy's output, not a flag recomputed here:
           // one branch decides both the step and whether it may change rungs.
-          demoteTransport: step == RecoveryDecision.demoteTransport,
+          demoteTransport: decision == RecoveryDecision.demoteTransport,
           recoveryReason: recoveryReason,
           expectedSession: sessionEpoch,
           expectedEpoch: epoch,
@@ -578,7 +579,7 @@ extension ConnectionHealth on ConnectionController {
       case RecoveryDecision.pauseNoNetwork:
       case RecoveryDecision.suppressHealthy:
       case RecoveryDecision.probeControlPlane:
-        throw StateError('unreachable recovery step ${step.name}');
+        throw StateError('unreachable recovery step ${decision.name}');
     }
   }
 
