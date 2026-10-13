@@ -138,7 +138,7 @@ progress that has not been made.
 
 | Target | Tunnel | Privileged helper | CI | State |
 | --- | --- | --- | --- | --- |
-| **Android** | in-process AWG, every rung (`VpnService`) | not needed | build, lint, minified release instrumentation (API 30/35) | **AWG and stream emulator proofs passed** |
+| **Android** | in-process AWG, every rung (`VpnService`) | not needed | build, lint, minified release instrumentation (API 36) | **AWG and stream emulator proofs passed** |
 | **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
 | **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
 | **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
@@ -241,8 +241,8 @@ Not everything was blocked, and the parts that were not are landed and tested:
 - **Android minified release**: the release APK is minified, and CI runs the
   instrumentation suite against that minified build, so R8 cannot silently
   break the AWG config parser, the native JNI shim's symbol names, or the
-  instrumentation runner itself (`AmneziaWgConnectSmokeTest`, on API 30 and
-  35). `TunnelHost` no longer reflects into the plugin, so
+  instrumentation runner itself (`AmneziaWgConnectSmokeTest`, on API 36).
+  `TunnelHost` no longer reflects into the plugin, so
   `android/app/proguard-rules.pro` keeps only what the JNI shim resolves and
   the runner needs.
 - **iOS/macOS**: the tunnel is a **Network Extension**, so the app itself is
@@ -979,7 +979,7 @@ bash tool/verify_native.sh
 # named-pipe transport test, the Windows-tagged boltmeshd tests, and the
 # packaging staging hook). Same script the validate-windows CI job runs:
 pwsh -File tool/verify_windows.ps1
-# Minified-release Android bridge and API 30 connect smoke tests (with an emulator running):
+# Minified-release Android bridge smoke tests (with an emulator running):
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
 # Android GUI end-to-end against a live node (attached device/emulator):
 tool/e2e/run_android_app.sh
@@ -1024,8 +1024,8 @@ so a Windows-only C++ break fails the `validate-native` job too. It is not
 executed on Linux — the test drives overlapped named-pipe I/O, which Wine
 emulates incompletely. Android is
 additionally checked by `./gradlew :app:lintDebug` and the minified-release
-`AmneziaWgConnectSmokeTest` instrumentation tests in `validate-android`. The Android CI matrix runs the
-release smoke tests on API 30 and 35.
+`AmneziaWgConnectSmokeTest` instrumentation tests in `validate-android`, which
+run the release smoke tests on API 36.
 
 Apple is the one platform with no executed test of any kind — no emulator, no
 simulator, no runner. What CI does instead is compile and analyse: the

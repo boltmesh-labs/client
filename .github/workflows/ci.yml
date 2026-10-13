@@ -252,15 +252,9 @@ jobs:
         run: ./gradlew :app:lintDebug
 
   validate-android:
-    name: "Validate Android smoke tests (API ${{ matrix.api-level }})"
+    name: "Validate Android smoke tests"
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # Exercise the API 30 connect path and retain the minified bridge
-        # coverage on a current API.
-        api-level: [30, 36]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -323,10 +317,19 @@ jobs:
       # instrumentation runner itself are easy to break in a dependency update,
       # and none of them is observable in a debug-only build. Run the
       # instrumentation tests against the minified release APK.
-      - name: Run Android release smoke tests (API ${{ matrix.api-level }})
+      #
+      # There used to be an API 30 leg beside this one. It went with its
+      # subjects: WireGuardConnectSmokeTest (the API 30 Config.parse cold-start
+      # path) and MinifiedTunnelBridgeTest (the ProGuard reflection ABIs) were
+      # deleted alongside the code they covered, so the leg re-ran the same two
+      # cases against older system libraries -- and it was the one whose
+      # emulator could die during boot, before the tests ever started. minSdk is
+      # 30, so nothing in CI exercises the floor runtime now; re-adding the leg
+      # is what would bring that back.
+      - name: Run Android release smoke tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: ${{ matrix.api-level }}
+          api-level: 36
           arch: x86_64
           disable-animations: true
           # The action runs each `script` line in its own `sh -c`, so a

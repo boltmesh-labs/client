@@ -79,9 +79,12 @@ android sdk install "platforms;android-36"
 android sdk install "build-tools;36.0.0"
 android sdk install "system-images;android-36;google_apis;x86_64"
 android sdk install "ndk;28.2.13676358"
+android sdk install "android-30"
 
 avdmanager create avd --force --name "medium_phone" --package "system-images;android-36;google_apis;x86_64" --tag "google_apis" --abi "x86_64"
+avdmanager create avd --force --name "medium_phone_30" --package "system-images;android-30;google_apis;x86_64" --tag "google_apis_30" --abi "x86_64"
 android emulator start medium_phone
+android emulator start medium_phone_30
 ```
 
 ### 2. Install JDK 21

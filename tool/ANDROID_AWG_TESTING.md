@@ -82,7 +82,7 @@ notification.
   with the code they covered. On the remote TCP
   ADB emulator, Gradle's `connectedReleaseAndroidTest` still exits nonzero; this
   appears to be a UTP/remote-device result issue, not a failed test assertion.
-  Recheck on the CI-local API 30/35 emulators when CI is next intentionally run;
+  Recheck on the CI-local API 36 emulator when CI is next intentionally run;
   do not poll CI for this task.
 - Android supports native → AWG → stream. Do not live-test a stock-format
   handshake against an AWG-only node: that would send a plaintext WireGuard
