@@ -202,24 +202,6 @@ DioException networkTimeout(RequestOptions o) => DioException(
   ),
 );
 
-/// A 404 as the API now answers it: a device with no peer is not an error
-/// (`connect` binds one), so a 404 always means the device is gone.
-DioException peerless(RequestOptions o) => DioException(
-  requestOptions: o,
-  type: DioExceptionType.badResponse,
-  response: Response(
-    requestOptions: o,
-    statusCode: 404,
-    data: const {'detail': 'Device has no peer.', 'code': 'DEVICE_NO_PEER'},
-  ),
-  error: const ApiException(
-    ApiErrorKind.notFound,
-    'Device or server not found. Reprovision this device.',
-    404,
-    'DEVICE_NO_PEER',
-  ),
-);
-
 /// 404 with `DEVICE_NOT_FOUND` (device revoked/removed server-side).
 DioException missingDevice(RequestOptions o) => DioException(
   requestOptions: o,
@@ -234,24 +216,6 @@ DioException missingDevice(RequestOptions o) => DioException(
     'Device or server not found. Reprovision this device.',
     404,
     'DEVICE_NOT_FOUND',
-  ),
-);
-
-/// A 409 the client has no special handling for: `connect` no longer rejects an
-/// already-bound device (it replays the live peer), so a bare 409 is a conflict
-/// the op surfaces rather than reconciles.
-DioException alreadyConnected(RequestOptions o) => DioException(
-  requestOptions: o,
-  type: DioExceptionType.badResponse,
-  response: Response(
-    requestOptions: o,
-    statusCode: 409,
-    data: const {'detail': 'Device is already connected.'},
-  ),
-  error: const ApiException(
-    ApiErrorKind.unknown,
-    'Conflict (Device is already connected.).',
-    409,
   ),
 );
 
@@ -274,43 +238,10 @@ DioException idempotencyConflict(RequestOptions o) => DioException(
 /// Dio that records every outgoing `METHOD:path` into [events] and answers
 /// from [respond] (return the response body, or throw a [DioException] to
 /// simulate a failure).
-///
-/// The client sends a single `POST …/connect` for every binding change, while
-/// most fixtures predate that and model the split as `GET …/config` (the dial
-/// of the current binding) and `POST …/switch` (a move). A fixture that does
-/// not model `/connect` (its [respond] throws `StateError: unexpected`)
-/// therefore falls back to those legacy answers: a request that names a target
-/// is offered to the fixture's `/switch` answer first, and everything else to
-/// its `/config` answer. A fixture that wants a distinct `/connect` answer, or
-/// wants it to fail, handles `/connect` itself and never reaches the fallback;
-/// one that answers neither still fails on the rewritten path.
 Dio recordingDio(
   List<String> events,
   dynamic Function(RequestOptions options) respond,
 ) {
-  RequestOptions asLegacy(RequestOptions options, String endpoint) =>
-      options.copyWith(path: options.path.replaceFirst('/connect', endpoint));
-
-  dynamic answer(RequestOptions options) {
-    try {
-      return respond(options);
-    } on StateError {
-      if (!options.path.endsWith('/connect')) rethrow;
-      final data = options.data;
-      final targeted =
-          data is Map &&
-          (data.containsKey('server_id') || data.containsKey('region_id'));
-      if (targeted) {
-        try {
-          return respond(asLegacy(options, '/switch'));
-        } on StateError {
-          // No move answer: use the dial answer below.
-        }
-      }
-      return respond(asLegacy(options, '/config'));
-    }
-  }
-
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
   dio.interceptors.add(
     InterceptorsWrapper(
@@ -321,7 +252,7 @@ Dio recordingDio(
             Response(
               requestOptions: options,
               statusCode: 200,
-              data: answer(options),
+              data: respond(options),
             ),
           );
         } on DioException catch (e) {

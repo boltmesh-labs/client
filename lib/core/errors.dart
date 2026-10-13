@@ -110,9 +110,9 @@ bool looksLikeHtmlBody(String body) {
         );
       }
     case 404:
-      // The device is gone or not ours. "Peerless" is deliberately not a 404
-      // on this API: a device with no bound peer is answered by `connect`, so
-      // a 404 is always "reprovision" and never a peer state to interpret.
+      // The device is gone or not ours. An unbound device is answered by
+      // `connect`, so a 404 is always "reprovision" and never a binding
+      // state to interpret.
       result = (
         kind: ApiErrorKind.notFound,
         message: 'Device or server not found. Reprovision this device.',

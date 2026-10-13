@@ -1,6 +1,6 @@
 // Regression coverage for the stored WireGuard key being authoritative on
 // every connect path. The backend owns the peer, so the client no longer
-// reconciles a divergent server key (`GET …/config` + in-place rotate); it
+// reconciles a divergent server key (same-key replay + in-place rotate); it
 // simply hands over the key it holds and starts on the dial the server returns.
 //
 // * `connect` sends the stored key and never rotates on its own;

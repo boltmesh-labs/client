@@ -25,7 +25,7 @@ extension ConnectionPoll on ConnectionController {
   /// Reads the serving node's health, or null when the answer is unknown.
   ///
   /// Null on any failure — a transport error, an app-level rejection, or a
-  /// 404 (a peerless or revoked device has no node to report). Callers keep
+  /// 404 (a revoked device, or an unbound device with no node to report). Callers keep
   /// whatever they already believed, because a failed read is evidence of
   /// neither health nor death; only an answered payload is.
   Future<ServerStatus?> _readServerStatus(String deviceId) async {

@@ -37,7 +37,7 @@ void main() {
     });
 
     test('each call yields a fresh keypair', () async {
-      // The backend 409s on key reuse, and the controller binds a fresh peer
+      // The backend 409s on key reuse, and the controller binds a fresh key
       // per connect/switch, so a repeating key would be a real defect.
       final km = KeyManager();
       final a = await km.generate();

@@ -10,7 +10,7 @@ extension ConnectionTransport on ConnectionController {
   ///
   /// The timeout aborts the in-flight request via [CancelToken] (rather than
   /// leaving it running): a timed-out attempt must not later land and bind a
-  /// key the store has already moved past (see [_bindFreshPeer]).
+  /// key the store has already moved past (see [_bindFreshKey]).
   Future<T?> _attempt<T>(
     String label,
     Future<T> Function(CancelToken cancel) call, {
@@ -39,17 +39,17 @@ extension ConnectionTransport on ConnectionController {
     }
   }
 
-  /// Single connect POST onto a named target (see [_attempt]) — what a server
-  /// pick from discovery is. The backend moves the peer when one is bound
-  /// elsewhere, binds when peerless, and replays when it is already there.
-  Future<DialParams?> _switchPost(
+  /// Single connect POST (see [_attempt]): a named target moves the binding to
+  /// that server, a fresh key with no target rotates in place, and anything
+  /// else binds or replays on the current target.
+  Future<DialParams?> _connectPost(
     String id,
     String publicKey,
     String? regionId,
     String? serverId, {
     Duration? timeout,
   }) => _attempt(
-    'switch POST',
+    'connect POST',
     (cancel) => _api.connect(
       deviceId: id,
       publicKey: publicKey,
@@ -57,20 +57,6 @@ extension ConnectionTransport on ConnectionController {
       serverId: serverId,
       cancelToken: cancel,
     ),
-    timeout: timeout,
-  );
-
-  /// Single connect POST for a replacement key, no target (see [_attempt]): the
-  /// backend rotates the peer onto the supplied key in place on the server it
-  /// already serves.
-  Future<DialParams?> _rotatePost(
-    String id,
-    String publicKey, {
-    Duration? timeout,
-  }) => _attempt(
-    'rotate POST',
-    (cancel) =>
-        _api.connect(deviceId: id, publicKey: publicKey, cancelToken: cancel),
     timeout: timeout,
   );
 

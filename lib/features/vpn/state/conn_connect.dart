@@ -9,7 +9,7 @@ extension ConnectionConnect on ConnectionController {
   /// this call only (Auto re-pick): the pinned target in [snap] is left
   /// untouched, so an unpinned Auto stays unpinned.
   ///
-  /// The backend owns every peer decision — bind when peerless, replay when
+  /// The backend owns every binding decision — bind when unbound, replay when
   /// we already hold the key on the target, rotate when only the key differs,
   /// move when a target is named — so this is a single `POST …/connect` on the
   /// key in the store. There is no server-truth probe and no already-bound
@@ -75,7 +75,7 @@ extension ConnectionConnect on ConnectionController {
     // No stored key (an identity whose keypair was lost): generate one, ensure
     // the server binds it, and persist only after the POST succeeds so a
     // timeout can't clobber a working identity.
-    final dial = await _bindFreshPeer(
+    final dial = await _bindFreshKey(
       id,
       regionId: oneShotRegionId,
       serverId: oneShotServerId,
@@ -96,7 +96,7 @@ extension ConnectionConnect on ConnectionController {
   /// [cancelToken] aborts the in-flight POST when the caller's probe times
   /// out; a cancelled (or already-cancelled) bind never persists its key, so
   /// a late success can't leave the store on a key the fallback replaced.
-  Future<DialParams> _bindFreshPeer(
+  Future<DialParams> _bindFreshKey(
     String deviceId, {
     String? regionId,
     String? serverId,
@@ -106,11 +106,11 @@ extension ConnectionConnect on ConnectionController {
     final expectedSession = sessionEpoch ?? _sessionEpoch;
     bool sessionCurrent() => expectedSession == _sessionEpoch;
     if (!sessionCurrent()) {
-      throw StateError('Session changed before peer bind.');
+      throw StateError('Session changed before connect bind.');
     }
     final kp = await _keys.generate();
     if (!sessionCurrent()) {
-      throw StateError('Session changed before peer bind.');
+      throw StateError('Session changed before connect bind.');
     }
     AppLog.info(
       'connect bind device=${AppLog.redact(deviceId)} '
@@ -124,7 +124,7 @@ extension ConnectionConnect on ConnectionController {
       cancelToken: cancelToken,
     );
     if (!sessionCurrent()) {
-      throw StateError('Session changed after peer bind.');
+      throw StateError('Session changed after connect bind.');
     }
     if (cancelToken != null && cancelToken.isCancelled) {
       // The caller already moved on: persisting now would bind this key
@@ -139,7 +139,7 @@ extension ConnectionConnect on ConnectionController {
       publicKey: kp.publicKey,
     );
     if (!sessionCurrent()) {
-      throw StateError('Session changed after peer persistence.');
+      throw StateError('Session changed after key persistence.');
     }
     return dial;
   }
@@ -305,7 +305,7 @@ extension ConnectionConnect on ConnectionController {
     bool superseded() =>
         sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
     if (snap.phase == ConnPhase.working) return;
-    // A throttled client must not run discovery or bind a peer either:
+    // A throttled client must not run discovery or bind either:
     // surface the countdown and skip the network entirely.
     if (_blockedByRateLimit('quick connect')) return;
     // Same as the switch op: a stale failure must not leak into this one's
@@ -483,7 +483,7 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Not connected: dial the picked target. The backend binds, reuses, or
-    // moves the peer as needed, so no server-truth read is required first.
+    // moves the binding as needed, so no server read is required first.
     await _connectOp(oneShotRegionId: best.id, expectedTeardown: teardownEpoch);
   }
 }

@@ -66,7 +66,7 @@ class ColdTunnel extends support.FakeTunnel {
   return (container, ctl);
 }
 
-VpnApi configApi(
+VpnApi testApi(
   List<String> events,
   dynamic Function(RequestOptions options) respond,
 ) => VpnApi(recordingDio(events, respond));
@@ -108,8 +108,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -144,7 +144,7 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
+          api: testApi(events, (o) {
             // The restore connect (no target) stays on srv-1; the tap names
             // srv-2.
             if (o.path.endsWith('/connect')) {
@@ -183,8 +183,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -210,8 +210,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -234,8 +234,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -259,8 +259,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -283,7 +283,7 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
+        api: testApi(events, (o) {
           // The idempotent connect re-ensures the stored key and returns the
           // dial to label the surviving tunnel with.
           if (o.path.endsWith('/connect')) return dialJson();
@@ -299,7 +299,7 @@ void main() {
       expect(state.message, 'Connected');
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('tunnel:start')));
-      // The device is kept: a peerless device is bound, never treated as gone.
+      // The device is kept: an unbound device is bound, never treated as gone.
       expect(await store.deviceId(), 'dev-1');
       expect(ctl.debugColdWatchArmed, isFalse);
     });
@@ -313,8 +313,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw missingDevice(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw missingDevice(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -337,7 +337,7 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(
+        api: testApi(
           events,
           (o) => throw StateError('must not call ${o.path}'),
         ),
@@ -359,7 +359,7 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(
+          api: testApi(
             events,
             (o) => throw StateError('must not call ${o.path}'),
           ),
@@ -390,8 +390,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -427,8 +427,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -462,8 +462,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -501,8 +501,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) {
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) {
             return dialJson(endpoint: 'node.example.net');
           }
           throw StateError('unexpected ${o.path}');
@@ -535,8 +535,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -561,8 +561,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -592,8 +592,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           if (o.path.endsWith('/disconnect')) return '';
           throw StateError('unexpected ${o.path}');
         }),
@@ -628,8 +628,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) {
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) {
             if (!online) throw networkTimeout(o);
             return dialJson();
           }
@@ -684,8 +684,8 @@ void main() {
           store: store,
           tunnel: tunnel,
           clock: clock,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) {
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) {
               // The restore anchors `_connectedAt` before confirming, so a
               // fast confirm leaves the never-handshook window closed and the
               // reader-support argument unobservable. Age past it during the
@@ -722,8 +722,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -761,8 +761,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -821,8 +821,8 @@ void main() {
           store: store,
           tunnel: tunnel,
           clock: clock,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -865,8 +865,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -907,8 +907,8 @@ void main() {
         final (container, ctl) = coldContainer(
           store: store,
           tunnel: tunnel,
-          api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+          api: testApi(events, (o) {
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -952,7 +952,7 @@ void main() {
         store: store,
         tunnel: tunnel,
         clock: clock,
-        api: configApi(events, (o) {
+        api: testApi(events, (o) {
           // The peer is bound: the dead thing is the tunnel, not the device.
           if (o.path.endsWith('/connect')) {
             clock.advance(const Duration(minutes: 5));
@@ -986,8 +986,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1008,7 +1008,7 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(
+        api: testApi(
           events,
           (o) => throw StateError('must not call ${o.path}'),
         ),
@@ -1029,8 +1029,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1052,8 +1052,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1073,7 +1073,7 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(
+        api: testApi(
           events,
           (o) => throw StateError('must not call ${o.path}'),
         ),
@@ -1091,8 +1091,8 @@ void main() {
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final tunnel = ColdTunnel(events, stage: VpnStage.connected);
-      final api = configApi(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+      final api = testApi(events, (o) {
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) {
           return {
             'device_id': 'dev-1',
@@ -1127,8 +1127,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) {
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) {
             if (!online) throw networkTimeout(o);
             return dialJson();
           }
@@ -1160,8 +1160,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           if (o.path.endsWith('/disconnect')) return '';
           throw StateError('unexpected ${o.path}');
         }),
@@ -1187,9 +1187,9 @@ void main() {
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final tunnel = ColdTunnel(events);
-      final api = configApi(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+      final api = testApi(events, (o) {
+        if (o.path.endsWith('/connect')) return dialJson();
+        if (o.path.endsWith('/disconnect')) return <String, dynamic>{};
         throw StateError('unexpected ${o.path}');
       });
       final (container, ctl) = coldContainer(
@@ -1226,8 +1226,8 @@ void main() {
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw networkTimeout(o);
+        api: testApi(events, (o) {
+          if (o.path.endsWith('/connect')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }),
       );

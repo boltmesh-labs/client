@@ -5,9 +5,9 @@ import 'models.dart';
 
 /// Thin client over backend/app/vpn/routers/devices.py + regions.py.
 ///
-/// Two session verbs, no peer knowledge: `connect` ensures the client key is
-/// bound (creating, replaying, rotating, or moving the server-side peer as
-/// needed) and `disconnect` releases it. No target means "stay where I am" (or
+/// Two session verbs, no binding-state probing: `connect` ensures the client
+/// key is bound (creating, replaying, rotating, or moving the server-side
+/// binding as needed) and `disconnect` releases it. No target means "stay where I am" (or
 /// the global lowest-load server when nothing is bound); a target is a pick
 /// from discovery.
 ///
@@ -99,11 +99,11 @@ class VpnApi {
 
   /// Ensure the client key is bound on a server, and return its dial params.
   ///
-  /// The backend owns every peer decision: peerless binds a fresh peer, the
-  /// same key on the requested server replays unchanged, a different key
-  /// rotates in place, and a named target moves the peer. So the caller never
-  /// has to know whether it holds a peer, which key the server holds, or where
-  /// it is bound.
+  /// The backend owns every binding decision: unbound binds the supplied key,
+  /// the same key on the requested server replays unchanged, a different key
+  /// rotates in place, and a named target moves the binding. So the caller
+  /// never has to know whether it is bound, which key the server holds, or
+  /// where it is bound.
   Future<DialParams> connect({
     required String deviceId,
     required String publicKey,
@@ -168,8 +168,8 @@ class VpnApi {
     return ServerStatus.fromJson(r.data as Map<String, dynamic>);
   }
 
-  /// Idempotent teardown: works with a lapsed subscription, returns
-  /// `disconnected_peers=0` when already peerless.
+  /// Idempotent teardown: works with a lapsed subscription, and is a no-op
+  /// when nothing is bound.
   Future<void> disconnect(String deviceId, {CancelToken? cancelToken}) async {
     await _request(
       '/vpn-devices/$deviceId/disconnect',

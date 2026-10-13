@@ -58,7 +58,7 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -130,7 +130,7 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -156,7 +156,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/server-status')) return onlineServerStatusJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
@@ -188,7 +188,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/server-status')) {
           return serverStatusJson('offline');
         }
@@ -215,7 +215,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/server-status')) throw networkTimeout(o);
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
@@ -242,9 +242,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) return suspendedStatusJson();
-        if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+        if (o.path.endsWith('/disconnect')) return <String, dynamic>{};
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -276,7 +276,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw missingDevice(o);
         throw StateError('unexpected ${o.path}');
       }),
@@ -301,7 +301,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }),
@@ -323,9 +323,9 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         throw StateError('unexpected ${o.path}');
       }),
@@ -366,7 +366,7 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
       }),

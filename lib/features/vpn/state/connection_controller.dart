@@ -433,7 +433,7 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> ensureProvisioned({String? regionId, String? serverId}) =>
       _ensureProvisionedOp(regionId: regionId, serverId: serverId);
 
-  /// Connect: rebuild from `config` when bound, else bind a fresh peer.
+  /// Connect: the single binding call, with or without a target.
   Future<void> connect() => _connectOp();
 
   /// Quick Connect (Home power button / Regions tile): sticky target,

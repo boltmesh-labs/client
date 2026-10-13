@@ -223,7 +223,7 @@ void main() {
     () async {
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });
@@ -250,7 +250,7 @@ void main() {
     final events = <String>[];
     var fail = true;
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         if (fail) throw networkTimeout(o);
         return activeStatusJson();
@@ -283,7 +283,7 @@ void main() {
     // ticks must wait instead of restarting the same-server config again.
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -325,7 +325,7 @@ void main() {
       // stops the tunnel and hands the user an explicit retry instead.
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }, controlProbe: support.FakeControlProbe(true));
@@ -364,7 +364,7 @@ void main() {
   test('degraded stage plus a poll failure triggers auto-heal', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -384,7 +384,7 @@ void main() {
   test('stall heals offline on the cached config', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -436,7 +436,7 @@ void main() {
     Future<(ProviderContainer, FakeTunnel)> seedDual() {
       final events = <String>[];
       return seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dualDial();
+        if (o.path.endsWith('/connect')) return dualDial();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });
@@ -482,7 +482,7 @@ void main() {
       () async {
         useLinuxDataPlane();
         final (container, tunnel) = await seedConnected(<String>[], (o) {
-          if (o.path.endsWith('/config')) return dualDial();
+          if (o.path.endsWith('/connect')) return dualDial();
           if (o.path.endsWith('/status')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }, controlProbe: support.FakeControlProbe(true));
@@ -545,7 +545,7 @@ void main() {
       useLinuxDataPlane();
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dualDial();
+        if (o.path.endsWith('/connect')) return dualDial();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }, controlProbe: support.FakeControlProbe(false));
@@ -581,7 +581,7 @@ void main() {
         final events = <String>[];
         final gatewayProbe = support.FakeGatewayProbe(false);
         final (container, _) = await seedConnected(events, (o) {
-          if (o.path.endsWith('/config')) return dualDial();
+          if (o.path.endsWith('/connect')) return dualDial();
           if (o.path.endsWith('/status')) throw networkTimeout(o);
           throw StateError('unexpected ${o.path}');
         }, gatewayProbe: gatewayProbe);
@@ -610,7 +610,7 @@ void main() {
       useLinuxDataPlane();
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }, controlProbe: support.FakeControlProbe(true));
@@ -657,7 +657,7 @@ void main() {
       // would be a guess at what the node runs.
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) {
+        if (o.path.endsWith('/connect')) {
           final dial = dialJson()..['transports'] = <Map<String, Object>>[];
           return dial;
         }
@@ -676,7 +676,7 @@ void main() {
     test('demotion is sticky: a later manual connect stays on the lower rung', () async {
       useLinuxDataPlane();
       final (container, tunnel) = await seedConnected(<String>[], (o) {
-        if (o.path.endsWith('/config')) return dualDial();
+        if (o.path.endsWith('/connect')) return dualDial();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }, controlProbe: support.FakeControlProbe(true));
@@ -747,8 +747,15 @@ void main() {
         final store = FakeStore();
         final api = VpnApi(
           recordingDio(events, (o) {
-            if (o.path.endsWith('/config')) return (dial ?? streamDial)();
-            if (o.path.endsWith('/switch')) return (onSwitch ?? streamDial)();
+            if (o.path.endsWith('/connect')) {
+              final data = o.data;
+              if (data is Map &&
+                  (data.containsKey('server_id') ||
+                      data.containsKey('region_id'))) {
+                return (onSwitch ?? streamDial)();
+              }
+              return (dial ?? streamDial)();
+            }
             if (o.path.endsWith('/vpn-regions')) {
               if (onRegions != null) return onRegions();
             }
@@ -1424,12 +1431,19 @@ void main() {
           final (container, _) = await seedConnected(
             events,
             (o) {
-              if (o.path.endsWith('/config')) return dialJson();
+              if (o.path.endsWith('/connect')) {
+                final data = o.data;
+                if (data is Map &&
+                    (data.containsKey('server_id') ||
+                        data.containsKey('region_id'))) {
+                  return dialJsonSrv2();
+                }
+                return dialJson();
+              }
               if (o.path.endsWith('/status')) throw networkTimeout(o);
               if (o.path.endsWith('/vpn-regions')) {
                 return regionsList(twoServers());
               }
-              if (o.path.endsWith('/switch')) return dialJsonSrv2();
               throw StateError('unexpected ${o.path}');
             },
             // A switch binds a fresh peer, so the move needs a keypair to
@@ -1950,13 +1964,20 @@ void main() {
       final events = <String>[];
       var fail = false;
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) {
           if (fail) throw networkTimeout(o);
           return activeStatusJson();
         }
         if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
       final ctl = container.read(connectionProvider.notifier);
@@ -1987,14 +2008,14 @@ void main() {
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     },
   );
 
   test('fresh handshake never heals an idle tunnel', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -2020,7 +2041,7 @@ void main() {
     // ticks the tunnel stays put. Only the degraded-stage path acts here.
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -2049,7 +2070,7 @@ void main() {
     final events = <String>[];
     final clock = support.FakeClock();
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     }, clock: clock);
@@ -2085,10 +2106,17 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: support.FakeGatewayProbe(null),
@@ -2116,7 +2144,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('GET:/vpn-regions'));
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     },
   );
 
@@ -2132,13 +2160,20 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/server-status')) {
             return serverStatusJson('offline');
           }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: support.FakeGatewayProbe(true),
@@ -2161,7 +2196,7 @@ void main() {
       // heal's signature config fetch being absent.
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     },
   );
 
@@ -2172,13 +2207,20 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/server-status')) {
           return onlineServerStatusJson();
         }
         if (o.path.endsWith('/status')) return activeStatusJson();
         if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       gatewayProbe: support.FakeGatewayProbe(true),
@@ -2209,13 +2251,20 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/server-status')) {
             return serverStatusJson('offline');
           }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: support.FakeGatewayProbe(false),
@@ -2247,10 +2296,17 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: support.FakeGatewayProbe(null),
@@ -2285,7 +2341,7 @@ void main() {
       // escalates.
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
       });
@@ -2323,10 +2379,17 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         clock: clock,
@@ -2359,7 +2422,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('GET:/vpn-regions'));
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     },
   );
 
@@ -2375,10 +2438,17 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) return activeStatusJson();
         if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       clock: clock,
@@ -2432,7 +2502,7 @@ void main() {
     () async {
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });
@@ -2459,11 +2529,18 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) return activeStatusJson();
         if (o.path.endsWith('/server-status')) return onlineServerStatusJson();
         if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       gatewayProbe: support.FakeGatewayProbe(false),
@@ -2499,7 +2576,7 @@ void main() {
     expect(state.autoFailoverAttempts, 1);
     expect(state.dial?.serverId, 'srv-2');
     expect(events, contains('POST:/vpn-devices/dev-1/connect'));
-    expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    expect(events.where((e) => e.contains('/config')), isEmpty);
     expect(
       events.indexOf('tunnel:stop'),
       lessThan(events.indexOf('GET:/vpn-regions')),
@@ -2522,13 +2599,20 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/server-status')) {
             return onlineServerStatusJson();
           }
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: gateway,
@@ -2551,14 +2635,14 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       // The heal budget is untouched: nothing was rebuilt.
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     },
   );
 
   test('a fresh handshake skips the echo probe entirely', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       throw StateError('unexpected ${o.path}');
     });
     final ctl = container.read(connectionProvider.notifier);
@@ -2583,9 +2667,15 @@ void main() {
   test('the echo probe starts once the handshake ages past the gate', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) {
+        final data = o.data;
+        if (data is Map &&
+            (data.containsKey('server_id') || data.containsKey('region_id'))) {
+          return dialJsonSrv2();
+        }
+        return dialJson();
+      }
       if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-      if (o.path.endsWith('/switch')) return dialJsonSrv2();
       throw StateError('unexpected ${o.path}');
     }, keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')]);
     final ctl = container.read(connectionProvider.notifier);
@@ -2625,7 +2715,7 @@ void main() {
   test('a successful status poll clears the dead-echo run', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -2644,7 +2734,7 @@ void main() {
     // stall would wait out the 10s health cadence; here it heals at once.
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -2669,7 +2759,7 @@ void main() {
   test('a repeated identical degraded stage does not re-kick', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -2699,7 +2789,7 @@ void main() {
   test('health tick publishes traffic counters to state', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -2722,7 +2812,7 @@ void main() {
     () async {
       final events = <String>[];
       final (container, tunnel) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       });
       final ctl = container.read(connectionProvider.notifier);
@@ -2749,7 +2839,7 @@ void main() {
   test('an exiting stage enters outside-stop verification', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       throw StateError('unexpected ${o.path}');
     });
     final ctl = container.read(connectionProvider.notifier);
@@ -2766,7 +2856,7 @@ void main() {
   test('unverifiable outside stop adopts and keeps the tunnel up', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       throw StateError('unexpected ${o.path}');
     });
     final ctl = container.read(connectionProvider.notifier);
@@ -2788,7 +2878,7 @@ void main() {
   test('external OS stop grace cleared so a later stop is honored', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       throw StateError('unexpected ${o.path}');
     });
     final ctl = container.read(connectionProvider.notifier);
@@ -2812,7 +2902,7 @@ void main() {
       final keys = FakeKeys();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -2994,12 +3084,19 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3044,12 +3141,19 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       gatewayProbe: support.FakeGatewayProbe(null),
@@ -3082,7 +3186,7 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers().sublist(0, 1));
@@ -3153,10 +3257,17 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv9();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
-        if (o.path.endsWith('/switch')) return dialJsonSrv9();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3184,10 +3295,17 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv9();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) return twoRegionsSingleEach();
-        if (o.path.endsWith('/switch')) return dialJsonSrv9();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3222,7 +3340,15 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv9();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         // srv-1 is gone from discovery entirely: the parent region cannot
         // be resolved, which used to mean the pinned no-capacity error.
@@ -3236,7 +3362,6 @@ void main() {
             },
           ];
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv9();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3264,7 +3389,7 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers().sublist(0, 1));
@@ -3298,12 +3423,19 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3332,12 +3464,19 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            throw networkTimeout(o);
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3372,11 +3511,18 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3405,14 +3551,14 @@ void main() {
     expect(events, contains('GET:/vpn-regions'));
     expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     // No config fetch and no status poll: escalation was purely local.
-    expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    expect(events.where((e) => e.contains('/config')), isEmpty);
     expect(events.where((e) => e.contains('/status')), isEmpty);
   });
 
   test('persistent 5xx status errors surface a degraded banner', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         throw DioException(
           requestOptions: o,
@@ -3447,7 +3593,7 @@ void main() {
   test('answered 5xx suppresses a standard stale-handshake heal', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         throw DioException(
           requestOptions: o,
@@ -3490,10 +3636,17 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         controlProbe: support.FakeControlProbe(false),
@@ -3515,7 +3668,7 @@ void main() {
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
       expect(events, contains('GET:/vpn-regions'));
       expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     },
@@ -3524,7 +3677,7 @@ void main() {
   test('status poll racing a heal stop is skipped, not counted', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -3615,7 +3768,7 @@ void main() {
       InterceptorsWrapper(
         onRequest: (options, handler) async {
           events.add('${options.method}:${options.path}');
-          if (options.path.endsWith('/config') ||
+          if (options.path.endsWith('/connect') ||
               options.path.endsWith('/connect')) {
             handler.resolve(
               Response(
@@ -3674,7 +3827,7 @@ void main() {
     // needed two fresh 60s polls from scratch.
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw networkTimeout(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -3700,12 +3853,19 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) {
+          final data = o.data;
+          if (data is Map &&
+              (data.containsKey('server_id') ||
+                  data.containsKey('region_id'))) {
+            return dialJsonSrv2();
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           return regionsList(twoServers());
         }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
         throw StateError('unexpected ${o.path}');
       },
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
@@ -3734,7 +3894,7 @@ void main() {
     expect(state.serverId, isNull);
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);
-    expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+    expect(events.where((e) => e.contains('/config')), isEmpty);
     expect(events, contains('GET:/vpn-regions'));
     expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
@@ -3870,7 +4030,7 @@ void main() {
     // (Traffic is wedged too; it is display-only and never decides.)
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -3896,7 +4056,7 @@ void main() {
   test('background health tick skips the display-only traffic read', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -3936,13 +4096,20 @@ void main() {
       final (container, _) = await seedConnected(
         events,
         (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) {
+            final data = o.data;
+            if (data is Map &&
+                (data.containsKey('server_id') ||
+                    data.containsKey('region_id'))) {
+              return dialJsonSrv2();
+            }
+            return dialJson();
+          }
           if (o.path.endsWith('/server-status')) {
             return serverStatusJson(nodeOffline ? 'offline' : 'online');
           }
           if (o.path.endsWith('/status')) return activeStatusJson();
           if (o.path.endsWith('/vpn-regions')) return regionsList(twoServers());
-          if (o.path.endsWith('/switch')) return dialJsonSrv2();
           throw StateError('unexpected ${o.path}');
         },
         gatewayProbe: support.FakeGatewayProbe(true),
@@ -3988,7 +4155,7 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/server-status')) {
           return serverStatusJson('offline');
         }
@@ -4025,7 +4192,7 @@ void main() {
     final (container, tunnel) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         if (o.path.endsWith('/vpn-regions')) {
           throw DioException(

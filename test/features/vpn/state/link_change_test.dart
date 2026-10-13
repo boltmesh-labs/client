@@ -85,7 +85,7 @@ void main() {
   test('link loss surfaces the no-network banner immediately', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) return activeStatusJson();
       throw StateError('unexpected ${o.path}');
     });
@@ -105,7 +105,7 @@ void main() {
     () async {
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
       });
@@ -134,7 +134,7 @@ void main() {
     final (container, _) = await seedConnected(
       events,
       (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
         throw StateError('unexpected ${o.path}');
       },

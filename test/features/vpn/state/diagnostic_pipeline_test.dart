@@ -66,7 +66,7 @@ void main() {
     test('no link pauses heals without burning budgets', () async {
       final events = <String>[];
       final (container, _, ctl) = await seedPipeline(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }, link: false);
       staleHandshake(ctl);
@@ -86,7 +86,7 @@ void main() {
     test('a no-link tick manufactures no dead-echo strikes', () async {
       final events = <String>[];
       final (container, _, ctl) = await seedPipeline(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }, link: false);
       staleHandshake(ctl);
@@ -112,7 +112,7 @@ void main() {
     test('alive gateway suppresses the heal', () async {
       final events = <String>[];
       final (container, _, ctl) = await seedPipeline(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }, gatewayAlive: true);
       staleHandshake(ctl);
@@ -165,9 +165,6 @@ void main() {
             },
           ];
         }
-        if (o.path.endsWith('/switch')) {
-          return dialJson(serverId: 'srv-2', serverName: 'two');
-        }
         throw StateError('unexpected ${o.path}');
       }, apiReachable: true);
       staleHandshake(ctl);
@@ -186,7 +183,7 @@ void main() {
         'tunnel:stop',
         'tunnel:start',
       ]);
-      expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+      expect(events.where((e) => e.contains('/config')), isEmpty);
     });
 
     test(
@@ -194,7 +191,7 @@ void main() {
       () async {
         final events = <String>[];
         final (container, _, ctl) = await seedPipeline(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         });
         staleHandshake(ctl);
@@ -209,7 +206,7 @@ void main() {
           'tunnel:start',
         ]);
         expect(events, contains('GET:/vpn-regions'));
-        expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
+        expect(events.where((e) => e.contains('/config')), isEmpty);
       },
     );
   });

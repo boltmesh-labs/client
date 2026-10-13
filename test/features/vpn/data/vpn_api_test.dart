@@ -104,7 +104,7 @@ void main() {
     expect(body.containsKey('region_id'), isFalse);
 
     // No target: neither field is sent, so the backend keeps the current
-    // binding (or picks the global lowest-load server when peerless).
+    // binding (or picks the global lowest-load server when unbound).
     final seen2 = <RequestOptions>[];
     final api2 = VpnApi(fakeDio((_) => dialJson(), seen: seen2));
     await api2.connect(deviceId: 'dev-1', publicKey: 'PUB');

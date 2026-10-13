@@ -550,11 +550,12 @@ rest of the pipeline (which files, when, verify) is unchanged.
   `{name, platform(enum), public_key, [region_id|server_id]}` with a
   persisted `Idempotency-Key` UUID. Private key stays in secure storage.
 - Connect: `POST /vpn-devices/{id}/connect` with the public key the client
-  holds. No target means "stay where the peer is" (or the global auto-pick
-  when the device is peerless); a target is a pick from discovery. The
-  backend owns every peer decision — bind when peerless, replay when the peer
-  already holds that key, rotate in place when only the key differs, move when
-  a target names another server — so the client never reasons about peers.
+  holds. No target means "stay where the binding is" (or the global auto-pick
+  when the device is unbound); a target is a pick from discovery. The
+  backend owns every binding decision — bind when unbound, replay when the
+  server already holds that key, rotate in place when only the key differs,
+  move when a target names another server — so the client never probes
+  binding state.
   404 means the device is gone (reprovision); a key already registered to
   another device is retried once with a fresh keypair.
 - Switch (a server pick from the Regions tab): the same `connect` with
@@ -569,8 +570,8 @@ rest of the pipeline (which files, when, verify) is unchanged.
   the transport cancels the daemon request, and a retry waits for the
   original tunnel operation instead of racing its lock.
 - Rotate: the same `connect` with a fresh public key and no target — the
-  backend rotates the peer in place (same server + IP, tunnel restarts on
-  the new config). Automatic every 24h of connected time (counted in status
+  backend rotates the binding in place (same server + IP, tunnel restarts on
+  the new dial). Automatic every 24h of connected time (counted in status
   polls).
 - Status: `GET /vpn-devices/{id}/status` polled every 60s while connected
   (never faster — session-budgeted rate limit). `suspended` auto-disconnects

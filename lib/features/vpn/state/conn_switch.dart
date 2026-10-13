@@ -5,8 +5,9 @@ extension ConnectionSwitch on ConnectionController {
   /// an Auto re-pick.
   ///
   /// This is just `connect` with an explicit target: the backend moves the
-  /// peer (or binds/replays as needed), so this client no longer has a separate
-  /// server-side "switch" call and never reasons about where its peer is. The
+  /// binding (or binds/replays as needed), so this client no longer has a
+  /// separate server-side "switch" call and never reasons about where its
+  /// binding is. The
   /// key we already hold is moved, which preserves the overlay IP and byte
   /// counters; a device that somehow holds no key binds a fresh one.
   Future<void> _switchServerOp({
@@ -26,7 +27,7 @@ extension ConnectionSwitch on ConnectionController {
     // sets it again, so the benign same-target no-op never snacks.
     snap = snap.copyWith(opFailed: false);
     // Skip only against a target the tunnel is actually on. A pin outlives
-    // the peer it names — it is restored from storage on every cold start —
+    // the target it names — it is restored from storage on every cold start —
     // so a restored pin can name a server the live dial is not on, and
     // skipping there would swallow a real tap while reporting "already
     // connected" for a tunnel that is somewhere else. A server request
@@ -53,7 +54,7 @@ extension ConnectionSwitch on ConnectionController {
     final oldDial = snap.dial;
     final wasConnected = snap.phase == ConnPhase.connected;
     // True once a transport failure leaves the server-side outcome uncertain
-    // (a timed-out POST may still have moved the peer). Declared outside `try`
+    // (a timed-out POST may still have moved the binding). Declared outside `try`
     // so the `catch` recovery can read it.
     var ambiguous = false;
     // True once the fallback path stopped the tunnel: the UI must not claim to
@@ -118,7 +119,7 @@ extension ConnectionSwitch on ConnectionController {
         if (pinTarget) {
           selectTarget(serverId: serverId, explicitTarget: explicitTarget);
         }
-        dial = await _bindFreshPeer(
+        dial = await _bindFreshKey(
           deviceId,
           regionId: regionId,
           serverId: serverId,
@@ -135,7 +136,7 @@ extension ConnectionSwitch on ConnectionController {
         // stopping). The tunnel is stopped only when the backend is
         // unreachable through the current path.
         final result = await _postViaTunnelOrDirect(
-          post: ({Duration? timeout}) => _switchPost(
+          post: ({Duration? timeout}) => _connectPost(
             deviceId,
             publicKey,
             regionId,
@@ -227,8 +228,8 @@ extension ConnectionSwitch on ConnectionController {
     }
   }
 
-  /// Rotate the WireGuard key in place: same server and overlay IP, the
-  /// peer moves to a fresh key and the tunnel restarts on the new config.
+  /// Rotate the WireGuard key in place: same server and overlay IP, the binding
+  /// moves to a fresh key and the tunnel restarts on the new dial.
   /// Manual calls surface errors; automatic (background) calls fail silent
   /// while the tunnel stays up — the next poll tick retries since
   /// [_pollsSinceRotate] only resets on success. A failure after the tunnel
@@ -305,10 +306,10 @@ extension ConnectionSwitch on ConnectionController {
       final deviceId = id;
       // Probe through the live tunnel first; stop only when the backend is
       // unreachable through the current path (same rule as switch). No target
-      // is named, so the backend rotates the peer in place on its server.
+      // is named, so the backend rotates the binding in place on its server.
       final result = await _postViaTunnelOrDirect(
         post: ({Duration? timeout}) =>
-            _rotatePost(deviceId, kp.publicKey, timeout: timeout),
+            _connectPost(deviceId, kp.publicKey, null, null, timeout: timeout),
         wasConnected: wasConnected,
         stopLabel: 'rotate',
         onFallbackStart: auto
@@ -343,7 +344,7 @@ extension ConnectionSwitch on ConnectionController {
           'Rotate request failed. Check your connection and retry.',
         );
       }
-      // The POST was accepted: the server's active peer now holds the fresh
+      // The POST was accepted: the server now holds the fresh
       // key. Any failure from here keeps that identity.
       serverCommitted = true;
       if (sessionEpoch != _sessionEpoch) return;

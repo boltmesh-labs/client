@@ -90,7 +90,7 @@ void main() {
   test('401 surfaces authExpired, never unreachable', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw authExpired401(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -109,7 +109,7 @@ void main() {
     final events = <String>[];
     var mode = 'transport';
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         if (mode == 'transport') throw networkTimeout(o);
         throw authExpired401(o);
@@ -138,7 +138,7 @@ void main() {
   test('403 subscription lapse surfaces subscriptionInactive', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) throw noSubscription403(o);
       throw StateError('unexpected ${o.path}');
     });
@@ -153,7 +153,7 @@ void main() {
   test('5xx surfaces serverError and keeps the degraded note', () async {
     final events = <String>[];
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         throw DioException(
           requestOptions: o,
@@ -185,7 +185,7 @@ void main() {
     () async {
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });
@@ -209,7 +209,7 @@ void main() {
     final events = <String>[];
     var fail = true;
     final (container, _) = await seedConnected(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       if (o.path.endsWith('/status')) {
         if (fail) throw authExpired401(o);
         return activeStatusJson();
@@ -239,7 +239,7 @@ void main() {
       // severity measure, which is exactly what this evidence is not.
       final events = <String>[];
       final (container, _) = await seedConnected(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       });

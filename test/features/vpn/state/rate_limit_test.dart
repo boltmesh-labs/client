@@ -68,7 +68,7 @@ void main() {
     final store = FakeStore();
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/status')) throw rateLimited(o, seconds: 5);
         throw StateError('unexpected ${o.path}');
       }),
@@ -95,7 +95,6 @@ void main() {
     await store.setKeypair(privateKey: 'P', publicKey: 'PUB');
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) throw peerless(o);
         if (o.path.endsWith('/connect')) throw rateLimited(o, seconds: 5);
         throw StateError('unexpected ${o.path}');
       }),
@@ -129,7 +128,6 @@ void main() {
     await store.setKeypair(privateKey: 'P', publicKey: 'PUB');
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) throw peerless(o);
         if (o.path.endsWith('/connect')) throw rateLimited(o, seconds: null);
         throw StateError('unexpected ${o.path}');
       }),
@@ -153,7 +151,6 @@ void main() {
     var limited = true;
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) throw peerless(o);
         if (o.path.endsWith('/connect')) {
           if (limited) throw rateLimited(o, seconds: 5);
           return dialJson();
@@ -213,7 +210,7 @@ void main() {
     await store.setKeypair(privateKey: 'P', publicKey: 'PUB');
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );

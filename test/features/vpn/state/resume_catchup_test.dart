@@ -127,8 +127,7 @@ Dio resumeVpnDio(List<String> events) {
     InterceptorsWrapper(
       onRequest: (options, handler) {
         events.add('${options.method}:${options.path}');
-        if (options.path.endsWith('/config') ||
-            options.path.endsWith('/connect')) {
+        if (options.path.endsWith('/connect')) {
           handler.resolve(
             Response(
               requestOptions: options,
@@ -295,8 +294,7 @@ void main() {
         InterceptorsWrapper(
           onRequest: (options, handler) async {
             events.add('${options.method}:${options.path}');
-            if (options.path.endsWith('/config') ||
-                options.path.endsWith('/connect')) {
+            if (options.path.endsWith('/connect')) {
               handler.resolve(
                 Response(
                   requestOptions: options,

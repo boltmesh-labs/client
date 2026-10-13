@@ -73,7 +73,7 @@ void main() {
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/status')) return activeStatusJson();
           throw StateError('unexpected ${o.path}');
         }),
@@ -115,7 +115,7 @@ void main() {
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/status')) return activeStatusJson();
           throw StateError('unexpected ${o.path}');
         }),
@@ -160,7 +160,7 @@ void main() {
       );
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -193,7 +193,7 @@ void main() {
         final socket = support.FakeHelperSocket()..fail = true;
         final api = VpnApi(
           recordingDio(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -221,9 +221,9 @@ void main() {
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/disconnect')) {
-            return {'disconnected_peers': 1};
+            return <String, dynamic>{};
           }
           throw StateError('unexpected ${o.path}');
         }),
@@ -275,7 +275,7 @@ void main() {
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -305,7 +305,7 @@ void main() {
         final socket = support.FakeHelperSocket()..failingOps.add('status');
         final api = VpnApi(
           recordingDio(events, (o) {
-            if (o.path.endsWith('/config')) throw networkTimeout(o);
+            if (o.path.endsWith('/connect')) throw networkTimeout(o);
             throw StateError('unexpected ${o.path}');
           }),
         );
@@ -333,7 +333,7 @@ void main() {
       );
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -355,13 +355,13 @@ void main() {
       expect(socket.ops, contains('up'));
     });
 
-    test('a peerless device is re-bound by the cold-start connect', () async {
+    test('an unbound device is re-bound by the cold-start connect', () async {
       final events = <String>[];
       final store = await storeWithCachedDial();
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          // Peerless is not an error on this API: `connect` binds the stored
+          // Unbound is not an error on this API: `connect` binds the stored
           // key and returns its dial, so the cold start re-ensures it.
           if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
@@ -393,7 +393,7 @@ void main() {
         final socket = support.FakeHelperSocket();
         final api = VpnApi(
           recordingDio(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         );

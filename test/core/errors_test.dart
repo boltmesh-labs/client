@@ -15,11 +15,11 @@ void main() {
   });
 
   test('every 404 is reprovision', () {
-    // "Peerless" is not a 404 on this API — `connect` answers it — so no 404
-    // detail or code is special-cased; all mean the device is gone.
-    expect(kindFor(404, 'Device has no peer.'), ApiErrorKind.notFound);
+    // An unbound device is answered by `connect`, so no 404 detail or code
+    // is special-cased; all mean the device is gone.
+    expect(kindFor(404, 'Device is unbound.'), ApiErrorKind.notFound);
     expect(
-      kindFor(404, 'Device has no peer.', 'DEVICE_NO_PEER'),
+      kindFor(404, 'Device is unbound.', 'DEVICE_UNBOUND'),
       ApiErrorKind.notFound,
     );
     expect(

@@ -98,7 +98,7 @@ void main() {
       final store = FakeStore();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -132,7 +132,7 @@ void main() {
     final store = FakeStore();
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -156,9 +156,9 @@ void main() {
   });
 
   group('local network access (split tunnel)', () {
-    VpnApi configApi(List<String> events) => VpnApi(
+    VpnApi testApi(List<String> events) => VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -170,7 +170,7 @@ void main() {
       final container = makeContainer(
         store: store,
         keys: FakeKeys(const []),
-        api: configApi(events),
+        api: testApi(events),
       );
       return container;
     }
@@ -385,7 +385,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -411,7 +411,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -483,7 +483,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -514,7 +514,7 @@ void main() {
           provisionBody = o.data as Map<dynamic, dynamic>;
           return dialJson(serverId: 'srv-r2', serverName: 'r2-server');
         }
-        if (o.path.endsWith('/config')) {
+        if (o.path.endsWith('/connect')) {
           return dialJson(serverId: 'srv-r2', serverName: 'r2-server');
         }
         throw StateError('unexpected ${o.path}');
@@ -640,7 +640,7 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }),
@@ -667,7 +667,7 @@ void main() {
       final keys = FakeKeys(const []);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/disconnect')) throw missingDevice(o);
           throw StateError('unexpected ${o.path}');
         }),
@@ -696,9 +696,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         throw StateError('unexpected ${o.path}');
       }),
@@ -728,9 +728,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         throw StateError('unexpected ${o.path}');
       }),
@@ -758,9 +758,9 @@ void main() {
       final keys = FakeKeys(const []);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/disconnect')) {
-            return {'disconnected_peers': 1};
+            return <String, dynamic>{};
           }
           if (o.path == '/vpn-devices/dev-1') return null;
           throw StateError('unexpected ${o.path}');
@@ -791,9 +791,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         if (o.path == '/vpn-devices/dev-1') throw missingDevice(o);
         throw StateError('unexpected ${o.path}');
@@ -817,9 +817,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         if (o.path == '/vpn-devices/dev-1') {
           throw DioException(
@@ -853,9 +853,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         if (o.path == '/vpn-devices/dev-1') return null;
         throw StateError('unexpected ${o.path}');
@@ -892,9 +892,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         if (o.path == '/vpn-devices/dev-1') return null;
         throw StateError('unexpected ${o.path}');
@@ -926,9 +926,9 @@ void main() {
     final keys = FakeKeys(const []);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
+        if (o.path.endsWith('/connect')) return dialJson();
         if (o.path.endsWith('/disconnect')) {
-          return {'disconnected_peers': 1};
+          return <String, dynamic>{};
         }
         if (o.path == '/vpn-devices/dev-1') return null;
         throw StateError('unexpected ${o.path}');
@@ -976,7 +976,6 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) throw peerless(o);
         if (o.path.endsWith('/connect')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }),
@@ -1225,7 +1224,7 @@ void main() {
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+        if (o.path.endsWith('/disconnect')) return <String, dynamic>{};
         if (o.path.endsWith('/connect')) {
           if ((o.data as Map)['server_id'] == 'srv-2') {
             return dialJson(serverId: 'srv-2', serverName: 'two');
@@ -1560,7 +1559,7 @@ void main() {
           if (o.path.endsWith('/vpn-regions')) {
             return [regionJson('r-1', 'srv-1', 1)];
           }
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1640,9 +1639,9 @@ void main() {
       final keys = FakeKeys(const []);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/disconnect')) {
-            return {'disconnected_peers': 1};
+            return <String, dynamic>{};
           }
           if (o.path.endsWith('/vpn-regions')) {
             return [
@@ -1689,7 +1688,7 @@ void main() {
           if (o.path.endsWith('/vpn-regions')) {
             return [regionJson('r-1', 'srv-1', 0)];
           }
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1841,7 +1840,7 @@ void main() {
       await store.setDeviceId('dev-1');
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
+          if (o.path.endsWith('/disconnect')) return <String, dynamic>{};
           if (o.method == 'DELETE') return <String, dynamic>{};
           throw StateError('unexpected ${o.path}');
         }),
@@ -1870,7 +1869,7 @@ void main() {
       final keys = FakeKeys(const []);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           if (o.path.endsWith('/vpn-regions')) {
             // The live server sits in the lowest-load region.
             return [
@@ -1969,14 +1968,14 @@ void main() {
                   Response(
                     requestOptions: options,
                     statusCode: 200,
-                    data: {'disconnected_peers': 1},
+                    data: <String, dynamic>{},
                   ),
                 );
                 return;
               }
               // A live peer on the best target: the buggy path would reuse it
               // and start the tunnel, silently reversing the Disconnect.
-              if (options.path.endsWith('/config')) {
+              if (options.path.endsWith('/connect')) {
                 handler.resolve(
                   Response(
                     requestOptions: options,
@@ -2015,12 +2014,7 @@ void main() {
         expect(events, contains('GET:/vpn-regions'));
         expect(events, contains('POST:/vpn-devices/dev-1/disconnect'));
         expect(
-          events.where(
-            (e) =>
-                e == 'tunnel:start' ||
-                e.contains('/config') ||
-                e.contains('/connect'),
-          ),
+          events.where((e) => e == 'tunnel:start' || e.contains('/connect')),
           isEmpty,
         );
       },
@@ -2082,7 +2076,7 @@ void main() {
         keys: FakeKeys(const []),
         api: VpnApi(
           recordingDio(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
+            if (o.path.endsWith('/connect')) return dialJson();
             throw StateError('unexpected ${o.path}');
           }),
         ),

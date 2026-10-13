@@ -584,7 +584,7 @@ extension ConnectionRecovery on ConnectionController {
       // errors keep the tunnel up and fall back to the old dial below.
       final moved = await _postViaTunnelOrDirect(
         post: ({Duration? timeout}) =>
-            _switchPost(id, publicKey, null, target, timeout: timeout),
+            _connectPost(id, publicKey, null, target, timeout: timeout),
         wasConnected: !tunnelDown,
         stopLabel: 'auto-failover',
         initiallyDown: tunnelDown,

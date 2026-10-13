@@ -53,7 +53,7 @@ connected() async {
   final auth = _AuthDouble();
   final api = VpnApi(
     recordingDio(events, (o) {
-      if (o.path.endsWith('/config')) return dialJson();
+      if (o.path.endsWith('/connect')) return dialJson();
       throw StateError('unexpected ${o.path}');
     }),
   );
@@ -142,7 +142,7 @@ void main() {
       final auth = _AuthDouble();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
