@@ -39,7 +39,9 @@ extension ConnectionTransport on ConnectionController {
     }
   }
 
-  /// Single switch POST (see [_attempt]).
+  /// Single connect POST onto a named target (see [_attempt]) — what a server
+  /// pick from discovery is. The backend moves the peer when one is bound
+  /// elsewhere, binds when peerless, and replays when it is already there.
   Future<DialParams?> _switchPost(
     String id,
     String publicKey,
@@ -48,7 +50,7 @@ extension ConnectionTransport on ConnectionController {
     Duration? timeout,
   }) => _attempt(
     'switch POST',
-    (cancel) => _api.switchServer(
+    (cancel) => _api.connect(
       deviceId: id,
       publicKey: publicKey,
       regionId: regionId,
@@ -58,18 +60,17 @@ extension ConnectionTransport on ConnectionController {
     timeout: timeout,
   );
 
-  /// Single rotate-keys POST (see [_attempt]).
+  /// Single connect POST for a replacement key, no target (see [_attempt]): the
+  /// backend rotates the peer onto the supplied key in place on the server it
+  /// already serves.
   Future<DialParams?> _rotatePost(
     String id,
     String publicKey, {
     Duration? timeout,
   }) => _attempt(
     'rotate POST',
-    (cancel) => _api.rotateKeys(
-      deviceId: id,
-      publicKey: publicKey,
-      cancelToken: cancel,
-    ),
+    (cancel) =>
+        _api.connect(deviceId: id, publicKey: publicKey, cancelToken: cancel),
     timeout: timeout,
   );
 
@@ -186,83 +187,13 @@ extension ConnectionTransport on ConnectionController {
     error: ApiException(ApiErrorKind.network, message),
   );
 
-  /// Reads server truth (`GET …/config`) and guarantees the returned dial
-  /// matches the locally stored keypair, repairing a client/server key
-  /// divergence that a lost bind response or a rolled-back store can leave:
-  /// the server's active peer would then hold a public key whose private half
-  /// this client no longer has, so a tunnel started from `config` would never
-  /// handshake. The backend echoes the active peer's public key
-  /// ([DialParams.clientPublicKey]); a mismatch means the local identity is
-  /// stale.
-  ///
-  /// On mismatch the server peer is moved onto a fresh key we control with an
-  /// in-place `rotate-keys` (same node/IP), persisted, and the rebound dial
-  /// returned. If the peer vanished between the read and the rebind, the
-  /// raised `noActivePeer` propagates so callers run their existing
-  /// fresh-bind recovery (see `_connectBody`).
-  ///
-  /// Lock-free: caller must hold [_mutex]. Returns the reconciled dial plus
-  /// whether a rebind happened — cold-start callers must bounce a surviving
-  /// OS tunnel that still runs the stale key. A dial with no
-  /// [DialParams.clientPublicKey] (older backend) is returned untouched.
-  Future<({DialParams dial, bool rebound})> _configReconciled(
-    String deviceId, {
-    int? sessionEpoch,
-  }) async {
-    final expectedSession = sessionEpoch ?? _sessionEpoch;
-    bool sessionCurrent() => expectedSession == _sessionEpoch;
-    final dial = await _api.config(deviceId);
-    if (!sessionCurrent()) {
-      throw StateError('Session changed during config.');
-    }
-    // Server truth answers: the device holds the peer this dial describes, so
-    // the local knowledge a disconnect recorded does not (see
-    // [_peerReleasedLocally]). A peerless device never reaches here — `config`
-    // answers 404 and the caller's own fresh-bind recovery runs instead.
-    _peerReleasedLocally = false;
-    final serverKey = dial.clientPublicKey;
-    if (serverKey == null || serverKey.isEmpty) {
-      return (dial: dial, rebound: false);
-    }
-    final stored = await _device.publicKey();
-    if (!sessionCurrent()) {
-      throw StateError('Session changed during config.');
-    }
-    if (stored != null && stored == serverKey) {
-      return (dial: dial, rebound: false);
-    }
-    AppLog.info(
-      'config key divergence device=${AppLog.redact(deviceId)} '
-      'stored=${AppLog.redact(stored)} server=${AppLog.redact(serverKey)} '
-      '-> rebind',
-    );
-    final kp = await _keys.generate();
-    if (!sessionCurrent()) {
-      throw StateError('Session changed during rebind.');
-    }
-    final rebound = await _api.rotateKeys(
-      deviceId: deviceId,
-      publicKey: kp.publicKey,
-    );
-    if (!sessionCurrent()) {
-      throw StateError('Session changed after rebind.');
-    }
-    await _device.setKeypair(
-      privateKey: kp.privateKey,
-      publicKey: kp.publicKey,
-    );
-    if (!sessionCurrent()) {
-      throw StateError('Session changed after rebind.');
-    }
-    return (dial: rebound, rebound: true);
-  }
-
   /// Restores the pre-op keypair after a clean failure: the POST never bound
   /// the ephemeral key, so the old pair still matches the server-side peer.
   /// Re-checked first, because something may have rotated the store
   /// mid-flight and a retry must reuse the working identity. Best-effort: the
   /// caller's message still reports the failure. (After a double transport
-  /// failure the server may hold the new key; Connect reconciles via config.)
+  /// failure the server may hold the new key; a later Connect rebinds it on the
+  /// key supplied.)
   Future<void> _restoreKeypair({
     required String? oldPriv,
     required String? oldPub,
@@ -289,7 +220,7 @@ extension ConnectionTransport on ConnectionController {
   /// stop leaves no tunnel running, so it must surface `error` (ticks stopped,
   /// stale stage dropped) instead of claiming to still be connected on the
   /// old server. Otherwise a previously live session is kept and annotated.
-  /// A Connect reconciles via config/connect.
+  /// A Connect reconciles against server truth.
   void _surfaceOpFailure({
     required Object e,
     required ApiException? vpnErr,

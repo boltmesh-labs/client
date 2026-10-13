@@ -6,8 +6,6 @@ enum ApiErrorKind {
   forbidden,
   deviceLimit,
   notFound,
-  noActivePeer,
-  alreadyConnected,
   keyInUse,
   idempotencyConflict,
   noCapacity,
@@ -41,19 +39,6 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 }
-
-/// True when a 404 means "device exists but has no bound peer" (expected
-/// after `disconnect`), not "device missing". Prefers the machine-readable
-/// backend `code` (`DEVICE_NO_PEER`; `PEER_NOT_FOUND` for the switch/rotate
-/// peerless variants); falls back to the detail text for older backends that
-/// only send `DEVICE_NOT_FOUND`. `DEVICE_NO_ACTIVE_PEER` is the legacy code
-/// for the same condition.
-bool isPeerless404(String? code, String lowerDetail) =>
-    code == 'DEVICE_NO_PEER' ||
-    code == 'PEER_NOT_FOUND' ||
-    code == 'DEVICE_NO_ACTIVE_PEER' ||
-    lowerDetail.contains('has no peer') ||
-    lowerDetail.contains('no active peer');
 
 /// Generic copy for gateway/proxy outages. Reverse proxies in front of the
 /// backend answer 502/504 (and sometimes 500) with an HTML error page, which
@@ -125,17 +110,13 @@ bool looksLikeHtmlBody(String body) {
         );
       }
     case 404:
-      if (isPeerless404(code, lower)) {
-        result = (
-          kind: ApiErrorKind.noActivePeer,
-          message: 'No active connection. Binding a fresh peer…',
-        );
-      } else {
-        result = (
-          kind: ApiErrorKind.notFound,
-          message: 'Device or server not found. Reprovision this device.',
-        );
-      }
+      // The device is gone or not ours. "Peerless" is deliberately not a 404
+      // on this API: a device with no bound peer is answered by `connect`, so
+      // a 404 is always "reprovision" and never a peer state to interpret.
+      result = (
+        kind: ApiErrorKind.notFound,
+        message: 'Device or server not found. Reprovision this device.',
+      );
     case 409:
       // Idempotency first and by code. Both 409 kinds get described with
       // "already", so neither is separable by text alone and the order is
@@ -158,11 +139,6 @@ bool looksLikeHtmlBody(String body) {
         result = (
           kind: ApiErrorKind.keyInUse,
           message: 'Key already in use. Generating a fresh key…',
-        );
-      } else if (lower.contains('already') || lower.contains('connected')) {
-        result = (
-          kind: ApiErrorKind.alreadyConnected,
-          message: 'Already connected. Loading existing config.',
         );
       } else {
         result = (kind: ApiErrorKind.unknown, message: 'Conflict ($d).');

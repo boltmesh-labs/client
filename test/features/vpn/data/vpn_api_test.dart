@@ -84,54 +84,33 @@ void main() {
     expect(body['platform'], 'android');
   });
 
-  test('config/disconnect hit device-scoped paths', () async {
+  test('connect/disconnect hit device-scoped paths', () async {
     final seen = <RequestOptions>[];
     final api = VpnApi(fakeDio((_) => dialJson(), seen: seen));
-    await api.config('dev-1');
+    await api.connect(deviceId: 'dev-1', publicKey: 'PUB');
     await api.disconnect('dev-1');
-    expect(seen[0].path, '/vpn-devices/dev-1/config');
+    expect(seen[0].path, '/vpn-devices/dev-1/connect');
     expect(seen[1].path, '/vpn-devices/dev-1/disconnect');
   });
 
-  test('switchServer requires exactly one target', () async {
-    final api = VpnApi(fakeDio((_) => dialJson()));
-    expect(
-      () => api.switchServer(deviceId: 'dev-1', publicKey: 'PUB'),
-      throwsArgumentError,
-    );
-    expect(
-      () => api.switchServer(
-        deviceId: 'dev-1',
-        publicKey: 'PUB',
-        serverId: 'srv-1',
-        regionId: 'r-1',
-      ),
-      throwsArgumentError,
-    );
-  });
-
-  test('switchServer posts the single target', () async {
+  test('connect posts the supplied key and only the named target', () async {
     final seen = <RequestOptions>[];
     final api = VpnApi(fakeDio((_) => dialJson(), seen: seen));
-    await api.switchServer(
-      deviceId: 'dev-1',
-      publicKey: 'PUB',
-      serverId: 'srv-1',
-    );
-    expect(seen.single.path, '/vpn-devices/dev-1/switch');
+    await api.connect(deviceId: 'dev-1', publicKey: 'PUB', serverId: 'srv-1');
+    expect(seen.single.path, '/vpn-devices/dev-1/connect');
     final body = seen.single.data as Map;
+    expect(body['public_key'], 'PUB');
     expect(body['server_id'], 'srv-1');
     expect(body.containsKey('region_id'), isFalse);
-  });
 
-  test('rotateKeys posts the replacement public key', () async {
-    final seen = <RequestOptions>[];
-    final api = VpnApi(fakeDio((_) => dialJson(), seen: seen));
-    final dial = await api.rotateKeys(deviceId: 'dev-1', publicKey: 'NEW-PUB');
-    expect(dial.deviceId, 'dev-1');
-    expect(seen.single.path, '/vpn-devices/dev-1/rotate-keys');
-    final body = seen.single.data as Map;
-    expect(body['public_key'], 'NEW-PUB');
+    // No target: neither field is sent, so the backend keeps the current
+    // binding (or picks the global lowest-load server when peerless).
+    final seen2 = <RequestOptions>[];
+    final api2 = VpnApi(fakeDio((_) => dialJson(), seen: seen2));
+    await api2.connect(deviceId: 'dev-1', publicKey: 'PUB');
+    final body2 = seen2.single.data as Map;
+    expect(body2.containsKey('server_id'), isFalse);
+    expect(body2.containsKey('region_id'), isFalse);
   });
 
   test('status maps the backend heartbeat payload', () async {
@@ -243,24 +222,12 @@ void main() {
       idempotencyKey: 'idem-1',
       cancelToken: token,
     );
-    await api.config('dev-1', cancelToken: token);
     await api.connect(deviceId: 'dev-1', publicKey: 'PUB', cancelToken: token);
-    await api.switchServer(
-      deviceId: 'dev-1',
-      publicKey: 'PUB',
-      serverId: 'srv-1',
-      cancelToken: token,
-    );
-    await api.rotateKeys(
-      deviceId: 'dev-1',
-      publicKey: 'PUB',
-      cancelToken: token,
-    );
     await api.status('dev-1', cancelToken: token);
     await api.disconnect('dev-1', cancelToken: token);
     await api.revoke('dev-1', cancelToken: token);
     await api.regions(cancelToken: token);
-    expect(seen, hasLength(9));
+    expect(seen, hasLength(6));
     expect(seen.every((o) => identical(o.cancelToken, token)), isTrue);
   });
 }

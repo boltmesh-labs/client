@@ -5,14 +5,15 @@ import 'models.dart';
 
 /// Thin client over backend/app/vpn/routers/devices.py + regions.py.
 ///
-/// Provision/connect/switch share the backend retry loop over the
-/// client-supplied key; switch requires exactly one of
-/// server_id/region_id; connect takes an optional target (nulls mean the
-/// backend picks the global lowest-load server).
+/// Two session verbs, no peer knowledge: `connect` ensures the client key is
+/// bound (creating, replaying, rotating, or moving the server-side peer as
+/// needed) and `disconnect` releases it. No target means "stay where I am" (or
+/// the global lowest-load server when nothing is bound); a target is a pick
+/// from discovery.
 ///
 /// The `if (... != null)` guards below intentionally stay verbose: a
-/// null-aware entry (`?key: value`) would still send an explicit null,
-/// violating the backend's exactly-one-target contract.
+/// null-aware entry (`?key: value`) would still send an explicit null, which
+/// the backend reads as "no target" rather than the value.
 // ignore_for_file: use_null_aware_elements
 class VpnApi {
   final Dio _dio;
@@ -96,18 +97,13 @@ class VpnApi {
     return DialParams.fromJson(r.data as Map<String, dynamic>);
   }
 
-  Future<DialParams> config(String deviceId, {CancelToken? cancelToken}) async {
-    final r = await _request(
-      '/vpn-devices/$deviceId/config',
-      (token) => _dio.get<Map<String, dynamic>>(
-        '/vpn-devices/$deviceId/config',
-        cancelToken: token,
-      ),
-      cancelToken: cancelToken,
-    );
-    return DialParams.fromJson(r.data as Map<String, dynamic>);
-  }
-
+  /// Ensure the client key is bound on a server, and return its dial params.
+  ///
+  /// The backend owns every peer decision: peerless binds a fresh peer, the
+  /// same key on the requested server replays unchanged, a different key
+  /// rotates in place, and a named target moves the peer. So the caller never
+  /// has to know whether it holds a peer, which key the server holds, or where
+  /// it is bound.
   Future<DialParams> connect({
     required String deviceId,
     required String publicKey,
@@ -124,52 +120,6 @@ class VpnApi {
           if (serverId != null) 'server_id': serverId,
           if (regionId != null) 'region_id': regionId,
         },
-        cancelToken: token,
-      ),
-      cancelToken: cancelToken,
-    );
-    return DialParams.fromJson(r.data as Map<String, dynamic>);
-  }
-
-  Future<DialParams> switchServer({
-    required String deviceId,
-    required String publicKey,
-    String? serverId,
-    String? regionId,
-    CancelToken? cancelToken,
-  }) async {
-    // Backend 422s unless exactly one target is set.
-    if ((serverId == null) == (regionId == null)) {
-      throw ArgumentError('switch requires exactly one of serverId/regionId');
-    }
-    final r = await _request(
-      '/vpn-devices/$deviceId/switch',
-      (token) => _dio.post<Map<String, dynamic>>(
-        '/vpn-devices/$deviceId/switch',
-        data: {
-          'public_key': publicKey,
-          if (serverId != null) 'server_id': serverId,
-          if (regionId != null) 'region_id': regionId,
-        },
-        cancelToken: token,
-      ),
-      cancelToken: cancelToken,
-    );
-    return DialParams.fromJson(r.data as Map<String, dynamic>);
-  }
-
-  /// In-place key move: same server and overlay IP, peer moves to the
-  /// supplied key (backend `POST /vpn-devices/{id}/rotate-keys`).
-  Future<DialParams> rotateKeys({
-    required String deviceId,
-    required String publicKey,
-    CancelToken? cancelToken,
-  }) async {
-    final r = await _request(
-      '/vpn-devices/$deviceId/rotate-keys',
-      (token) => _dio.post<Map<String, dynamic>>(
-        '/vpn-devices/$deviceId/rotate-keys',
-        data: {'public_key': publicKey},
         cancelToken: token,
       ),
       cancelToken: cancelToken,

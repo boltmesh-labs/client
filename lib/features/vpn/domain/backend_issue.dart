@@ -52,8 +52,6 @@ BackendIssue? classifyBackendIssue(ApiException? error) {
     case ApiErrorKind.validation:
       return BackendIssue.serverError;
     case ApiErrorKind.notFound:
-    case ApiErrorKind.noActivePeer:
-    case ApiErrorKind.alreadyConnected:
     case ApiErrorKind.keyInUse:
     case ApiErrorKind.idempotencyConflict:
       return null;

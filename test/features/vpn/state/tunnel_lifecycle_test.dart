@@ -264,18 +264,24 @@ void main() {
   test('switch probes before stopping the tunnel', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
+    // Empty key queue: the move reuses the stored key, never mints one.
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) {
-          return dialJson(serverId: 'srv-2', serverName: 'two');
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
         }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     events.clear();
 
@@ -286,7 +292,7 @@ void main() {
     // Probe-first: the POST travels before any stop; the single stop is
     // the restart onto the new server.
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
       'tunnel:start',
     ]);
@@ -294,22 +300,28 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
     expect(state.serverId, 'srv-2');
-    expect(await store.privateKey(), 'NEW-PRIV');
+    // The move reused the stored key.
+    expect(await store.privateKey(), 'OLD-PRIV');
   });
 
   test('failed switch after tunnel stop surfaces error', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) throw networkTimeout(o);
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') throw networkTimeout(o);
+          return dialJson();
+        }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     events.clear();
 
@@ -322,16 +334,16 @@ void main() {
     final state = container.read(connectionProvider);
     // The fallback path already stopped the tunnel, so claiming
     // `connected` on the old server would lie: surface `error` and let
-    // Connect reconcile via config/connect.
+    // Connect reconcile against server truth.
     expect(state.phase, ConnPhase.error);
     expect(state.message, contains('Tunnel stopped'));
     expect(state.dial?.serverId, 'srv-1');
     // Probe first, then one direct retry after the stop; no restart after
     // a failed POST.
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
     ]);
   });
 
@@ -340,14 +352,17 @@ void main() {
     final store = FakeStore();
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/switch')) throw networkTimeout(o);
+        if (o.path.endsWith('/connect')) throw networkTimeout(o);
         throw StateError('unexpected ${o.path}');
       }),
     );
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
       events,
     );
@@ -357,7 +372,7 @@ void main() {
         .switchServer(regionId: null, serverId: 'srv-2');
 
     // No tunnel is running while idle: a single direct attempt, no stop.
-    expect(events, ['POST:/vpn-devices/dev-1/switch']);
+    expect(events, ['POST:/vpn-devices/dev-1/connect']);
     expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.error);
@@ -431,7 +446,7 @@ void main() {
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/switch')) {
+          if (o.path.endsWith('/connect')) {
             return dialJson();
           }
           throw StateError('unexpected ${o.path}');
@@ -440,7 +455,7 @@ void main() {
       final tunnel = FakeTunnel(events);
       final container = makeContainer(
         store: store,
-        keys: FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]),
+        keys: FakeKeys(const []),
         api: api,
       );
       container.read(connectionProvider.notifier).debugTunnel = tunnel;
@@ -458,7 +473,7 @@ void main() {
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
       expect(state.message, isNot(contains('Already connected to')));
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     },
   );
 
@@ -1010,18 +1025,23 @@ void main() {
   test('in-tunnel switch succeeds without stopping first', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) {
-          return dialJson(serverId: 'srv-2', serverName: 'two');
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
         }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
     events.clear();
@@ -1032,33 +1052,38 @@ void main() {
 
     // Zero-drop order: POST first, single stop only for the restart.
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
       'tunnel:start',
     ]);
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
-    expect(await store.privateKey(), 'NEW-PRIV');
+    expect(await store.privateKey(), 'OLD-PRIV');
   });
 
   test('in-tunnel failure falls back to one direct retry', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
-    var switchCalls = 0;
+    var connectCalls = 0;
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) {
-          if (switchCalls++ == 0) throw networkTimeout(o);
-          return dialJson(serverId: 'srv-2', serverName: 'two');
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            if (connectCalls++ == 0) throw networkTimeout(o);
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
         }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
     events.clear();
@@ -1068,30 +1093,35 @@ void main() {
         .switchServer(regionId: null, serverId: 'srv-2');
 
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:start',
     ]);
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
-    expect(await store.privateKey(), 'NEW-PRIV');
+    expect(await store.privateKey(), 'OLD-PRIV');
   });
 
   test('double transport failure reports unknown status', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) throw networkTimeout(o);
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') throw networkTimeout(o);
+          return dialJson();
+        }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
     events.clear();
@@ -1101,9 +1131,9 @@ void main() {
         .switchServer(regionId: null, serverId: 'srv-2');
 
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
-      'POST:/vpn-devices/dev-1/switch',
+      'POST:/vpn-devices/dev-1/connect',
     ]);
     expect(await store.privateKey(), 'OLD-PRIV');
     final state = container.read(connectionProvider);
@@ -1115,19 +1145,25 @@ void main() {
   test('in-tunnel app error never retries or stops', () async {
     final events = <String>[];
     final store = FakeStore();
-    final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        // Generic app error (not already-bound): no retry, no stop, the
-        // old tunnel keeps running. alreadyConnected has its own
-        // reconnect recovery (see the already-bound tests below).
-        if (o.path.endsWith('/switch')) throw idempotencyConflict(o);
+        if (o.path.endsWith('/connect')) {
+          // Generic app error: no retry, no stop, the old tunnel keeps
+          // running.
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            throw idempotencyConflict(o);
+          }
+          return dialJson();
+        }
         throw StateError('unexpected ${o.path}');
       }),
     );
     final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     await seedConnected(container, store, tunnel);
     container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
     events.clear();
@@ -1136,72 +1172,74 @@ void main() {
         .read(connectionProvider.notifier)
         .switchServer(regionId: null, serverId: 'srv-2');
 
-    expect(events, ['POST:/vpn-devices/dev-1/switch']);
+    expect(events, ['POST:/vpn-devices/dev-1/connect']);
     expect(await store.privateKey(), 'OLD-PRIV');
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.message, contains('still on'));
   });
 
-  test('peerless switch while idle binds a fresh peer on the target', () async {
+  test('idle switch moves the stored key onto the target', () async {
     final events = <String>[];
     final store = FakeStore();
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-    // One key for the doomed switch POST, one for the fresh bind.
-    final keys = FakeKeys([
-      const Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
-      const Keypair('FRESH-PRIV', 'FRESH-PUB'),
-    ]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/switch')) throw peerless(o);
         if (o.path.endsWith('/connect')) {
-          return dialJson(serverId: 'srv-2', serverName: 'two');
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
         }
         throw StateError('unexpected ${o.path}');
       }),
     );
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     final ctl = container.read(connectionProvider.notifier);
     ctl.debugTunnel = FakeTunnel(events);
 
     await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
-    // Idle switch attempts the POST before any stop; the peerless 404
-    // then stops the stale tunnel and binds fresh on the target.
+    // One connect on the key we hold, moved onto the requested target.
     expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
-      'tunnel:stop',
       'POST:/vpn-devices/dev-1/connect',
+      'tunnel:stop',
       'tunnel:start',
     ]);
-    expect(await store.privateKey(), 'FRESH-PRIV');
+    expect(await store.privateKey(), 'OLD-PRIV');
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
     expect(state.serverId, 'srv-2');
   });
 
-  test('switch after a confirmed disconnect binds without the doomed POST', () async {
+  test('switch after a disconnect moves the stored key in one POST', () async {
     final events = <String>[];
     final store = FakeStore();
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-    // One key for the fresh bind only: a switch POST would need a second.
-    final keys = FakeKeys([const Keypair('FRESH-PRIV', 'FRESH-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
         if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
         if (o.path.endsWith('/connect')) {
-          return dialJson(serverId: 'srv-2', serverName: 'two');
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
         }
-        // A peerless switch is answered with 404 PEER_NOT_FOUND, so any request
-        // here is the round trip the local knowledge exists to avoid.
         throw StateError('unexpected ${o.path}');
       }),
     );
-    final container = makeContainer(store: store, keys: keys, api: api);
+    final container = makeContainer(
+      store: store,
+      keys: FakeKeys(const []),
+      api: api,
+    );
     final ctl = container.read(connectionProvider.notifier);
     ctl.debugTunnel = FakeTunnel(events);
 
@@ -1210,10 +1248,14 @@ void main() {
 
     await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
-    // The tunnel is already down from the disconnect, and the peer it released
-    // is known gone, so the bind is the whole operation.
-    expect(events, ['POST:/vpn-devices/dev-1/connect', 'tunnel:start']);
-    expect(await store.privateKey(), 'FRESH-PRIV');
+    // The disconnect released the peer; the switch re-ensures it on the new
+    // target with the key we hold — one connect, no separate bind.
+    expect(events, [
+      'POST:/vpn-devices/dev-1/connect',
+      'tunnel:stop',
+      'tunnel:start',
+    ]);
+    expect(await store.privateKey(), 'OLD-PRIV');
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-2');
@@ -1221,30 +1263,31 @@ void main() {
   });
 
   test(
-    'switch after an unconfirmed disconnect still attempts the POST',
+    'switch after an unconfirmed disconnect still moves the stored key',
     () async {
       final events = <String>[];
       final store = FakeStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      // The switch POST's ephemeral key, then the fresh bind's.
-      final keys = FakeKeys([
-        const Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
-        const Keypair('FRESH-PRIV', 'FRESH-PUB'),
-      ]);
       final api = VpnApi(
         recordingDio(events, (o) {
-          // The release never reached the server, so the peer may still exist:
-          // binding over it would 409, and the switch is the request that moves it.
+          // The release never reached the server, so the peer may still
+          // exist: the connect below moves it either way.
           if (o.path.endsWith('/disconnect')) throw networkTimeout(o);
-          if (o.path.endsWith('/switch')) throw peerless(o);
           if (o.path.endsWith('/connect')) {
-            return dialJson(serverId: 'srv-2', serverName: 'two');
+            if ((o.data as Map)['server_id'] == 'srv-2') {
+              return dialJson(serverId: 'srv-2', serverName: 'two');
+            }
+            return dialJson();
           }
           throw StateError('unexpected ${o.path}');
         }),
       );
-      final container = makeContainer(store: store, keys: keys, api: api);
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
       final ctl = container.read(connectionProvider.notifier);
       ctl.debugTunnel = FakeTunnel(events);
 
@@ -1254,233 +1297,13 @@ void main() {
 
       await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
-      // Nothing local was established, so the POST is still the authority — and
-      // its 404 recovery binds exactly as before.
       expect(events, [
-        'POST:/vpn-devices/dev-1/switch',
-        'tunnel:stop',
         'POST:/vpn-devices/dev-1/connect',
-        'tunnel:start',
-      ]);
-      expect(container.read(connectionProvider).dial?.serverId, 'srv-2');
-    },
-  );
-
-  test(
-    'a non-Dio disconnect failure still withdraws the local release',
-    () async {
-      final events = <String>[];
-      final store = FakeStore();
-      final api = ThrowingDisconnectApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(
-        store: store,
-        keys: FakeKeys(const []),
-        api: api,
-      );
-      await seedConnected(container, store, FakeTunnel(events));
-      final ctl = container.read(connectionProvider.notifier);
-      events.clear();
-
-      await ctl.disconnect();
-
-      // The release never reached the server, so the peer may still exist: the
-      // next switch must POST the move rather than bind over it, whatever the
-      // exception type that failed the release.
-      expect(ctl.debugPeerReleasedLocally, isFalse);
-    },
-  );
-
-  test(
-    'a bind after the local release clears the knowledge it recorded',
-    () async {
-      final events = <String>[];
-      final store = FakeStore();
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final keys = FakeKeys([
-        const Keypair('FRESH-PRIV', 'FRESH-PUB'),
-        const Keypair('SECOND-PRIV', 'SECOND-PUB'),
-      ]);
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/disconnect')) return {'disconnected_peers': 1};
-          if (o.path.endsWith('/connect')) {
-            return dialJson(serverId: 'srv-2', serverName: 'two');
-          }
-          if (o.path.endsWith('/switch')) return dialJson(serverId: 'srv-3');
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(store: store, keys: keys, api: api);
-      final ctl = container.read(connectionProvider.notifier)
-        ..debugTunnel = FakeTunnel(events);
-
-      await ctl.disconnect();
-      await ctl.switchServer(regionId: null, serverId: 'srv-2');
-      expect(ctl.debugPeerReleasedLocally, isFalse);
-
-      // The device holds srv-2's peer now, so a switch must move it rather than
-      // bind over it.
-      events.clear();
-      await ctl.switchServer(regionId: null, serverId: 'srv-3');
-
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
-      expect(
-        events.where((e) => e.endsWith('/connect')),
-        isEmpty,
-        reason: 'a switch over a bound peer must not re-bind',
-      );
-    },
-  );
-
-  test('peerless switch while connected rebinds on the new target', () async {
-    final events = <String>[];
-    final store = FakeStore();
-    // One key for the doomed switch POST, one for the fresh bind.
-    final keys = FakeKeys([
-      const Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
-      const Keypair('FRESH-PRIV', 'FRESH-PUB'),
-    ]);
-    final api = VpnApi(
-      recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/switch')) throw peerless(o);
-        if (o.path.endsWith('/connect')) {
-          // The seed replays the stored key on the current server; the
-          // peerless rebind binds a fresh key on the new target.
-          if ((o.data as Map)['public_key'] == 'OLD-PUB') return dialJson();
-          return dialJson(serverId: 'srv-2', serverName: 'two');
-        }
-        throw StateError('unexpected ${o.path}');
-      }),
-    );
-    final tunnel = FakeTunnel(events);
-    final container = makeContainer(store: store, keys: keys, api: api);
-    await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
-    events.clear();
-
-    await container
-        .read(connectionProvider.notifier)
-        .switchServer(regionId: null, serverId: 'srv-2');
-
-    // In-tunnel POST hits the peerless 404, so the recovery stops the
-    // stale tunnel and binds fresh on the requested target.
-    expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
-      'tunnel:stop',
-      'POST:/vpn-devices/dev-1/connect',
-      'tunnel:start',
-    ]);
-    expect(await store.privateKey(), 'FRESH-PRIV');
-    final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.dial?.serverId, 'srv-2');
-    expect(state.serverId, 'srv-2');
-  });
-
-  List<Map<String, dynamic>> regionsWithSrv1() => [
-    {
-      'id': 'r-1',
-      'name': 'Region One',
-      'country_code': 'US',
-      'servers': [
-        {
-          'id': 'srv-1',
-          'name': 'one',
-          'endpoint': '203.0.113.10',
-          'wg_port': 51820,
-          'wg_dns': '10.8.0.1',
-          'active_peers': 3,
-        },
-      ],
-    },
-  ];
-
-  test('already-bound region switch while idle loads config and pins the bound server', () async {
-    final events = <String>[];
-    final store = FakeStore();
-    await store.setDeviceId('dev-1');
-    await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-    final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
-    final api = VpnApi(
-      recordingDio(events, (o) {
-        if (o.path.endsWith('/switch')) throw alreadyConnected(o);
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/vpn-regions')) return regionsWithSrv1();
-        throw StateError('unexpected ${o.path}');
-      }),
-    );
-    final container = makeContainer(store: store, keys: keys, api: api);
-    container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-      events,
-    );
-
-    // Idle after restart: no dial, no pinned target — the skip-check can't
-    // fire, so the POST 409s with SERVER_CONFLICT.
-    await container
-        .read(connectionProvider.notifier)
-        .switchServer(regionId: 'r-1', serverId: null);
-
-    // No tunnel is running while idle, so no stop precedes the POST.
-    expect(events, [
-      'POST:/vpn-devices/dev-1/switch',
-      'GET:/vpn-devices/dev-1/config',
-      'tunnel:start',
-    ]);
-    // The ephemeral switch key is discarded; the working key survives.
-    expect(await store.privateKey(), 'OLD-PRIV');
-    final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.connected);
-    expect(state.dial?.serverId, 'srv-1');
-    expect(state.serverId, 'srv-1');
-  });
-
-  test(
-    'already-bound server switch while connected restarts on dial server',
-    () async {
-      final events = <String>[];
-      final store = FakeStore();
-      final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
-      // The live dial is srv-2 while the server-side peer already sits on
-      // srv-1 (a switch whose response was lost): the local dial is stale, so
-      // no skip-check can see it and the POST is what reports the truth.
-      var configDial = dialJson(serverId: 'srv-2', serverName: 'two');
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return configDial;
-          if (o.path.endsWith('/switch')) throw alreadyConnected(o);
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final tunnel = FakeTunnel(events);
-      final container = makeContainer(store: store, keys: keys, api: api);
-      await seedConnected(container, store, tunnel);
-      final ctl = container.read(connectionProvider.notifier);
-      ctl.debugForceThroughTunnel = true;
-      configDial = dialJson();
-      events.clear();
-
-      await ctl.switchServer(regionId: null, serverId: 'srv-1');
-
-      // In-tunnel POST 409s immediately (no fallback stop first); the
-      // recovery stops the live tunnel, then loads config and restarts.
-      expect(events, [
-        'POST:/vpn-devices/dev-1/switch',
         'tunnel:stop',
-        'GET:/vpn-devices/dev-1/config',
         'tunnel:start',
       ]);
       expect(await store.privateKey(), 'OLD-PRIV');
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-1');
-      expect(state.serverId, 'srv-1');
+      expect(container.read(connectionProvider).dial?.serverId, 'srv-2');
     },
   );
 
@@ -1502,7 +1325,7 @@ void main() {
     };
 
     test(
-      'idle without region auto-picks lowest load and reuses its peer',
+      'idle without region auto-picks lowest load and moves its peer',
       () async {
         final events = <String>[];
         final store = FakeStore();
@@ -1516,19 +1339,20 @@ void main() {
                 regionJson('r-best', 'srv-b', 2),
               ];
             }
-            // The device already holds a server-side peer in the best region
-            // (the norm straight after provision): server truth must be
-            // reused, never re-`connect`ed (the backend binds on a peerless
-            // device only, so a blind bind would 409).
-            if (o.path.endsWith('/config')) {
-              return dialJson(serverId: 'srv-b', serverName: 'b');
+            // The idempotent connect ensures the stored key on the picked
+            // region, moving the peer there in one call.
+            if (o.path.endsWith('/connect')) {
+              if ((o.data as Map)['region_id'] == 'r-best') {
+                return dialJson(serverId: 'srv-b', serverName: 'b');
+              }
+              return dialJson();
             }
             throw StateError('unexpected ${o.path}');
           }),
         );
         final container = makeContainer(
           store: store,
-          keys: FakeKeys([const Keypair('AUTO-PRIV', 'AUTO-PUB')]),
+          keys: FakeKeys(const []),
           api: api,
         );
         container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
@@ -1537,11 +1361,11 @@ void main() {
 
         await container.read(connectionProvider.notifier).quickConnect();
 
-        // Auto re-picks fresh: discovery, then the live peer is started as-is
-        // (no bind) and the state stays unpinned.
+        // Auto re-picks fresh: discovery, then one connect onto the picked
+        // region; the state stays unpinned.
         expect(events, [
           'GET:/vpn-regions',
-          'GET:/vpn-devices/dev-1/config',
+          'POST:/vpn-devices/dev-1/connect',
           'tunnel:start',
         ]);
         final state = container.read(connectionProvider);
@@ -1552,12 +1376,11 @@ void main() {
       },
     );
 
-    test('idle auto switches a live peer in another region', () async {
+    test('idle auto moves a live peer from another region', () async {
       final events = <String>[];
       final store = FakeStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
       final api = VpnApi(
         recordingDio(events, (o) {
           if (o.path.endsWith('/vpn-regions')) {
@@ -1566,105 +1389,20 @@ void main() {
               regionJson('r-best', 'srv-best', 1),
             ];
           }
-          // The live peer sits in another region: move it one-shot instead
-          // of binding a second peer (which the backend would reject).
-          if (o.path.endsWith('/config')) {
-            return dialJson(serverId: 'srv-old', serverName: 'old');
-          }
-          if (o.path.endsWith('/switch')) {
-            return dialJson(serverId: 'srv-best', serverName: 'best');
-          }
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(store: store, keys: keys, api: api);
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-        events,
-      );
-
-      await container.read(connectionProvider.notifier).quickConnect();
-
-      expect(events, [
-        'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
-        'POST:/vpn-devices/dev-1/switch',
-        // The switch restart defensively stops first (no-op from idle).
-        'tunnel:stop',
-        'tunnel:start',
-      ]);
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-best');
-      expect(state.serverId, isNull);
-      expect(state.explicitTarget, isFalse);
-    });
-
-    test('idle auto binds a fresh peer when the device is peerless', () async {
-      final events = <String>[];
-      final store = FakeStore();
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final keys = FakeKeys([const Keypair('FRESH-PRIV', 'FRESH-PUB')]);
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/vpn-regions')) {
-            return [regionJson('r-best', 'srv-b', 1)];
-          }
-          // Disconnected/GC'd device: server truth is "no peer", so
-          // the Auto path falls back to a one-shot bind on the best region.
-          if (o.path.endsWith('/config')) throw peerless(o);
+          // The peer sits in another region: the connect moves it onto the
+          // picked region one-shot.
           if (o.path.endsWith('/connect')) {
-            return dialJson(serverId: 'srv-b', serverName: 'b');
-          }
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(store: store, keys: keys, api: api);
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-        events,
-      );
-
-      await container.read(connectionProvider.notifier).quickConnect();
-
-      expect(events, [
-        'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
-        'POST:/vpn-devices/dev-1/connect',
-        'tunnel:start',
-      ]);
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-b');
-      expect(state.serverId, isNull);
-    });
-
-    test('stale device on 404 reprovisions and connects in one tap', () async {
-      final events = <String>[];
-      final store = FakeStore();
-      await store.setDeviceId('stale-dev');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/vpn-regions')) {
-            return [regionJson('r-best', 'srv-b', 1)];
-          }
-          // The stored id is gone server-side (revoked/foreign): the probe
-          // 404s, the identity must be wiped, and the same tap reprovisions
-          // a fresh device bound to the picked region.
-          if (o.path.endsWith('/config')) throw missingDevice(o);
-          if (o.path == '/vpn-devices') {
-            return dialJson(
-              deviceId: 'dev-new',
-              serverId: 'srv-b',
-              serverName: 'b',
-            );
+            if ((o.data as Map)['region_id'] == 'r-best') {
+              return dialJson(serverId: 'srv-best', serverName: 'best');
+            }
+            return dialJson(serverId: 'srv-old', serverName: 'old');
           }
           throw StateError('unexpected ${o.path}');
         }),
       );
       final container = makeContainer(
         store: store,
-        keys: FakeKeys([const Keypair('FRESH-PRIV', 'FRESH-PUB')]),
+        keys: FakeKeys(const []),
         api: api,
       );
       container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
@@ -1675,16 +1413,95 @@ void main() {
 
       expect(events, [
         'GET:/vpn-regions',
-        'GET:/vpn-devices/stale-dev/config',
-        'POST:/vpn-devices',
+        'POST:/vpn-devices/dev-1/connect',
         'tunnel:start',
       ]);
-      expect(await store.deviceId(), 'dev-new');
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-best');
+      expect(state.serverId, isNull);
+      expect(state.explicitTarget, isFalse);
+    });
+
+    test('idle auto binds a peer on the best region', () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final api = VpnApi(
+        recordingDio(events, (o) {
+          if (o.path.endsWith('/vpn-regions')) {
+            return [regionJson('r-best', 'srv-b', 1)];
+          }
+          // Peerless device: the connect binds the stored key on the picked
+          // region and returns its dial.
+          if (o.path.endsWith('/connect')) {
+            return dialJson(serverId: 'srv-b', serverName: 'b');
+          }
+          throw StateError('unexpected ${o.path}');
+        }),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
+      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+        events,
+      );
+
+      await container.read(connectionProvider.notifier).quickConnect();
+
+      expect(events, [
+        'GET:/vpn-regions',
+        'POST:/vpn-devices/dev-1/connect',
+        'tunnel:start',
+      ]);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-b');
       expect(state.serverId, isNull);
     });
+
+    test(
+      'stale device on 404 wipes the identity for a fresh provision',
+      () async {
+        final events = <String>[];
+        final store = FakeStore();
+        await store.setDeviceId('stale-dev');
+        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+        final api = VpnApi(
+          recordingDio(events, (o) {
+            if (o.path.endsWith('/vpn-regions')) {
+              return [regionJson('r-best', 'srv-b', 1)];
+            }
+            // The stored id is gone server-side (revoked/foreign): the connect
+            // 404s and the identity is wiped, so the next tap reprovisions.
+            if (o.path.endsWith('/connect')) throw missingDevice(o);
+            throw StateError('unexpected ${o.path}');
+          }),
+        );
+        final container = makeContainer(
+          store: store,
+          keys: FakeKeys(const []),
+          api: api,
+        );
+        container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+          events,
+        );
+
+        await container.read(connectionProvider.notifier).quickConnect();
+
+        expect(events, [
+          'GET:/vpn-regions',
+          'POST:/vpn-devices/stale-dev/connect',
+        ]);
+        expect(await store.deviceId(), isNull);
+        final state = container.read(connectionProvider);
+        expect(state.phase, ConnPhase.error);
+        expect(state.message, contains('Reprovision'));
+      },
+    );
 
     test('fresh device provisions onto the best region one-shot', () async {
       final events = <String>[];
@@ -1781,8 +1598,9 @@ void main() {
           if (o.path.endsWith('/vpn-regions')) {
             return [regionJson('r-best', 'srv-b', 1)];
           }
-          // Auto probes server truth, then reuses the live peer as-is.
-          if (o.path.endsWith('/config')) {
+          // Auto dials the picked region one-shot; the peer is ensured by
+          // the idempotent connect.
+          if (o.path.endsWith('/connect')) {
             return dialJson(serverId: 'srv-b', serverName: 'b');
           }
           throw StateError('unexpected ${o.path}');
@@ -1804,7 +1622,7 @@ void main() {
       // one-shot (the state stays unpinned).
       expect(events, [
         'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
+        'POST:/vpn-devices/dev-1/connect',
         'tunnel:start',
       ]);
       final state = container.read(connectionProvider);
@@ -1940,7 +1758,7 @@ void main() {
             if (o.path.endsWith('/vpn-regions')) {
               return [regionJson('r-best', 'srv-b', 2)];
             }
-            if (o.path.endsWith('/config')) {
+            if (o.path.endsWith('/connect')) {
               return dialJson(serverId: 'srv-b', serverName: 'b');
             }
             throw StateError('unexpected ${o.path}');
@@ -1948,7 +1766,7 @@ void main() {
         );
         final container = makeContainer(
           store: store,
-          keys: FakeKeys([const Keypair('AUTO-PRIV', 'AUTO-PUB')]),
+          keys: FakeKeys(const []),
           api: api,
         );
         container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
@@ -1959,7 +1777,7 @@ void main() {
 
         expect(events, [
           'GET:/vpn-regions',
-          'GET:/vpn-devices/dev-1/config',
+          'POST:/vpn-devices/dev-1/connect',
           'tunnel:start',
         ]);
         final state = container.read(connectionProvider);
@@ -1977,22 +1795,26 @@ void main() {
       () async {
         final events = <String>[];
         final store = FakeStore();
-        final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
         final api = VpnApi(
           recordingDio(events, (o) {
             if (o.path.endsWith('/vpn-regions')) {
               return [regionJson('r-best', 'srv-b', 1)];
             }
-            if (o.path.endsWith('/config')) {
-              return dialJson(serverId: 'srv-old', serverName: 'old');
-            }
-            if (o.path.endsWith('/switch')) {
-              return dialJson(serverId: 'srv-b', serverName: 'b');
+            if (o.path.endsWith('/connect')) {
+              // The seed connect stays on srv-1; the Auto move names r-best.
+              if ((o.data as Map)['region_id'] == 'r-best') {
+                return dialJson(serverId: 'srv-b', serverName: 'b');
+              }
+              return dialJson();
             }
             throw StateError('unexpected ${o.path}');
           }),
         );
-        final container = makeContainer(store: store, keys: keys, api: api);
+        final container = makeContainer(
+          store: store,
+          keys: FakeKeys(const []),
+          api: api,
+        );
         final tunnel = FakeTunnel(events);
         await seedConnected(container, store, tunnel);
         await store.setLastTarget(serverId: 'srv-old', explicitTarget: true);
@@ -2077,30 +1899,36 @@ void main() {
     test('connected auto switches one-shot without pinning', () async {
       final events = <String>[];
       final store = FakeStore();
-      final keys = FakeKeys([const Keypair('SWITCH-PRIV', 'SWITCH-PUB')]);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) return dialJson();
           if (o.path.endsWith('/vpn-regions')) {
             return [
               regionJson('r-old', 'srv-1', 9),
               regionJson('r-best', 'srv-2', 1),
             ];
           }
-          if (o.path.endsWith('/switch')) {
-            return dialJson(serverId: 'srv-2', serverName: 'two');
+          if (o.path.endsWith('/connect')) {
+            // The seed connect stays on srv-1; the Auto move names r-best.
+            if ((o.data as Map)['region_id'] == 'r-best') {
+              return dialJson(serverId: 'srv-2', serverName: 'two');
+            }
+            return dialJson();
           }
           throw StateError('unexpected ${o.path}');
         }),
       );
       final tunnel = FakeTunnel(events);
-      final container = makeContainer(store: store, keys: keys, api: api);
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
       await seedConnected(container, store, tunnel);
       events.clear();
 
       await container.read(connectionProvider.notifier).quickConnect();
 
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-2');
@@ -2108,49 +1936,6 @@ void main() {
       // re-picks instead of sticking to srv-2.
       expect(state.serverId, isNull);
       expect(state.explicitTarget, isFalse);
-    });
-
-    test('auto peerless bind racing a live peer reloads config', () async {
-      final events = <String>[];
-      final store = FakeStore();
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final keys = FakeKeys([const Keypair('RACE-PRIV', 'RACE-PUB')]);
-      var configCalls = 0;
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/vpn-regions')) {
-            return [regionJson('r-best', 'srv-b', 1)];
-          }
-          if (o.path.endsWith('/config')) {
-            configCalls++;
-            // Peerless on the probe, but a peer appears before the bind
-            // lands: the one-shot POST 409s and the flow reloads config.
-            if (configCalls == 1) throw peerless(o);
-            return dialJson(serverId: 'srv-b', serverName: 'b');
-          }
-          if (o.path.endsWith('/connect')) throw alreadyConnected(o);
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-      final container = makeContainer(store: store, keys: keys, api: api);
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-        events,
-      );
-
-      await container.read(connectionProvider.notifier).quickConnect();
-
-      expect(events, [
-        'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
-        'POST:/vpn-devices/dev-1/connect',
-        'GET:/vpn-devices/dev-1/config',
-        'tunnel:start',
-      ]);
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-b');
-      expect(state.serverId, isNull);
     });
 
     test(

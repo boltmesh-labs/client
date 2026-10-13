@@ -549,25 +549,29 @@ rest of the pipeline (which files, when, verify) is unchanged.
 - Provision once: fresh X25519 keypair → `POST /vpn-devices`
   `{name, platform(enum), public_key, [region_id|server_id]}` with a
   persisted `Idempotency-Key` UUID. Private key stays in secure storage.
-- Connect: `GET /vpn-devices/{id}/config` (bound) else fresh keypair +
-  `POST .../connect` (neither target = global auto-pick). 409
-  already-connected → re-read `config`. `config` and every bind response
-  echo the active peer's `client_public_key`; when it differs from the stored
-  keypair (a lost bind response, or a rolled-back store), the client rotates
-  in place to a fresh key before dialing instead of starting a tunnel the
-  server can never handshake.
-- Switch: fresh keypair + `POST .../switch` with **exactly one** of
-  `region_id`/`server_id`. Auto = lowest-`active_peers` region from
-  `GET /vpn-regions` (cached 60s), then switch with its `region_id`.
+- Connect: `POST /vpn-devices/{id}/connect` with the public key the client
+  holds. No target means "stay where the peer is" (or the global auto-pick
+  when the device is peerless); a target is a pick from discovery. The
+  backend owns every peer decision — bind when peerless, replay when the peer
+  already holds that key, rotate in place when only the key differs, move when
+  a target names another server — so the client never reasons about peers.
+  404 means the device is gone (reprovision); a key already registered to
+  another device is retried once with a fresh keypair.
+- Switch (a server pick from the Regions tab): the same `connect` with
+  **exactly one** of `region_id`/`server_id`. Auto = lowest-`active_peers`
+  region from `GET /vpn-regions` (cached 60s), then `connect` with its
+  `region_id`. The stored key is moved, so the overlay IP and byte counters
+  are preserved.
 - Disconnect: graceful `stopVpn()` (3s budget, one automated hard-kill
   retry on timeout with no user input) then `POST .../disconnect` (no body,
   idempotent, works with lapsed subscription). On Linux/Windows the helper
   transport forwards each call's operation/cancellation deadline; closing
   the transport cancels the daemon request, and a retry waits for the
   original tunnel operation instead of racing its lock.
-- Rotate: `POST /vpn-devices/{id}/rotate-keys` with a fresh public key
-  (same server + IP, tunnel restarts on the new config). Automatic every
-  24h of connected time (counted in status polls).
+- Rotate: the same `connect` with a fresh public key and no target — the
+  backend rotates the peer in place (same server + IP, tunnel restarts on
+  the new config). Automatic every 24h of connected time (counted in status
+  polls).
 - Status: `GET /vpn-devices/{id}/status` polled every 60s while connected
   (never faster — session-budgeted rate limit). `suspended` auto-disconnects
   (lapsed subscription / disabled device); 404 forgets the device so the

@@ -12,7 +12,7 @@ class ColdRestoreWatch {
   /// confirmed restore.
   bool armed = false;
 
-  /// When server truth last confirmed a cold restore (`GET …/config` ok).
+  /// When the cold restore's connect last confirmed the binding.
   /// Anchors the post-restore grace: a fresh engine re-attach replays a
   /// lying `disconnected` event right after the confirm, which must not tear
   /// down the just-restored session.

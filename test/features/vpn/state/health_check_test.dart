@@ -1986,7 +1986,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     },
   );
@@ -2115,7 +2115,7 @@ void main() {
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('GET:/vpn-regions'));
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     },
   );
@@ -2232,7 +2232,7 @@ void main() {
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(
         events.indexOf('tunnel:stop'),
         lessThan(events.indexOf('GET:/vpn-regions')),
@@ -2269,7 +2269,7 @@ void main() {
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events.where((e) => e.startsWith('tunnel:')), [
         'tunnel:stop',
         'tunnel:start',
@@ -2358,7 +2358,7 @@ void main() {
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('GET:/vpn-regions'));
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     },
   );
@@ -2424,7 +2424,7 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.autoFailoverAttempts, 1);
     expect(state.dial?.serverId, 'srv-2');
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
 
   test(
@@ -2498,7 +2498,7 @@ void main() {
     expect(state.autoHealAttempts, 0);
     expect(state.autoFailoverAttempts, 1);
     expect(state.dial?.serverId, 'srv-2');
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     expect(
       events.indexOf('tunnel:stop'),
@@ -2549,7 +2549,7 @@ void main() {
       expect(state.autoHealAttempts, 0);
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       // The heal budget is untouched: nothing was rebuilt.
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     },
@@ -2867,97 +2867,86 @@ void main() {
     },
   );
 
-  test(
-    'external-stop notFound keeps the device wipe atomic against a reconnect',
-    () async {
-      final events = <String>[];
-      final store = FakeStore();
-      final keys = FakeKeys();
-      var configCalls = 0;
-      final api = VpnApi(
-        recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) {
-            configCalls++;
-            // 1: seed connect. 2: the external-stop corroboration, which
-            // proves the device is gone. Later calls (the queued reconnect)
-            // must succeed so the reconnect can reach a fresh start.
-            if (configCalls == 2) throw missingDevice(o);
-            return dialJson();
-          }
-          if (o.path == '/vpn-devices' && o.method == 'POST') {
-            return dialJson();
-          }
-          throw StateError('unexpected ${o.method}:${o.path}');
-        }),
-      );
-      final tunnel = BlockingStopTunnel(events);
-      final container = makeContainer(store: store, keys: keys, api: api);
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      ctl.debugHandshakeReader = () async => DateTime.now();
-      await ctl.connect();
-      expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      events.clear();
+  test('a revoked-device wipe stays atomic against a reconnect', () async {
+    final events = <String>[];
+    final store = FakeStore();
+    final keys = FakeKeys();
+    var statusCalls = 0;
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/connect')) return dialJson();
+        if (o.path.endsWith('/status')) {
+          statusCalls++;
+          // The first poll finds the device revoked; later calls serve the
+          // reconnected session.
+          if (statusCalls == 1) throw missingDevice(o);
+          return activeStatusJson();
+        }
+        if (o.path == '/vpn-devices' && o.method == 'POST') {
+          return dialJson();
+        }
+        throw StateError('unexpected ${o.method}:${o.path}');
+      }),
+    );
+    final tunnel = FakeTunnel(events);
+    final container = makeContainer(store: store, keys: keys, api: api);
+    await store.setDeviceId('dev-1');
+    await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+    final ctl = container.read(connectionProvider.notifier);
+    ctl.debugTunnel = tunnel;
+    ctl.debugHandshakeReader = () async => DateTime.now();
+    await ctl.connect();
+    expect(container.read(connectionProvider).phase, ConnPhase.connected);
+    events.clear();
 
-      // notFound teardown: gate the local wipe so it stays in flight.
-      staleHandshake(ctl);
-      tunnel.stageValue = VpnStage.disconnected;
-      final clearGate = Completer<void>();
-      var clearPending = false;
-      store.clearDeviceHook = () async {
-        clearPending = true;
-        await clearGate.future;
-        clearPending = false;
-      };
+    // The poll 404s: gate the local wipe so it stays in flight.
+    final clearGate = Completer<void>();
+    var clearPending = false;
+    store.clearDeviceHook = () async {
+      clearPending = true;
+      await clearGate.future;
+      clearPending = false;
+    };
 
-      await ctl.checkHealthOnce();
-      for (var i = 0; i < 100 && !clearPending; i++) {
-        await pumpEventQueue();
-      }
-      expect(clearPending, isTrue, reason: 'clearDevice not reached');
-
-      // A reconnect during the wipe must queue rather than provision a fresh
-      // identity that the pending clearDevice would then erase.
-      final reconnecting = ctl.connect();
-      for (var i = 0; i < 20; i++) {
-        await pumpEventQueue();
-      }
-      expect(
-        events.where((e) => e == 'tunnel:start'),
-        isEmpty,
-        reason: 'reconnect started a tunnel during the pending device wipe',
-      );
-
-      clearGate.complete();
-      await reconnecting;
+    final polling = ctl.pollStatusOnce();
+    for (var i = 0; i < 100 && !clearPending; i++) {
       await pumpEventQueue();
+    }
+    expect(clearPending, isTrue, reason: 'clearDevice not reached');
 
-      // The queued reconnect provisioned a fresh identity after the wipe
-      // instead of losing one to the stale teardown.
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(await store.deviceId(), 'dev-1');
-    },
-  );
+    // A reconnect during the wipe must queue rather than provision a fresh
+    // identity that the pending clearDevice would then erase.
+    final reconnecting = ctl.connect();
+    for (var i = 0; i < 20; i++) {
+      await pumpEventQueue();
+    }
+    expect(
+      events.where((e) => e == 'tunnel:start'),
+      isEmpty,
+      reason: 'reconnect started a tunnel during the pending device wipe',
+    );
+
+    clearGate.complete();
+    await polling;
+    await reconnecting;
+    await pumpEventQueue();
+
+    // The queued reconnect provisioned a fresh identity after the wipe
+    // instead of losing one to the stale teardown.
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.connected);
+    expect(await store.deviceId(), 'dev-1');
+  });
 
   test(
-    'external-stop peerless drops the cached dial but keeps the device',
+    'external-stop corroborated dead keeps the dial for a one-tap reconnect',
     () async {
       final events = <String>[];
       final store = FakeStore();
       final keys = FakeKeys();
-      var configCalls = 0;
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) {
-            configCalls++;
-            // 1: seed connect. 2: the external-stop corroboration, which finds
-            // the device alive but peerless.
-            if (configCalls == 2) throw peerless(o);
-            return dialJson();
-          }
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.method}:${o.path}');
         }),
       );
@@ -2973,18 +2962,20 @@ void main() {
       expect(await store.lastDialJson(), isNotNull);
       events.clear();
 
+      // Stale handshake, terminal stage, no traffic counters, dead gateway:
+      // every local signal says the tunnel died outside the app.
       staleHandshake(ctl);
+      tunnel.traffic = const {};
       tunnel.stageValue = VpnStage.disconnected;
       await ctl.checkHealthOnce();
       await pumpEventQueue();
 
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.idle);
-      expect(state.message, contains('Session expired'));
-      // Device kept for a fresh bind, but the peer is gone so the cold-start
-      // dial must not survive.
+      expect(state.message, contains('stopped outside'));
+      // The device and its dial are kept for a one-tap reconnect.
       expect(await store.deviceId(), 'dev-1');
-      expect(await store.lastDialJson(), isNull);
+      expect(await store.lastDialJson(), isNotNull);
     },
   );
 
@@ -3033,7 +3024,7 @@ void main() {
     expect(state.recoveryAction, RecoveryAction.switchingServer);
     expect(state.recoveryReason, RecoveryReason.staleHandshake);
     expect(events, contains('GET:/vpn-regions'));
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     // The failover stopped the old tunnel before discovery (direct
     // network) and started the new one after.
     expect(events.where((e) => e == 'tunnel:stop'), isNotEmpty);
@@ -3117,7 +3108,7 @@ void main() {
     expect(state.recoveryReason, RecoveryReason.noAlternativeServer);
     expect(state.healthNote, contains('No other server'));
     expect(events, contains('GET:/vpn-regions'));
-    expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));
+    expect(events, isNot(contains('POST:/vpn-devices/dev-1/connect')));
     // Fallback restart kept a tunnel running.
     expect(events, contains('tunnel:start'));
   });
@@ -3185,7 +3176,7 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-9');
     expect(state.autoFailoverAttempts, 1);
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
 
   test('pinned server with a dead region roams and drops the pin', () async {
@@ -3217,7 +3208,7 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-9');
     expect(state.autoFailoverAttempts, 1);
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     // The pin is void once its region is gone, so it drops to Auto instead
     // of persisting a server in a region the user never chose.
     expect(state.serverId, isNull);
@@ -3262,7 +3253,7 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-9');
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     // A pin whose server vanished is void whatever the replacement is.
     expect(state.serverId, isNull);
     expect(state.explicitTarget, isFalse);
@@ -3299,7 +3290,7 @@ void main() {
     expect(state.explicitTarget, isTrue);
     expect(state.autoFailoverAttempts, 1);
     expect(state.healthNote, contains('No other server'));
-    expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));
+    expect(events, isNot(contains('POST:/vpn-devices/dev-1/connect')));
   });
 
   test('pinned server allows same-region moves', () async {
@@ -3333,82 +3324,8 @@ void main() {
     expect(state.serverId, 'srv-2');
     expect(state.explicitTarget, isTrue);
     expect(state.autoFailoverAttempts, 1);
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
-
-  test('auto-failover surfaces a keypair persistence failure', () async {
-    final events = <String>[];
-    final (container, _) = await seedConnected(
-      events,
-      (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/status')) throw networkTimeout(o);
-        if (o.path.endsWith('/vpn-regions')) {
-          return regionsList(twoServers());
-        }
-        if (o.path.endsWith('/switch')) return dialJsonSrv2();
-        throw StateError('unexpected ${o.path}');
-      },
-      keyQueue: const [Keypair('SWITCH-PRIV', 'SWITCH-PUB')],
-      gatewayProbe: support.FakeGatewayProbe(null),
-      controlProbe: support.FakeControlProbe(true),
-    );
-    final ctl = container.read(connectionProvider.notifier);
-    final store = container.read(deviceStoreProvider) as FakeStore;
-    store.setKeypairHook = (_, _) async {
-      throw StateError('secure storage unavailable');
-    };
-
-    for (var i = 0; i < 2; i++) {
-      await stallOnce(ctl);
-    }
-
-    final state = container.read(connectionProvider);
-    expect(state.phase, ConnPhase.error);
-    expect(state.message, contains('Could not save the recovered key'));
-    expect(await store.privateKey(), 'OLD-PRIV');
-  });
-
-  test(
-    'auto-failover rebinds when the switch finds a peerless device',
-    () async {
-      final events = <String>[];
-      final (container, _) = await seedConnected(
-        events,
-        (o) {
-          if (o.path.endsWith('/config')) return dialJson();
-          if (o.path.endsWith('/status')) throw networkTimeout(o);
-          if (o.path.endsWith('/vpn-regions')) {
-            return regionsList(twoServers());
-          }
-          if (o.path.endsWith('/switch')) throw peerless(o);
-          if (o.path.endsWith('/connect')) return dialJsonSrv2();
-          throw StateError('unexpected ${o.path}');
-        },
-        keyQueue: const [
-          Keypair('SWITCH-PRIV', 'SWITCH-PUB'),
-          Keypair('FRESH-PRIV', 'FRESH-PUB'),
-        ],
-        gatewayProbe: support.FakeGatewayProbe(null),
-        controlProbe: support.FakeControlProbe(true),
-      );
-      final ctl = container.read(connectionProvider.notifier);
-
-      for (var i = 0; i < 2; i++) {
-        await stallOnce(ctl);
-      }
-
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.connected);
-      expect(state.dial?.serverId, 'srv-2');
-      expect(state.autoFailoverAttempts, 1);
-      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
-      expect(
-        await container.read(deviceStoreProvider).privateKey(),
-        'FRESH-PRIV',
-      );
-    },
-  );
 
   test('failover transport failure restarts the old tunnel', () async {
     final events = <String>[];
@@ -3441,7 +3358,7 @@ void main() {
     expect(state.phase, ConnPhase.connected);
     expect(state.dial?.serverId, 'srv-1');
     expect(state.autoFailoverAttempts, 1);
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
 
   test('quiet backend escalates heal -> failover with no polls', () async {
@@ -3486,7 +3403,7 @@ void main() {
     expect(state.autoFailoverAttempts, 1);
     expect(state.autoHealAttempts, 0);
     expect(events, contains('GET:/vpn-regions'));
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     // No config fetch and no status poll: escalation was purely local.
     expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     expect(events.where((e) => e.contains('/status')), isEmpty);
@@ -3600,7 +3517,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
       expect(events, contains('GET:/vpn-regions'));
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
     },
   );
 
@@ -3819,7 +3736,7 @@ void main() {
     expect(state.autoHealAttempts, 0);
     expect(events, isNot(contains('GET:/vpn-devices/dev-1/config')));
     expect(events, contains('GET:/vpn-regions'));
-    expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+    expect(events, contains('POST:/vpn-devices/dev-1/connect'));
   });
 
   test('poll failing after a heal restart is not counted (epoch)', () async {
@@ -4059,7 +3976,7 @@ void main() {
       expect(state.dial?.serverId, 'srv-2');
       expect(state.autoFailoverAttempts, 1);
       expect(events, isNot(contains('GET:/vpn-regions')));
-      expect(events, isNot(contains('POST:/vpn-devices/dev-1/switch')));
+      expect(events, isNot(contains('POST:/vpn-devices/dev-1/connect')));
     },
   );
 

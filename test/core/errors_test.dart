@@ -14,30 +14,13 @@ void main() {
     expect(friendlyMessage(404, 'nope'), contains('Reprovision'));
   });
 
-  test('404 peerless distinguished from missing device', () {
-    expect(kindFor(404, 'Device has no peer.'), ApiErrorKind.noActivePeer);
+  test('every 404 is reprovision', () {
+    // "Peerless" is not a 404 on this API — `connect` answers it — so no 404
+    // detail or code is special-cased; all mean the device is gone.
+    expect(kindFor(404, 'Device has no peer.'), ApiErrorKind.notFound);
     expect(
       kindFor(404, 'Device has no peer.', 'DEVICE_NO_PEER'),
-      ApiErrorKind.noActivePeer,
-    );
-    // Legacy code/detail for the same condition.
-    expect(
-      kindFor(404, 'Device has no active peer.'),
-      ApiErrorKind.noActivePeer,
-    );
-    expect(
-      kindFor(404, 'Device not found.', 'DEVICE_NO_ACTIVE_PEER'),
-      ApiErrorKind.noActivePeer,
-    );
-    // Switch/rotate peerless variants share the same kind so they rebind
-    // instead of surfacing "reprovision".
-    expect(
-      kindFor(404, 'Device has no peer to switch.', 'PEER_NOT_FOUND'),
-      ApiErrorKind.noActivePeer,
-    );
-    expect(
-      kindFor(404, 'Device has no peer to rotate.', 'PEER_NOT_FOUND'),
-      ApiErrorKind.noActivePeer,
+      ApiErrorKind.notFound,
     );
     expect(
       kindFor(404, 'Device not found.', 'DEVICE_NOT_FOUND'),
@@ -47,18 +30,11 @@ void main() {
       kindFor(404, 'VPN server not found.', 'SERVER_NOT_FOUND'),
       ApiErrorKind.notFound,
     );
-    expect(
-      friendlyMessage(404, 'Device has no peer.', 'DEVICE_NO_PEER'),
-      contains('fresh peer'),
-    );
+    expect(friendlyMessage(404, 'nope'), contains('Reprovision'));
   });
 
-  test('409 already-connected distinguished from key reuse', () {
-    expect(kindFor(409, 'already connected'), ApiErrorKind.alreadyConnected);
+  test('409 key reuse', () {
     expect(kindFor(409, 'public key in use'), ApiErrorKind.keyInUse);
-    // The real backend detail for PUBLIC_KEY_IN_USE contains "already", so
-    // the classifier must not shadow key reuse with the already-connected
-    // branch (its fresh-key retry would otherwise be unreachable).
     expect(
       kindFor(
         409,

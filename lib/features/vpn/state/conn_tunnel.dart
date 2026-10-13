@@ -133,8 +133,8 @@ extension ConnectionTunnel on ConnectionController {
     // Server-reported active peer key (when the backend supplies it) must
     // match the keypair the conf is built from: a mismatch means a stale local
     // identity would start a tunnel the server can never handshake. The
-    // network paths reconcile via [_configReconciled] first, so this is the
-    // last-line guard for any path that skipped it.
+    // connect paths hand over the local key so the backend makes the peer
+    // match, and this is the last-line guard for any path that skipped one.
     final serverClientKey = dial.clientPublicKey;
     if (serverClientKey != null && serverClientKey.isNotEmpty) {
       final localPub = await _device.publicKey();
@@ -287,8 +287,8 @@ extension ConnectionTunnel on ConnectionController {
     // Auto — no server is highlighted until explicitly pinned — and
     // reconnect stickiness for explicit pins comes from their own
     // `selectTarget` calls — never from collapsing Auto onto the dial.
-    // Cache the server truth for cold-start reconciliation (optimistic
-    // Connected label while `GET …/config` is in flight). Awaited (not
+    // Cache the dial for cold-start reconciliation (optimistic Connected
+    // label while the binding is re-ensured). Awaited (not
     // fire-and-forget like [_persistTarget]) so the cache is durable before
     // this returns; best-effort — a storage failure must never fail a good
     // connect.

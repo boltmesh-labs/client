@@ -8,10 +8,15 @@ extension ConnectionConnect on ConnectionController {
   /// A non-null [oneShotRegionId]/[oneShotServerId] dials that target for
   /// this call only (Auto re-pick): the pinned target in [snap] is left
   /// untouched, so an unpinned Auto stays unpinned.
+  ///
+  /// The backend owns every peer decision — bind when peerless, replay when
+  /// we already hold the key on the target, rotate when only the key differs,
+  /// move when a target is named — so this is a single `POST …/connect` on the
+  /// key in the store. There is no server-truth probe and no already-bound
+  /// reconciliation to run.
   Future<void> _connectBody({
     String? oneShotRegionId,
     String? oneShotServerId,
-    DialParams? knownDial,
     int? sessionEpoch,
   }) async {
     final expectedSession = sessionEpoch ?? _sessionEpoch;
@@ -21,9 +26,8 @@ extension ConnectionConnect on ConnectionController {
     if (!sessionCurrent()) return;
     AppLog.info('connect start gen=$_tunnelEpoch device=${AppLog.redact(id)}');
     if (id == null) {
-      // Freshly provisioned devices come back bound; dial straight away
-      // instead of re-reading `config`. [_provision] is lock-free and
-      // runs under this op's mutex slot.
+      // Freshly provisioned devices come back bound; dial straight away.
+      // [_provision] is lock-free and runs under this op's mutex slot.
       await _provision(
         regionId: oneShotRegionId,
         serverId: oneShotServerId,
@@ -53,83 +57,24 @@ extension ConnectionConnect on ConnectionController {
       recoveryReason: null,
       recoveryDetail: null,
     );
-    if (knownDial != null) {
-      // Caller already probed server truth (Auto Quick Connect): start the
-      // live peer directly instead of re-reading `config`.
-      await _startWith(knownDial, sessionEpoch: expectedSession);
-      return;
-    }
-    if (oneShotRegionId != null || oneShotServerId != null) {
-      // Auto re-pick: bind a fresh peer on the picked target instead of
-      // rebuilding the still-bound old peer via `config` (which would stay
-      // on the previous server and defeat the re-pick).
-      final dial = await _bindFreshPeer(
-        id,
+    // Ensure the server holds the key we have, on the requested target (or
+    // where we already are when no target is named) — one call, no probe.
+    final storedPub = await _device.publicKey();
+    if (!sessionCurrent()) return;
+    if (storedPub != null) {
+      final dial = await _api.connect(
+        deviceId: id,
+        publicKey: storedPub,
+        serverId: oneShotServerId ?? snap.serverId,
         regionId: oneShotRegionId,
-        serverId: oneShotServerId,
-        sessionEpoch: expectedSession,
       );
       if (!sessionCurrent()) return;
       await _startWith(dial, sessionEpoch: expectedSession);
       return;
     }
-    // Ensure a peer on the key we already hold, in one call: the backend's
-    // `connect` is idempotent on that key (a device already carrying it
-    // replays the live peer) and creates the peer when the device is peerless.
-    // So the common reconnect needs no separate `GET …/config` probe and never
-    // sees `DEVICE_NO_PEER`. A graceful disconnect deletes the server peer but
-    // keeps the local key, so replaying the stored key is exactly the reconnect
-    // case.
-    final storedPub = await _device.publicKey();
-    if (!sessionCurrent()) return;
-    if (storedPub != null) {
-      try {
-        final dial = await _api.connect(
-          deviceId: id,
-          publicKey: storedPub,
-          serverId: snap.serverId,
-        );
-        if (!sessionCurrent()) return;
-        _peerReleasedLocally = false;
-        await _startWith(dial, sessionEpoch: expectedSession);
-        return;
-      } on DioException catch (e) {
-        // `connect` 409s only when a *different* key is already bound (a lost
-        // bind response, or a rolled-back local store): reconcile from server
-        // truth, which rotates the peer onto a key we control. Anything else
-        // (revoked device, 401/503/offline) propagates instead of binding a
-        // tunnel that would fail the same way.
-        final kind = asVpnError(e)?.kind;
-        if (kind != ApiErrorKind.alreadyConnected) rethrow;
-        AppLog.info(
-          'connect stored key divergent device=${AppLog.redact(id)} '
-          '-> reconcile via config',
-        );
-      }
-      // Read server truth and reconcile (rotate the peer onto a key we
-      // control). If the peer vanished between the 409 and the read (server
-      // GC), fall through to a fresh bind rather than surface a failure.
-      try {
-        final reconciled = await _configReconciled(
-          id,
-          sessionEpoch: expectedSession,
-        );
-        if (!sessionCurrent()) return;
-        await _startWith(reconciled.dial, sessionEpoch: expectedSession);
-        return;
-      } on DioException catch (e) {
-        final kind = asVpnError(e)?.kind;
-        if (kind != ApiErrorKind.noActivePeer) rethrow;
-        AppLog.info(
-          'connect peer gone during reconcile device=${AppLog.redact(id)} '
-          '-> bind fresh peer',
-        );
-      }
-    }
-    // No stored key (an identity whose keypair was lost): bind a fresh peer.
-    // Ephemeral until the server binds it: persisting first would clobber the
-    // working key when the POST times out (e.g. API routed into a live
-    // full-tunnel) and leave the store unrecoverable.
+    // No stored key (an identity whose keypair was lost): generate one, ensure
+    // the server binds it, and persist only after the POST succeeds so a
+    // timeout can't clobber a working identity.
     final dial = await _bindFreshPeer(
       id,
       regionId: oneShotRegionId,
@@ -140,7 +85,7 @@ extension ConnectionConnect on ConnectionController {
     await _startWith(dial, sessionEpoch: expectedSession);
   }
 
-  /// Binds a fresh client peer for [deviceId] and returns the dial params.
+  /// Binds a fresh client key for [deviceId] and returns the dial params.
   /// Lock-free: caller must hold [_mutex]. The fresh keypair stays
   /// ephemeral until the POST succeeds and is only then persisted, so a
   /// timeout can't clobber the working identity. Explicit [regionId]/
@@ -196,19 +141,21 @@ extension ConnectionConnect on ConnectionController {
     if (!sessionCurrent()) {
       throw StateError('Session changed after peer persistence.');
     }
-    // The device holds a peer again, so the local knowledge a disconnect
-    // recorded no longer describes it (see [_peerReleasedLocally]).
-    _peerReleasedLocally = false;
     return dial;
   }
 
-  /// Connect: rebuild from `config` when bound, else bind a fresh peer.
-  /// [oneShotRegionId]/[oneShotServerId] dial that target for this call
-  /// only without touching the pinned target (Auto re-pick).
+  /// Connect: ensure the server holds our key on the selected target, then
+  /// start the tunnel. [oneShotRegionId]/[oneShotServerId] dial that target for
+  /// this call only without touching the pinned target (Auto re-pick).
+  ///
+  /// Connect is idempotent on the key we hold, so a reconnect is the same call
+  /// as a first connect; the backend binds, replays, rotates, or moves as
+  /// needed. A key already registered to *another* device is retried once with
+  /// a fresh keypair; a 404 means the device is gone, so the identity is wiped
+  /// and the next tap reprovisions.
   Future<void> _connectOp({
     String? oneShotRegionId,
     String? oneShotServerId,
-    DialParams? knownDial,
     int? expectedTeardown,
   }) async {
     final release = await _mutex.acquire('connect');
@@ -230,7 +177,6 @@ extension ConnectionConnect on ConnectionController {
       await _connectBody(
         oneShotRegionId: oneShotRegionId,
         oneShotServerId: oneShotServerId,
-        knownDial: knownDial,
         sessionEpoch: sessionEpoch,
       );
     } catch (e) {
@@ -241,42 +187,6 @@ extension ConnectionConnect on ConnectionController {
         vpnErr?.message ?? e,
       );
       final rateWait = _noteRateLimit(vpnErr);
-      if (vpnErr?.kind == ApiErrorKind.alreadyConnected) {
-        AppLog.info('connect already-connected -> reload config');
-        final id = await _device.deviceId();
-        if (sessionEpoch != _sessionEpoch) return;
-        if (id != null) {
-          try {
-            final reconciled = await _configReconciled(
-              id,
-              sessionEpoch: sessionEpoch,
-            );
-            if (sessionEpoch != _sessionEpoch) return;
-            final dial = reconciled.dial;
-            await _startWith(dial, sessionEpoch: sessionEpoch);
-            if (sessionEpoch != _sessionEpoch) return;
-            _pinCanonicalTarget(dial);
-            if (sessionEpoch != _sessionEpoch) return;
-            return;
-          } catch (e2) {
-            if (sessionEpoch != _sessionEpoch) return;
-            final inner = asVpnError(e2);
-            AppLog.error(
-              'connect reload failed kind=${inner?.kind ?? e2.runtimeType}',
-              inner?.message ?? e2,
-            );
-            final reloadWait = _noteRateLimit(inner);
-            snap = snap.copyWith(
-              phase: ConnPhase.error,
-              message: reloadWait != null
-                  ? _rateLimitMessage(reloadWait)
-                  : (inner?.message ?? e2.toString()),
-              opFailed: true,
-            );
-            return;
-          }
-        }
-      }
       if (vpnErr?.kind == ApiErrorKind.keyInUse) {
         // Retry once with another fresh key, keeping the selected target
         // (or the one-shot Auto pick).
@@ -341,117 +251,6 @@ extension ConnectionConnect on ConnectionController {
     }
   }
 
-  /// Server truth for the Auto path: the device's live dial, or null when
-  /// it holds no active peer (`DEVICE_NO_PEER`). The dial is
-  /// reconciled with the local keypair first (see [_configReconciled]), so a
-  /// divergent identity is repaired before the peer is reused. Every other
-  /// failure propagates to the caller.
-  Future<DialParams?> _probeActiveDial(String id) async {
-    try {
-      final reconciled = await _configReconciled(id);
-      return reconciled.dial;
-    } on DioException catch (e) {
-      if (asVpnError(e)?.kind == ApiErrorKind.noActivePeer) return null;
-      rethrow;
-    }
-  }
-
-  /// Auto Quick Connect onto [best] without pinning, without ever issuing a
-  /// doomed `POST /connect`.
-  ///
-  /// The backend binds a fresh peer on `connect` for a peerless device and
-  /// replays the live one when the supplied key already matches, but a device
-  /// can already hold a server-side peer on a *different* key — the norm right
-  /// after provision, or after a session that ended without a graceful
-  /// disconnect. Ask server truth first ([_probeActiveDial]):
-  ///  - live peer already inside [best] → start it as-is (no mutation);
-  ///  - live peer elsewhere → one-shot `switch` onto [best];
-  ///  - peerless → `connect` a fresh peer on [best].
-  /// Auto stays unpinned throughout (no [selectTarget]).
-  ///
-  /// [expectedTeardown] is the caller's [_teardownEpoch] captured before its
-  /// own discovery await: the device read and server probe below are
-  /// lock-free, so a Disconnect that lands while they are in flight must
-  /// abort instead of binding a fresh tunnel behind it.
-  Future<void> _autoConnectRegion(Region best, {int? expectedTeardown}) async {
-    final sessionEpoch = _sessionEpoch;
-    final teardownEpoch = expectedTeardown ?? _teardownEpoch;
-    bool superseded() =>
-        sessionEpoch != _sessionEpoch || teardownEpoch != _teardownEpoch;
-    final id = await _device.deviceId();
-    if (superseded()) return;
-    if (id == null) {
-      await _connectOp(
-        oneShotRegionId: best.id,
-        expectedTeardown: teardownEpoch,
-      );
-      return;
-    }
-    DialParams? live;
-    try {
-      live = await _probeActiveDial(id);
-    } catch (e) {
-      if (superseded()) return;
-      final vpnErr = asVpnError(e);
-      if (vpnErr?.kind == ApiErrorKind.notFound) {
-        // Stale local id (revoked/foreign device): the backend has no
-        // ownership oracle, so treat 404 as "reprovision" — wipe the
-        // identity and reprovision in the same tap so the power button works
-        // on first press (unlike _connectOp, which wipes and surfaces for a
-        // second tap). _connectBody re-reads the store, sees a null id, and
-        // provisions a fresh device bound to [best].
-        AppLog.info(
-          'quick connect missing device=${AppLog.redact(id)} -> reprovision',
-        );
-        try {
-          await _wipeDevice();
-        } catch (e) {
-          AppLog.error('quick connect clear device failed', e);
-        }
-        if (superseded()) return;
-        await _connectOp(
-          oneShotRegionId: best.id,
-          expectedTeardown: teardownEpoch,
-        );
-        return;
-      }
-      AppLog.error('quick connect probe failed', vpnErr?.message ?? e);
-      final wait = _noteRateLimit(vpnErr);
-      snap = snap.copyWith(
-        phase: ConnPhase.error,
-        message: wait != null
-            ? _rateLimitMessage(wait)
-            : failureReason(vpnErr, e),
-        opFailed: true,
-      );
-      return;
-    }
-    // Another op may have taken over while the probe was in flight.
-    if (superseded() || snap.phase == ConnPhase.working) {
-      return;
-    }
-    if (live == null) {
-      await _connectOp(
-        oneShotRegionId: best.id,
-        expectedTeardown: teardownEpoch,
-      );
-      return;
-    }
-    // Promote for the closure below (`live` is a nullable local).
-    final peer = live;
-    if (best.servers.any((s) => s.id == peer.serverId)) {
-      await _connectOp(knownDial: peer, expectedTeardown: teardownEpoch);
-      return;
-    }
-    await _switchServerOp(
-      regionId: best.id,
-      serverId: null,
-      explicitTarget: false,
-      pinTarget: false,
-      expectedTeardown: teardownEpoch,
-    );
-  }
-
   /// Drops a leftover persisted pin once Quick Connect commits to Auto.
   ///
   /// A pin in [snap] is redialed as-is, and a pin only in storage is
@@ -485,18 +284,18 @@ extension ConnectionConnect on ConnectionController {
   /// Sticky when a server is pinned: it is discovery-validated via
   /// [_pinnedConnectOp] (or [switchServer] when connected). When nothing is
   /// pinned (Auto, e.g. after [selectAuto]) the lowest-load region with
-  /// capacity ([autoPickRegion]) is dialed one-shot via [_autoConnectRegion]:
+  /// capacity ([autoPickRegion]) is dialed one-shot via [_connectAutoWith]:
   /// the state stays unpinned, so every Auto connect re-picks fresh and the
   /// next disconnect → Connect moves again instead of sticking to the old
   /// server. While connected, an Auto call no-ops when the live server is
-  /// already inside the best region, else it switches one-shot without
-  /// pinning. Delegates without holding the mutex: connected → [switchServer]
+  /// already inside the best region, else it moves one-shot without pinning.
+  /// Delegates without holding the mutex: connected → [switchServer]
   /// (keeps the same-target no-op), otherwise discovery then
-  /// reuse/switch/connect. Never pre-pins before a switch: that would trip
+  /// reuse/move/connect. Never pre-pins before a switch: that would trip
   /// the same-target skip check. Committing to Auto also drops any pin left in
   /// storage by an earlier session ([_clearPersistedPin]) — before the
   /// connected one-shot switch and the already-on-best-region no-op, not just
-  /// the first connect of a session. The whole discovery/probe sequence is
+  /// the first connect of a session. The whole discovery sequence is
   /// lock-free by design, so it snapshots [_teardownEpoch] up front and
   /// aborts the moment a Disconnect (or reset/revocation) has landed: the
   /// later teardown must win even though the connect started first.
@@ -528,7 +327,7 @@ extension ConnectionConnect on ConnectionController {
       return;
     }
     // Restart survival: the in-memory pin is gone but the persisted one
-    // redials the same target (covers a GC'd peer that can't `config`).
+    // redials the same target.
     try {
       final saved = await _device.lastTarget();
       // Another op may have taken over while reading the store.
@@ -582,7 +381,7 @@ extension ConnectionConnect on ConnectionController {
   /// region list every time (the backend allows 60s client caching, but a
   /// re-pick must not trust a stale cache). The pin is honored only while the
   /// server is still listed:
-  ///  - listed → dial it as usual (config reuse or a fresh bind; pin kept);
+  ///  - listed → dial it as usual (pin kept);
   ///  - gone → fall back to Auto ([_connectAutoWith]) and drop the stale pin;
   ///  - discovery failed → best-effort dial the pin as-is, since the dial
   ///    itself is the authoritative attempt.
@@ -613,8 +412,7 @@ extension ConnectionConnect on ConnectionController {
       (r) => r.servers.any((s) => s.id == pinned),
     );
     if (stillListed) {
-      // Confirmed still serving: dial it exactly as before (config reuse or a
-      // fresh bind), keeping the pin.
+      // Confirmed still serving: dial it exactly as before, keeping the pin.
       await _connectOp(expectedTeardown: teardownEpoch);
       return;
     }
@@ -684,8 +482,8 @@ extension ConnectionConnect on ConnectionController {
       );
       return;
     }
-    // Not connected: reuse the live peer, switch it, or bind a fresh one
-    // based on server truth (never a blind bind that would 409).
-    await _autoConnectRegion(best, expectedTeardown: teardownEpoch);
+    // Not connected: dial the picked target. The backend binds, reuses, or
+    // moves the peer as needed, so no server-truth read is required first.
+    await _connectOp(oneShotRegionId: best.id, expectedTeardown: teardownEpoch);
   }
 }

@@ -558,34 +558,41 @@ extension ConnectionRecovery on ConnectionController {
       }
       return;
     }
-    // Ephemeral until the switch binds it (same pattern as switchServer:
-    // persisting first would clobber the working key on a timeout).
-    // Failures before the keypair is persisted fall back to the old
-    // tunnel so a failover attempt never strands the user with nothing
-    // running; failures after are surfaced as `error` (the server may
-    // already hold the new key, so the old tunnel is no longer valid).
-    DialParams dial;
-    String newPriv;
-    String newPub;
+    // The move reuses the key we hold, so a failure leaves the old identity
+    // intact and the old tunnel can be restarted; a device with no key has
+    // nothing to move (restart the old dial and let a manual Connect
+    // reprovision).
     // A target is in hand: this is a committed move, so it costs an attempt
-    // whether or not the switch POST below succeeds. Charging here (rather
+    // whether or not the connect POST below succeeds. Charging here (rather
     // than on entry) is what spares the discovery-only failures above.
     chargeAttempt();
+    late final DialParams dial;
     try {
-      final kp = await _keys.generate();
-      // Probe the switch through the live tunnel first when it is still
+      final publicKey = await _device.publicKey();
+      if (!sessionCurrent()) return;
+      if (publicKey == null) {
+        await _restartOldDial(
+          oldDial,
+          why,
+          tunnelDown: tunnelDown,
+          sessionEpoch: sessionEpoch,
+        );
+        return;
+      }
+      // Probe the connect through the live tunnel first when it is still
       // up; stop only on transport failure, then retry direct. App-level
       // errors keep the tunnel up and fall back to the old dial below.
-      final switched = await _postViaTunnelOrDirect(
+      final moved = await _postViaTunnelOrDirect(
         post: ({Duration? timeout}) =>
-            _switchPost(id, kp.publicKey, null, target, timeout: timeout),
+            _switchPost(id, publicKey, null, target, timeout: timeout),
         wasConnected: !tunnelDown,
         stopLabel: 'auto-failover',
         initiallyDown: tunnelDown,
         probeTimeout: ConnectionTuning.recoveryProbeTimeout,
       );
-      tunnelDown = switched.tunnelDown;
-      if (switched.dial == null) {
+      tunnelDown = moved.tunnelDown;
+      final bound = moved.dial;
+      if (bound == null) {
         AppLog.error('failover switch network-failed', 'transport failure');
         await _restartOldDial(
           oldDial,
@@ -595,9 +602,7 @@ extension ConnectionRecovery on ConnectionController {
         );
         return;
       }
-      dial = switched.dial!;
-      newPriv = kp.privateKey;
-      newPub = kp.publicKey;
+      dial = bound;
     } on DioException catch (e) {
       final kind = asVpnError(e)?.kind;
       _noteRateLimit(asVpnError(e));
@@ -606,20 +611,6 @@ extension ConnectionRecovery on ConnectionController {
         AppLog.info('failover 404 -> forget device');
         await _forgetDeviceAndIdle(
           stopReason: tunnelDown ? null : 'auto-failover',
-        );
-        return;
-      }
-      if (kind == ApiErrorKind.noActivePeer) {
-        AppLog.info('failover peerless -> rebind fresh peer');
-        await _rebindAfterPeerless(
-          id: id,
-          target: target,
-          crossRegion: pick.crossRegion,
-          regionName: pick.regionName,
-          why: why,
-          attempt: attempt,
-          tunnelDown: tunnelDown,
-          sessionEpoch: sessionEpoch,
         );
         return;
       }
@@ -652,27 +643,6 @@ extension ConnectionRecovery on ConnectionController {
         why,
         tunnelDown: tunnelDown,
         sessionEpoch: sessionEpoch,
-      );
-      return;
-    }
-    if (!sessionCurrent()) return;
-    // Only now does the new key become the stored identity: it matches
-    // the freshly bound server-side peer.
-    try {
-      await _device.setKeypair(privateKey: newPriv, publicKey: newPub);
-    } catch (e) {
-      AppLog.error('failover keypair persist failed', e);
-      if (!sessionCurrent()) return;
-      if (!tunnelDown) await _stopTunnel('auto-failover-persist-failed');
-      _stopPolling();
-      snap = snap.copyWith(
-        phase: ConnPhase.error,
-        message:
-            'Server unreachable ($why). Could not save the recovered key. '
-            'Tap Connect to retry.',
-        lastStage: null,
-        healthNote: null,
-        backendIssue: null,
       );
       return;
     }
@@ -744,58 +714,6 @@ extension ConnectionRecovery on ConnectionController {
       'failover ok ($why) attempt=$attempt server=${dial.serverName}'
       '${crossRegion ? ' cross-region' : ''}',
     );
-  }
-
-  /// Rebinds a fresh peer after an automatic switch discovers that the
-  /// device was peerless. This mirrors the manual switch recovery instead of
-  /// restarting the stale cached dial.
-  Future<void> _rebindAfterPeerless({
-    required String id,
-    required String? target,
-    required bool crossRegion,
-    required String? regionName,
-    required String why,
-    required int attempt,
-    required bool tunnelDown,
-    required int sessionEpoch,
-  }) async {
-    if (sessionEpoch != _sessionEpoch) return;
-    try {
-      if (!tunnelDown) {
-        await _stopTunnel('auto-failover-peerless');
-        if (sessionEpoch != _sessionEpoch) return;
-      }
-      final fresh = await _bindFreshPeer(
-        id,
-        serverId: target,
-        sessionEpoch: sessionEpoch,
-      );
-      if (sessionEpoch != _sessionEpoch) return;
-      await _startWith(fresh, sessionEpoch: sessionEpoch);
-      if (sessionEpoch != _sessionEpoch) return;
-      await _recordAutoFailoverSuccess(
-        fresh,
-        target,
-        attempt,
-        why,
-        crossRegion: crossRegion,
-        regionName: regionName,
-      );
-    } catch (e) {
-      if (sessionEpoch != _sessionEpoch) return;
-      final vpnErr = asVpnError(e);
-      AppLog.error('failover peerless rebind failed', vpnErr?.message ?? e);
-      _stopPolling();
-      snap = snap.copyWith(
-        phase: ConnPhase.error,
-        message:
-            'Server unreachable ($why). Reconnect failed '
-            '(${vpnErr?.message ?? e}). Tap Connect.',
-        lastStage: null,
-        healthNote: null,
-        backendIssue: null,
-      );
-    }
   }
 
   /// Resolves the failover server for [oldDial] against fresh [regions].

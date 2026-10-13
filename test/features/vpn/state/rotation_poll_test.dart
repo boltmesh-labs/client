@@ -59,7 +59,6 @@ void main() {
     final api = VpnApi(
       recordingDio(events, (o) {
         if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/rotate-keys')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -71,9 +70,10 @@ void main() {
     await container.read(connectionProvider.notifier).rotateKeys();
 
     // Probe-first: the POST travels before any stop; the single stop is
-    // the restart onto the rotated key.
+    // the restart onto the rotated key. The rotate is a `connect` on the
+    // replacement key with no target, so the peer rotates in place.
     expect(events, [
-      'POST:/vpn-devices/dev-1/rotate-keys',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
       'tunnel:start',
     ]);
@@ -93,8 +93,14 @@ void main() {
     final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/rotate-keys')) throw networkTimeout(o);
+        // The seed replays the stored OLD-PUB; the rotate carries the
+        // replacement key and is the one that fails.
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['public_key'] == 'NEW-PUB') {
+            throw networkTimeout(o);
+          }
+          return dialJson();
+        }
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -112,9 +118,9 @@ void main() {
     expect(state.message, contains('Tunnel stopped'));
     // Probe first, then one direct retry after the stop.
     expect(events, [
-      'POST:/vpn-devices/dev-1/rotate-keys',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
-      'POST:/vpn-devices/dev-1/rotate-keys',
+      'POST:/vpn-devices/dev-1/connect',
     ]);
   });
 
@@ -125,7 +131,6 @@ void main() {
     final api = VpnApi(
       recordingDio(events, (o) {
         if (o.path.endsWith('/config')) return dialJson();
-        if (o.path.endsWith('/rotate-keys')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -138,7 +143,7 @@ void main() {
     await container.read(connectionProvider.notifier).rotateKeys();
 
     expect(events, [
-      'POST:/vpn-devices/dev-1/rotate-keys',
+      'POST:/vpn-devices/dev-1/connect',
       'tunnel:stop',
       'tunnel:start',
     ]);
@@ -322,7 +327,6 @@ void main() {
         if (o.path.endsWith('/disconnect')) {
           return {'disconnected_peers': 1};
         }
-        if (o.path.endsWith('/rotate-keys')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );
@@ -364,7 +368,6 @@ void main() {
       recordingDio(events, (o) {
         if (o.path.endsWith('/config')) return dialJson();
         if (o.path.endsWith('/status')) return activeStatusJson();
-        if (o.path.endsWith('/rotate-keys')) return dialJson();
         throw StateError('unexpected ${o.path}');
       }),
     );

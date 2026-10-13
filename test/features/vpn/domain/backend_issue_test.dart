@@ -54,8 +54,6 @@ void main() {
   test('recovery-owned errors raise no banner', () {
     for (final kind in [
       ApiErrorKind.notFound,
-      ApiErrorKind.noActivePeer,
-      ApiErrorKind.alreadyConnected,
       ApiErrorKind.keyInUse,
       ApiErrorKind.idempotencyConflict,
     ]) {

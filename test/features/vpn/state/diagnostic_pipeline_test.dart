@@ -128,8 +128,14 @@ void main() {
     test('gateway dead plus api up fast-tracks to failover', () async {
       final events = <String>[];
       final (container, _, ctl) = await seedPipeline(events, (o) {
-        // Initial connect (events are cleared before the tick).
-        if (o.path.endsWith('/config')) return dialJson();
+        // Seed connect (no target) and the failover move (target srv-2) both
+        // go through the one connect endpoint, told apart by the target.
+        if (o.path.endsWith('/connect')) {
+          if ((o.data as Map)['server_id'] == 'srv-2') {
+            return dialJson(serverId: 'srv-2', serverName: 'two');
+          }
+          return dialJson();
+        }
         if (o.path.endsWith('/vpn-regions')) {
           return [
             {
@@ -175,7 +181,7 @@ void main() {
       expect(state.autoFailoverAttempts, 1);
       expect(state.dial?.serverId, 'srv-2');
       expect(events, contains('GET:/vpn-regions'));
-      expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events.where((e) => e.startsWith('tunnel:')), [
         'tunnel:stop',
         'tunnel:start',

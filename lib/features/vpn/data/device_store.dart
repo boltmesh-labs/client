@@ -180,7 +180,7 @@ class DeviceStore {
   /// Last known-good dial params as a JSON string (see `DialParams.toJson`).
   /// Written on every successful tunnel start, read only by cold-start
   /// reconciliation to render an optimistic Connected state while the
-  /// server truth (`GET …/config`) is still in flight or unreachable.
+  /// binding is re-ensured or the backend is unreachable.
   /// Kept as an opaque string (never a model) so this store stays free of
   /// model imports; the controller owns encode/decode. Cleared with the
   /// device and on explicit disconnect (the tunnel is down, so a cached

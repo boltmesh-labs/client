@@ -30,8 +30,8 @@ extension ConnectionColdStart on ConnectionController {
   /// never called here):
   ///
   /// * `connected`/`noConnection` → optimistic Connected from the cached
-  ///   dial (last-target label while offline), then confirmed against
-  ///   `GET …/config` server truth;
+  ///   dial (last-target label while offline), then the binding re-ensured
+  ///   with an idempotent `connect`;
   /// * transitional (`connecting`, `waitingConnection`, … — see
   ///   [isColdTransitionalStage]) → working ("Restoring connection…"),
   ///   then confirmed the same way;
@@ -39,7 +39,7 @@ extension ConnectionColdStart on ConnectionController {
   ///   cached dial → working ("Restoring connection…"), then confirmed the
   ///   same way. A fresh backend in a re-attached engine reports no running
   ///   tunnels even when the OS TUN survived, so a lone `disconnected` read
-  ///   is not trustworthy — server truth decides, and a confirmed peer
+  ///   is not trustworthy — the connect decides, and a confirmed peer
   ///   always bounces (stop + start) so this backend owns the TUN.
   ///   Without a cached dial (fresh install or explicit teardown) it stays
   ///   idle without touching the network;
@@ -126,8 +126,8 @@ extension ConnectionColdStart on ConnectionController {
       return;
     }
     // Down/terminal stage with a previous session on disk: the stage may be
-    // the fresh-backend lie described above, so server truth (`GET …/config`
-    // inside [_restoreColdSession]) decides. No cache means a true fresh
+    // the fresh-backend lie described above, so the connect inside
+    // [_restoreColdSession] decides. No cache means a true fresh
     // install or an explicit teardown: stay idle without touching the
     // network. A truthful-down tunnel restored optimistically here is
     // corrected by the existing watchdogs (stage stream via [_noteStage],
@@ -246,51 +246,50 @@ extension ConnectionColdStart on ConnectionController {
           lastStage: stage,
         );
       }
-      DialParams dial;
-      var rebound = false;
+      // Ensure the server holds the key we have — one idempotent call that
+      // binds when the peer was GC'd while the app was dead, or replays the
+      // live peer unchanged, and returns the dial to (re)start on. No
+      // separate server-truth read: binding is the backend's concern.
+      final DialParams dial;
       try {
-        final reconciled = await _configReconciled(
-          id,
-          sessionEpoch: sessionEpoch,
-        );
+        final pub = await _device.publicKey();
         if (!_coldSessionCurrent(sessionEpoch)) return;
-        dial = reconciled.dial;
-        rebound = reconciled.rebound;
-      } on DioException catch (e) {
-        final kind = asVpnError(e)?.kind;
-        if (kind == ApiErrorKind.notFound ||
-            kind == ApiErrorKind.noActivePeer) {
-          // Stale OS tunnel: the peer was GC'd/revoked while the app was
-          // dead. Stop it so no ghost tunnel lingers, then idle — the next
-          // Connect binds a fresh peer. The plain stop is a no-op after a
-          // re-attach (`Running tunnels: []`), so the ghost-kill downs the
-          // owning backend directly. The device itself is kept for a fresh
-          // bind (cleared only on true 404 below).
-          AppLog.info('cold restore $kind -> stop stale tunnel');
+        if (pub == null) {
+          // No stored key to re-ensure (a wiped identity): stop any surviving
+          // ghost tunnel and stay idle; the next Connect provisions afresh.
+          AppLog.info('cold restore no stored key -> stop stale tunnel');
           await _stopTunnel('cold-start-stale');
           if (!_coldSessionCurrent(sessionEpoch)) return;
-          if (kind == ApiErrorKind.notFound) {
-            try {
-              await _wipeDevice();
-            } catch (e) {
-              AppLog.error('cold restore clear device failed', e);
-            }
-            if (!_coldSessionCurrent(sessionEpoch)) return;
-          } else {
-            // Peerless: the device is kept for a fresh bind, but the cached
-            // dial points at the peer the server just reported gone — drop
-            // it so the next offline cold start can't optimistically restore
-            // or sit verifying that dead session.
-            await _clearCachedDial();
-            if (!_coldSessionCurrent(sessionEpoch)) return;
-          }
+          await _clearCachedDial();
+          if (!_coldSessionCurrent(sessionEpoch)) return;
           _stopPolling();
           _resetLocalHealth();
           _coldRestore.armed = false;
           _idleAfterDeviceGone(
-            message: kind == ApiErrorKind.notFound
-                ? 'Device was removed. Connect again to reprovision.'
-                : 'Session expired. Tap Connect to reconnect.',
+            message: 'Session expired. Tap Connect to reconnect.',
+          );
+          return;
+        }
+        dial = await _api.connect(deviceId: id, publicKey: pub);
+      } on DioException catch (e) {
+        final kind = asVpnError(e)?.kind;
+        if (kind == ApiErrorKind.notFound) {
+          // Device revoked while the app was dead: stop the ghost tunnel and
+          // wipe the identity so the next Connect reprovisions.
+          AppLog.info('cold restore $kind -> stop stale tunnel');
+          await _stopTunnel('cold-start-stale');
+          if (!_coldSessionCurrent(sessionEpoch)) return;
+          try {
+            await _wipeDevice();
+          } catch (e) {
+            AppLog.error('cold restore clear device failed', e);
+          }
+          if (!_coldSessionCurrent(sessionEpoch)) return;
+          _stopPolling();
+          _resetLocalHealth();
+          _coldRestore.armed = false;
+          _idleAfterDeviceGone(
+            message: 'Device was removed. Connect again to reprovision.',
           );
           return;
         }
@@ -316,9 +315,9 @@ extension ConnectionColdStart on ConnectionController {
       // An unpinned (Auto) state stays unpinned here: the restored dial
       // labels the session while the pin remains empty, so later connects
       // re-pick fresh instead of sticking to the restored server.
-      if (downRead || rebound) {
-        // Down-read confirm (`GET …/config` ok) or a key rebind: the peer
-        // exists server-side but any surviving OS tunnel runs a stale key.
+      if (downRead) {
+        // Down-read confirm: the peer exists server-side but any surviving OS
+        // tunnel runs a stale key.
         // Always bounce (stop, then start on the server-confirmed dial):
         // after a process/engine death this process
         // never owns the surviving TUN (fresh backend reports
@@ -327,11 +326,10 @@ extension ConnectionColdStart on ConnectionController {
         // `Device closed`). A new `establish()` replaces whatever the OS
         // read lied about and gives this backend ownership, so the normal
         // machinery verifies from there. Only corroborated-dead evidence
-        // tears down to idle instead; a rebind never does (the peer is
-        // confirmed, only its key changed).
-        final alive = rebound ? null : await _coldRestoreAlive(dial);
+        // tears down to idle instead.
+        final alive = await _coldRestoreAlive(dial);
         if (!_coldSessionCurrent(sessionEpoch)) return;
-        if (!rebound && alive == false) {
+        if (alive == false) {
           AppLog.info(
             'cold restore down-read corroborated dead -> ghost-kill + idle',
           );
@@ -358,18 +356,14 @@ extension ConnectionColdStart on ConnectionController {
           return;
         }
         AppLog.info(
-          rebound
-              ? 'cold restore rebound -> bounce on the fresh key'
-              : 'cold restore down-read -> bounce on the server-confirmed dial '
-                    '(alive=${alive == true ? 'likely' : 'unknown'})',
+          'cold restore down-read -> bounce on the server-confirmed dial '
+          '(alive=${alive == true ? 'likely' : 'unknown'})',
         );
         snap = snap.copyWith(
           phase: ConnPhase.working,
           message: 'Restoring connection…',
         );
-        await _stopTunnel(
-          rebound ? 'cold-restore-rebind' : 'cold-restore-bounce',
-        );
+        await _stopTunnel('cold-restore-bounce');
         if (!_coldSessionCurrent(sessionEpoch)) return;
         try {
           await _startWith(dial, sessionEpoch: sessionEpoch);

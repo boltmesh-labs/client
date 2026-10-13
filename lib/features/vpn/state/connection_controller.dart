@@ -233,27 +233,6 @@ class ConnectionController extends Notifier<ConnState> {
   @visibleForTesting
   set debugPollsSinceRotate(int v) => _pollsSinceRotate = v;
 
-  /// True when this client knows the device holds no server-side peer, because
-  /// a disconnect released it (see [ConnectionLifecycle._disconnectBody]) and
-  /// nothing has bound one since.
-  ///
-  /// Only a switch reads it, and only to skip the `POST …/switch` that a
-  /// peerless device answers with 404 `PEER_NOT_FOUND`: the request cannot
-  /// succeed, and the recovery in that catch would bind a fresh peer on the new
-  /// target anyway — so knowing the state locally turns two requests and a
-  /// round trip into one. It is a cache of something already established, never
-  /// an assumption: every path that binds a peer or reads one back clears it
-  /// ([_bindFreshPeer], [_configReconciled]), and a server-side 404 still
-  /// recovers exactly as before, so a stale `true` costs a request rather than a
-  /// stranded tunnel.
-  bool _peerReleasedLocally = false;
-
-  /// Test seam: inspect/prime the local peer-release flag.
-  @visibleForTesting
-  bool get debugPeerReleasedLocally => _peerReleasedLocally;
-  @visibleForTesting
-  set debugPeerReleasedLocally(bool v) => _peerReleasedLocally = v;
-
   /// Client-side cooldown armed by a 429 (`ApiErrorKind.rateLimited`). While
   /// active the API-mutating ops (connect/switch/rotate, and the disconnect
   /// peer release) short-circuit instead of spending more of the shared
@@ -568,19 +547,6 @@ class ConnectionController extends Notifier<ConnState> {
     } catch (e) {
       AppLog.error('select auto persist failed', e);
     }
-  }
-
-  /// Pins the canonical server from a freshly loaded [dial] (server truth,
-  /// never request params). Best-effort: never throws.
-  ///
-  /// With [preserveAuto] (the connect-path default) an unpinned (Auto)
-  /// state is left alone: Auto reconnects must not collapse into a server
-  /// pin. Switch-path callers pass false: an explicit switch carries user
-  /// intent even when the pin hasn't landed in [snap] yet (e.g. an
-  /// already-bound 409 before the post-success pin).
-  void _pinCanonicalTarget(DialParams dial, {bool preserveAuto = true}) {
-    if (preserveAuto && snap.serverId == null) return;
-    selectTarget(serverId: dial.serverId);
   }
 
   /// Arms the 429 cooldown from [e] when it is a rate-limit rejection:

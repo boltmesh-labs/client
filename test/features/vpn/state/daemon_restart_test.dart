@@ -291,7 +291,7 @@ void main() {
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
       expect(state.message, 'Connected');
-      expect(events, contains('GET:/vpn-devices/dev-1/config'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(socket.ops, isNot(contains('up')));
       expect(socket.ops, isNot(contains('down')));
     });
@@ -348,20 +348,22 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
-      expect(events, contains('GET:/vpn-devices/dev-1/config'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       // The fresh backend reports no running tunnel, but the peer exists
       // server-side: bounce so this process owns the TUN.
       expect(socket.ops, contains('down'));
       expect(socket.ops, contains('up'));
     });
 
-    test('a peerless device stops the helper tunnel and stays idle', () async {
+    test('a peerless device is re-bound by the cold-start connect', () async {
       final events = <String>[];
       final store = await storeWithCachedDial();
       final socket = support.FakeHelperSocket();
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) throw peerless(o);
+          // Peerless is not an error on this API: `connect` binds the stored
+          // key and returns its dial, so the cold start re-ensures it.
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -374,15 +376,12 @@ void main() {
       await ctl.reconcileColdStart();
 
       final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.idle);
-      expect(state.message, contains('Session expired'));
-      expect(socket.ops, contains('down'));
-      expect(socket.ops, isNot(contains('up')));
-      // The device is kept for a fresh bind on the next Connect.
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-1');
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
+      // The surviving tunnel is adopted, not bounced, and the device is kept.
+      expect(socket.ops, isNot(contains('down')));
       expect(await store.deviceId(), 'dev-1');
-      // But the cached dial is dropped: the peer is known gone, so the next
-      // offline cold start must not restore/verify the dead session.
-      expect(await store.lastDialJson(), isNull);
     });
 
     test(

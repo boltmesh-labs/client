@@ -167,15 +167,15 @@ extension ConnectionStage on ConnectionController {
     }
   }
 
-  /// Verifies a `disconnected` stage observed while connected. Server truth
-  /// decides: `GET …/config` proving the peer alive adopts the session,
-  /// `notFound`/`noActivePeer` tears it down, and anything in between falls
-  /// back to local liveness (re-read stage, handshake freshness, in-tunnel
-  /// gateway echo). Unknown evidence defers: a null handshake with a dead or
-  /// skipped gateway probe keeps the verifying banner and lets the health
-  /// ticks / status polls keep corroborating, instead of adopting a
-  /// possibly-dead tunnel as Connected. Never throws; act-time
-  /// epoch/dial guards make overlapping runs idempotent.
+  /// Verifies a `disconnected` stage observed while connected, on local
+  /// liveness alone: a re-read of the stage, handshake freshness, and an
+  /// in-tunnel gateway echo. Unknown evidence defers — a null handshake with a
+  /// dead or skipped gateway probe keeps the verifying banner and lets the
+  /// health ticks / status polls keep corroborating, instead of adopting a
+  /// possibly-dead tunnel as Connected. Server truth is deliberately not
+  /// probed: binding is the backend's concern, and a Connect re-establishes it
+  /// when the tunnel is actually gone. Never throws; act-time epoch/dial
+  /// guards make overlapping runs idempotent.
   Future<void> _corroborateExternalStop(
     int epoch,
     DialParams? dial, {
@@ -190,38 +190,7 @@ extension ConnectionStage on ConnectionController {
       )) {
         return;
       }
-      // 1. Server truth: an explicit dead peer tears down, an unreachable
-      // backend defers (health/status machinery owns it from here).
-      try {
-        await _api.config(dial.deviceId);
-      } on DioException catch (e) {
-        final kind = asVpnError(e)?.kind;
-        if (kind == ApiErrorKind.notFound ||
-            kind == ApiErrorKind.noActivePeer) {
-          AppLog.info('external-stop corroborated dead ($kind) -> idle');
-          await _tearDownCorroboratedDead(
-            epoch,
-            dial,
-            kind: kind,
-            sessionEpoch: sessionEpoch,
-          );
-          return;
-        }
-        AppLog.info('external-stop verify deferred (config unreachable)');
-        return;
-      } catch (e) {
-        AppLog.error('external-stop verify failed', e);
-        return;
-      }
-      if (!_sessionCurrent(
-        sessionEpoch: sessionEpoch,
-        epoch: epoch,
-        dial: dial,
-      )) {
-        AppLog.info('external-stop verify superseded -> skip');
-        return;
-      }
-      // 2. Local liveness: any sign of life adopts (fresh-backend lie).
+      // Local liveness: any sign of life adopts (fresh-backend lie).
       final restage = await _tunnel.readStage();
       if (restage != null &&
           (restage == VpnStage.connected ||
@@ -288,18 +257,13 @@ extension ConnectionStage on ConnectionController {
         );
         return;
       }
-      // 3. All dead: stage still terminal, handshake stale-confirmed,
-      // gateway dead, backend answered — a true outside kill, not the lie.
+      // All dead: stage still terminal, handshake stale-confirmed, gateway
+      // dead — a true outside kill, not the fresh-backend lie.
       AppLog.info(
         'external-stop corroborated dead '
         '(stage down, handshake stale, gateway dead) -> idle',
       );
-      await _tearDownCorroboratedDead(
-        epoch,
-        dial,
-        kind: null,
-        sessionEpoch: sessionEpoch,
-      );
+      await _tearDownCorroboratedDead(epoch, dial, sessionEpoch: sessionEpoch);
     } catch (e) {
       AppLog.error('external-stop corroboration failed', e);
     }
@@ -349,10 +313,9 @@ extension ConnectionStage on ConnectionController {
     return now.difference(confirmedAt) < ConnectionTuning.handshakeStaleAfter;
   }
 
-  /// Tears down a corroborated-dead outside stop: idle (the server peer is
-  /// preserved for one-tap reconnect, except on `notFound` where the device
-  /// itself is gone) plus a guarded ghost-kill for the handle-less native
-  /// tunnel. No-op when superseded.
+  /// Tears down a corroborated-dead outside stop: idle with the dial preserved
+  /// for a one-tap reconnect, plus a guarded ghost-kill for the handle-less
+  /// native tunnel. No-op when superseded.
   ///
   /// Serialized under [_mutex]: an unguarded teardown could overlap a Connect
   /// that started while its stop was blocked (killing the fresh tunnel and
@@ -364,7 +327,6 @@ extension ConnectionStage on ConnectionController {
   Future<void> _tearDownCorroboratedDead(
     int epoch,
     DialParams dial, {
-    required ApiErrorKind? kind,
     required int sessionEpoch,
   }) async {
     final release = await _mutex.acquire('external-stop');
@@ -380,26 +342,10 @@ extension ConnectionStage on ConnectionController {
       _coldRestore.confirmedAt = null;
       _stopPolling();
       _resetLocalHealth();
-      if (kind == ApiErrorKind.notFound) {
-        try {
-          await _wipeDevice();
-        } catch (e) {
-          AppLog.error('external-stop clear device failed', e);
-        }
-      } else if (kind == ApiErrorKind.noActivePeer) {
-        // Device kept for a fresh bind, but the cached dial points at the
-        // peer the server just reported gone: drop it so a later offline
-        // cold start can't restore the dead session.
-        await _clearCachedDial();
-      }
       _idleAfterDeviceGone(
-        message: kind == ApiErrorKind.notFound
-            ? 'Device was removed. Connect again to reprovision.'
-            : kind == ApiErrorKind.noActivePeer
-            ? 'Session expired. Tap Connect to reconnect.'
-            : 'VPN stopped outside the app',
+        message: 'VPN stopped outside the app',
         lastStage: VpnStage.disconnected,
-        keepDial: kind == null,
+        keepDial: true,
       );
       // The native tunnel still needs killing: after a re-attach the plugin
       // lost its handle, so a plain stop is a no-op (`Running tunnels: []`)

@@ -43,9 +43,9 @@ extension ConnectionLifecycle on ConnectionController {
   ///
   /// Best-effort: the in-memory snapshot is authoritative, so a storage
   /// failure only logs. Without this, a device deliberately kept for a fresh
-  /// bind (`noActivePeer`, suspension) would leave [DeviceStore.lastDialJson]
-  /// pointing at a peer the server already reported gone, so the next offline
-  /// cold start optimistically restores — or sits verifying — a dead session.
+  /// bind (suspension) would leave [DeviceStore.lastDialJson] pointing at a
+  /// peer the server already reported gone, so the next offline cold start
+  /// optimistically restores — or sits verifying — a dead session.
   Future<void> _clearCachedDial() async {
     try {
       await _device.clearLastDial();
@@ -136,10 +136,10 @@ extension ConnectionLifecycle on ConnectionController {
 
   /// Resets [snap] to a device-gone idle state: clears any session identity
   /// (dial unless [keepDial]) and every per-session counter/health signal.
-  /// Shared by the 404/peerless paths (status poll, failover, refresh, cold
-  /// restore) and the external-stop teardown. [lastStage] records a specific
+  /// Shared by the 404 paths (status poll, failover, refresh, cold restore)
+  /// and the external-stop teardown. [lastStage] records a specific
   /// observed stage when the caller has one; [keepDial] preserves the dial for
-  /// a one-tap reconnect (external-stop's non-notFound branch).
+  /// a one-tap reconnect (external-stop's corroborated-dead branch).
   void _idleAfterDeviceGone({
     required String message,
     VpnStage? lastStage,
@@ -317,13 +317,6 @@ extension ConnectionLifecycle on ConnectionController {
       // the UI reports `error`.
       snap = snap.copyWith(phase: ConnPhase.working, message: 'Disconnecting…');
       await _stopTunnel('disconnect');
-      // The tunnel is down from here on, so the device holds no peer this
-      // session no matter how the steps below end. Recorded up front because
-      // only a *confirmed* release makes it true, and that is the one case a
-      // later switch can act on (see [_peerReleasedLocally]). Every failure
-      // below withdraws it again — the API-failure paths do it explicitly,
-      // and the outer catch covers any other exception type.
-      _peerReleasedLocally = true;
       // The tunnel is down: the cached dial must never resurrect it, and
       // any pending cold watch is superseded by this explicit teardown.
       _coldRestore.clear();
@@ -340,8 +333,6 @@ extension ConnectionLifecycle on ConnectionController {
           AppLog.info(
             'disconnect api skipped (rate limited, ${seconds}s left)',
           );
-          // The release never reached the server, so a peer may still exist.
-          _peerReleasedLocally = false;
           _finishLocalDisconnect(
             'Disconnected locally. Server release pending '
             '(rate limited, ${seconds}s).',
@@ -365,12 +356,7 @@ extension ConnectionLifecycle on ConnectionController {
             return id;
           }
           // Tunnel is down either way: stay usable, flag the pending
-          // server-side release (cleared on the next connect).
-          //
-          // The peer release is NOT confirmed here, so the local knowledge is
-          // withdrawn: a peer the backend may still hold must be switched
-          // rather than re-bound, and a `/switch` that 404s recovers anyway.
-          _peerReleasedLocally = false;
+          // server-side release (the next connect re-ensures the binding).
           _finishLocalDisconnect(
             'Disconnected locally. Server release pending ($reason)',
           );
@@ -387,12 +373,6 @@ extension ConnectionLifecycle on ConnectionController {
         'disconnect failed kind=${vpnErr?.kind ?? e.runtimeType}',
         vpnErr?.message ?? e,
       );
-      // Reaching here means the peer release was never confirmed (the tunnel
-      // is down, but the backend may still hold a peer), so withdraw the local
-      // knowledge: a later switch must POST the move rather than bind over a
-      // peer that may exist. Covers a non-Dio exception the named catch above
-      // does not, so the flag cannot go stale on an unexpected failure type.
-      _peerReleasedLocally = false;
       // The tunnel was already stopped above: never leave a stale stage
       // next to the error.
       snap = snap.copyWith(

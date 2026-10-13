@@ -254,10 +254,10 @@ abstract class DialParams with _$DialParams {
     @JsonKey(name: 'wg_port') required int wgPort,
     @JsonKey(name: 'wg_dns') required String wgDns,
     @JsonKey(name: 'wg_public_key') required String wgPublicKey,
-    // The server's active peer public key for this device (`GET …/config` and
-    // every bind response report it). Null on backends that predate the field;
-    // when present the controller verifies the stored keypair matches before
-    // starting a tunnel, repairing a divergence a lost bind response can leave.
+    // The server's active peer public key for this device, echoed by every
+    // connect response. Null when the backend omits it; when present the
+    // controller checks the keypair the conf is built from matches before
+    // starting a tunnel, a last line of defence against a stale local identity.
     @JsonKey(name: 'client_public_key') String? clientPublicKey,
     // Every rung this node serves this device on, cheapest first — the ladder the
     // client walks. Each entry carries the port that rung's own device binds, plus

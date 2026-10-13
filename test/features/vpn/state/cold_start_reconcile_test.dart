@@ -122,8 +122,9 @@ void main() {
       expect(state.dial?.serverName, 'one');
       expect(state.serverId, 'srv-1');
       expect(state.message, 'Connected');
-      // Server truth confirmed, tunnel untouched.
-      expect(events, contains('GET:/vpn-devices/dev-1/config'));
+      // The stored key was re-ensured by the idempotent connect, tunnel
+      // untouched.
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('tunnel:start')));
       expect(events, isNot(contains('tunnel:stop')));
     });
@@ -144,9 +145,13 @@ void main() {
           store: store,
           tunnel: tunnel,
           api: configApi(events, (o) {
-            if (o.path.endsWith('/config')) return dialJson();
-            if (o.path.endsWith('/switch')) {
-              return dialJson(serverId: 'srv-2', serverName: 'two');
+            // The restore connect (no target) stays on srv-1; the tap names
+            // srv-2.
+            if (o.path.endsWith('/connect')) {
+              if ((o.data as Map)['server_id'] == 'srv-2') {
+                return dialJson(serverId: 'srv-2', serverName: 'two');
+              }
+              return dialJson();
             }
             throw StateError('unexpected ${o.path}');
           }),
@@ -164,7 +169,7 @@ void main() {
         expect(state.phase, ConnPhase.connected);
         expect(state.dial?.serverId, 'srv-2');
         expect(state.message, isNot(contains('Already connected to')));
-        expect(events, contains('POST:/vpn-devices/dev-1/switch'));
+        expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       },
     );
 
@@ -269,7 +274,7 @@ void main() {
       expect(ctl.debugColdWatchArmed, isTrue);
     });
 
-    test('stale peerless tunnel is stopped, device kept', () async {
+    test('a surviving tunnel with no cached dial re-binds and connects', () async {
       final events = <String>[];
       final store = ColdStore();
       await store.setDeviceId('dev-1');
@@ -279,7 +284,9 @@ void main() {
         store: store,
         tunnel: tunnel,
         api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw peerless(o);
+          // The idempotent connect re-ensures the stored key and returns the
+          // dial to label the surviving tunnel with.
+          if (o.path.endsWith('/connect')) return dialJson();
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -287,12 +294,12 @@ void main() {
       await ctl.reconcileColdStart();
 
       final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.idle);
-      expect(state.dial, isNull);
-      expect(state.message, contains('Session expired'));
-      expect(events, contains('tunnel:stop'));
+      expect(state.phase, ConnPhase.connected);
+      expect(state.dial?.serverId, 'srv-1');
+      expect(state.message, 'Connected');
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('tunnel:start')));
-      // Device kept for a fresh bind on the next Connect.
+      // The device is kept: a peerless device is bound, never treated as gone.
       expect(await store.deviceId(), 'dev-1');
       expect(ctl.debugColdWatchArmed, isFalse);
     });
@@ -395,7 +402,7 @@ void main() {
         expect(state.phase, ConnPhase.connected);
         expect(state.dial?.serverId, 'srv-1');
         expect(state.message, 'Connected');
-        expect(events, contains('GET:/vpn-devices/dev-1/config'));
+        expect(events, contains('POST:/vpn-devices/dev-1/connect'));
         expect(events, contains('tunnel:stop'));
         expect(events, contains('tunnel:start'));
       },
@@ -433,7 +440,7 @@ void main() {
         expect(state.message, 'Connected');
         expect(state.healthNote, isNull);
         expect(state.dial?.serverId, 'srv-1');
-        expect(events, contains('GET:/vpn-devices/dev-1/config'));
+        expect(events, contains('POST:/vpn-devices/dev-1/connect'));
         expect(events, contains('tunnel:stop'));
         expect(events, contains('tunnel:start'));
       },
@@ -471,7 +478,7 @@ void main() {
         expect(state.phase, ConnPhase.connected);
         expect(state.message, 'Connected');
         expect(state.dial?.serverId, 'srv-1');
-        expect(events, contains('GET:/vpn-devices/dev-1/config'));
+        expect(events, contains('POST:/vpn-devices/dev-1/connect'));
         expect(events, contains('tunnel:stop'));
         expect(events, contains('tunnel:start'));
       },
@@ -537,7 +544,7 @@ void main() {
       await ctl.reconcileColdStart();
 
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      expect(events, contains('GET:/vpn-devices/dev-1/config'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, contains('tunnel:stop'));
       expect(events, contains('tunnel:start'));
     });
@@ -643,37 +650,6 @@ void main() {
       expect(state.dial?.serverId, 'srv-1');
       expect(ctl.debugColdWatchArmed, isFalse);
       expect(events, isNot(contains('tunnel:start')));
-    });
-
-    test('lying disconnected stage with stale peer stops the tunnel', () async {
-      final events = <String>[];
-      final store = ColdStore();
-      await store.setDeviceId('dev-1');
-      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-      await store.setLastDialJson(jsonEncode(dialJson()));
-      final tunnel = ColdTunnel(events);
-      final (container, ctl) = coldContainer(
-        store: store,
-        tunnel: tunnel,
-        api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw peerless(o);
-          throw StateError('unexpected ${o.path}');
-        }),
-      );
-
-      await ctl.reconcileColdStart();
-
-      final state = container.read(connectionProvider);
-      expect(state.phase, ConnPhase.idle);
-      expect(state.dial, isNull);
-      expect(state.message, contains('Session expired'));
-      expect(events, contains('tunnel:stop'));
-      // Ghost-kill replaced the reclaim-start: the native kill runs on the
-      // owning backend directly, so no new tunnel is ever started here.
-      expect(events, isNot(contains('tunnel:start')));
-      // The dead peer's cached dial is dropped so a later offline cold start
-      // cannot resurrect it.
-      expect(await store.lastDialJson(), isNull);
     });
 
     test(
@@ -961,18 +937,27 @@ void main() {
       },
     );
 
-    test('ghost stop never restarts the tunnel, even mid-handover', () async {
+    test('corroborated-dead cold restore ghost-kills without restarting', () async {
       final events = <String>[];
       final store = ColdStore();
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       await store.setLastDialJson(jsonEncode(dialJson()));
-      final tunnel = ColdTunnel(events);
+      // Terminal stage and no traffic counters: only the unreadable handshake
+      // could vouch for liveness, and aging past the never-handshook grace
+      // confirms it cannot — so the restore corroborates death and ghost-kills.
+      final tunnel = ColdTunnel(events, traffic: const {});
+      final clock = support.FakeClock();
       final (container, ctl) = coldContainer(
         store: store,
         tunnel: tunnel,
+        clock: clock,
         api: configApi(events, (o) {
-          if (o.path.endsWith('/config')) throw peerless(o);
+          // The peer is bound: the dead thing is the tunnel, not the device.
+          if (o.path.endsWith('/connect')) {
+            clock.advance(const Duration(minutes: 5));
+            return dialJson();
+          }
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -1010,7 +995,7 @@ void main() {
       await ctl.reconcileColdStart();
 
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      expect(events, contains('GET:/vpn-devices/dev-1/config'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
       expect(events, isNot(contains('tunnel:start')));
     });
 
