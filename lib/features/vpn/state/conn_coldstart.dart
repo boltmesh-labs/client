@@ -248,7 +248,7 @@ extension ConnectionColdStart on ConnectionController {
       }
       // Ensure the server holds the key we have — one idempotent call that
       // binds when the key was GC'd while the app was dead, or replays the
-      // live peer unchanged, and returns the dial to (re)start on. No
+      // binding unchanged, and returns the dial to (re)start on. No
       // separate server-truth read: binding is the backend's concern.
       final DialParams dial;
       try {

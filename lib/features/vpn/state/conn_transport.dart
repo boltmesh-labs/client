@@ -9,8 +9,9 @@ extension ConnectionTransport on ConnectionController {
   /// backend reachable, so the tunnel must never be stopped for them.
   ///
   /// The timeout aborts the in-flight request via [CancelToken] (rather than
-  /// leaving it running): a timed-out attempt must not later land and bind a
-  /// key the store has already moved past (see [_bindFreshKey]).
+  /// leaving it running): a timed-out attempt must not later land after a
+  /// retry has already moved the store past its key (the rotate path persists
+  /// its fresh key only once the POST returns).
   Future<T?> _attempt<T>(
     String label,
     Future<T> Function(CancelToken cancel) call, {
@@ -59,6 +60,19 @@ extension ConnectionTransport on ConnectionController {
     ),
     timeout: timeout,
   );
+
+  /// The dial a stored-key or fresh-key bind must have returned, or a
+  /// transport-shaped failure when no attempt resolved ([_connectPost] already
+  /// peeled app-level rejections off into a rethrow, so null here is a pure
+  /// transport outage). No tunnel is running on a bind, so the op's catch
+  /// surfaces it ([_ambiguousFailure] carries user-facing copy).
+  DialParams _requireDial(DialParams? dial, String deviceId) {
+    if (dial != null) return dial;
+    throw _ambiguousFailure(
+      '/vpn-devices/$deviceId/connect',
+      'Connect request failed. Check your connection and retry.',
+    );
+  }
 
   /// Through-tunnel probe first: when a tunnel is up, the control-plane
   /// call is attempted before any stop. Loopback APIs never travel inside
@@ -206,7 +220,7 @@ extension ConnectionTransport on ConnectionController {
   /// stop leaves no tunnel running, so it must surface `error` (ticks stopped,
   /// stale stage dropped) instead of claiming to still be connected on the
   /// old server. Otherwise a previously live session is kept and annotated.
-  /// A Connect reconciles against server truth.
+  /// A later Connect re-binds the stored key.
   void _surfaceOpFailure({
     required Object e,
     required ApiException? vpnErr,

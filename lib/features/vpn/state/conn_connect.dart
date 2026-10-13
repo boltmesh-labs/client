@@ -59,17 +59,19 @@ extension ConnectionConnect on ConnectionController {
     );
     // Ensure the server holds the key we have, on the requested target (or
     // where we already are when no target is named) — one call, no probe.
+    // Routed via [_connectPost] like every other stored-key bind so timeout
+    // and transport-vs-app error semantics stay in one place.
     final storedPub = await _device.publicKey();
     if (!sessionCurrent()) return;
     if (storedPub != null) {
-      final dial = await _api.connect(
-        deviceId: id,
-        publicKey: storedPub,
-        serverId: oneShotServerId ?? snap.serverId,
-        regionId: oneShotRegionId,
+      final dial = await _connectPost(
+        id,
+        storedPub,
+        oneShotRegionId,
+        oneShotServerId ?? snap.serverId,
       );
       if (!sessionCurrent()) return;
-      await _startWith(dial, sessionEpoch: expectedSession);
+      await _startWith(_requireDial(dial, id), sessionEpoch: expectedSession);
       return;
     }
     // No stored key (an identity whose keypair was lost): generate one, ensure
@@ -86,21 +88,18 @@ extension ConnectionConnect on ConnectionController {
   }
 
   /// Binds a fresh client key for [deviceId] and returns the dial params.
-  /// Lock-free: caller must hold [_mutex]. The fresh keypair stays
-  /// ephemeral until the POST succeeds and is only then persisted, so a
+  /// Lock-free: caller must hold [_mutex]. The POST runs through
+  /// [_connectPost] like every stored-key bind, so timeout and
+  /// transport-vs-app error semantics stay in one place. The fresh keypair
+  /// stays ephemeral until the POST succeeds and is only then persisted, so a
   /// timeout can't clobber the working identity. Explicit [regionId]/
   /// [serverId] dial that target for this call only; nulls fall back to the
   /// pinned server in [snap] (serverId only, both null = backend global
   /// auto-pick).
-  ///
-  /// [cancelToken] aborts the in-flight POST when the caller's probe times
-  /// out; a cancelled (or already-cancelled) bind never persists its key, so
-  /// a late success can't leave the store on a key the fallback replaced.
   Future<DialParams> _bindFreshKey(
     String deviceId, {
     String? regionId,
     String? serverId,
-    CancelToken? cancelToken,
     int? sessionEpoch,
   }) async {
     final expectedSession = sessionEpoch ?? _sessionEpoch;
@@ -116,24 +115,16 @@ extension ConnectionConnect on ConnectionController {
       'connect bind device=${AppLog.redact(deviceId)} '
       'pubkey=${AppLog.redact(kp.publicKey)}',
     );
-    final dial = await _api.connect(
-      deviceId: deviceId,
-      publicKey: kp.publicKey,
-      serverId: serverId ?? snap.serverId,
-      regionId: regionId,
-      cancelToken: cancelToken,
+    final dial = await _connectPost(
+      deviceId,
+      kp.publicKey,
+      regionId,
+      serverId ?? snap.serverId,
     );
     if (!sessionCurrent()) {
       throw StateError('Session changed after connect bind.');
     }
-    if (cancelToken != null && cancelToken.isCancelled) {
-      // The caller already moved on: persisting now would bind this key
-      // after the fallback's key, mismatching store and server.
-      throw DioException(
-        requestOptions: RequestOptions(path: '/vpn-devices/$deviceId/connect'),
-        type: DioExceptionType.cancel,
-      );
-    }
+    final bound = _requireDial(dial, deviceId);
     await _device.setKeypair(
       privateKey: kp.privateKey,
       publicKey: kp.publicKey,
@@ -141,7 +132,7 @@ extension ConnectionConnect on ConnectionController {
     if (!sessionCurrent()) {
       throw StateError('Session changed after key persistence.');
     }
-    return dial;
+    return bound;
   }
 
   /// Connect: ensure the server holds our key on the selected target, then
@@ -195,18 +186,13 @@ extension ConnectionConnect on ConnectionController {
         if (sessionEpoch != _sessionEpoch) return;
         if (retryId != null) {
           try {
-            final kp = await _keys.generate();
-            if (sessionEpoch != _sessionEpoch) return;
-            final dial = await _api.connect(
-              deviceId: retryId,
-              publicKey: kp.publicKey,
-              serverId: oneShotServerId ?? snap.serverId,
+            // Same fresh-key bind as the no-stored-key path above (generate,
+            // POST, persist only on success): shared so the two cannot drift.
+            final dial = await _bindFreshKey(
+              retryId,
               regionId: oneShotRegionId,
-            );
-            if (sessionEpoch != _sessionEpoch) return;
-            await _device.setKeypair(
-              privateKey: kp.privateKey,
-              publicKey: kp.publicKey,
+              serverId: oneShotServerId,
+              sessionEpoch: sessionEpoch,
             );
             if (sessionEpoch != _sessionEpoch) return;
             await _startWith(dial, sessionEpoch: sessionEpoch);

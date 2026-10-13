@@ -225,4 +225,37 @@ void main() {
     expect(await store.publicKey(), 'OLD-PUB');
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
   });
+
+  test('a fresh-key bind keeps the store clean when the POST never lands', () async {
+    final events = <String>[];
+    // Device known but its keypair is gone (lost identity): the connect path
+    // mints one and binds it. A transport failure must surface the failure and
+    // must not persist the ephemeral key.
+    final store = support.FakeDeviceStore();
+    await store.setDeviceId('dev-1');
+    final api = VpnApi(
+      recordingDio(events, (o) {
+        if (o.path.endsWith('/connect')) throw networkTimeout(o);
+        throw StateError('unexpected ${o.path}');
+      }),
+    );
+    final container = makeContainer(
+      store: store,
+      keys: support.FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]),
+      api: api,
+    );
+    container.read(connectionProvider.notifier).debugTunnel =
+        support.FakeTunnel();
+
+    await container.read(connectionProvider.notifier).connect();
+
+    final state = container.read(connectionProvider);
+    expect(state.phase, ConnPhase.error);
+    expect(
+      state.message,
+      'Connect request failed. Check your connection and retry.',
+    );
+    expect(await store.privateKey(), isNull);
+    expect(await store.publicKey(), isNull);
+  });
 }

@@ -206,7 +206,7 @@ extension ConnectionSwitch on ConnectionController {
         vpnErr?.message ?? e,
       );
       // A double transport failure leaves the server-side outcome uncertain,
-      // so say so: a Connect reconciles against server truth. The fallback path
+      // so say so: a Connect re-binds the stored key. The fallback path
       // stops the tunnel before the direct POST, so a failure there means no
       // tunnel is running (see [_surfaceOpFailure]).
       _surfaceOpFailure(
