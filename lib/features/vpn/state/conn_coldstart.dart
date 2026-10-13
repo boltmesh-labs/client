@@ -206,11 +206,10 @@ extension ConnectionColdStart on ConnectionController {
             healthNote: null,
             backendIssue: null,
           );
-          _resetLocalHealth();
           // Anchor the never-handshook branch of the handshake policy: a
           // restored tunnel that never completes a handshake is dead, while
           // a slow first handshake must not heal.
-          _connectedAt = _clock.now();
+          _anchorLocalHealth();
           _startPolling();
         } else if (cached != null) {
           // Down/terminal read: stay working while server truth decides —
@@ -227,8 +226,7 @@ extension ConnectionColdStart on ConnectionController {
             healthNote: _externalStopVerifyingNote,
             backendIssue: null,
           );
-          _resetLocalHealth();
-          _connectedAt = _clock.now();
+          _anchorLocalHealth();
         } else {
           // Tunnel up but nothing to label it with while offline: stay
           // usable instead of trapping the user behind a spinner; the
@@ -262,9 +260,7 @@ extension ConnectionColdStart on ConnectionController {
           if (!_coldSessionCurrent(sessionEpoch)) return;
           await _clearCachedDial();
           if (!_coldSessionCurrent(sessionEpoch)) return;
-          _stopPolling();
-          _resetLocalHealth();
-          _coldRestore.armed = false;
+          _endLocalSession();
           _idleAfterDeviceGone(
             message: 'Session expired. Tap Connect to reconnect.',
           );
@@ -285,9 +281,7 @@ extension ConnectionColdStart on ConnectionController {
             AppLog.error('cold restore clear device failed', e);
           }
           if (!_coldSessionCurrent(sessionEpoch)) return;
-          _stopPolling();
-          _resetLocalHealth();
-          _coldRestore.armed = false;
+          _endLocalSession();
           _idleAfterDeviceGone(
             message: 'Device was removed. Connect again to reprovision.',
           );
@@ -335,9 +329,7 @@ extension ConnectionColdStart on ConnectionController {
           );
           await _stopTunnel('cold-start-dead');
           if (!_coldSessionCurrent(sessionEpoch)) return;
-          _stopPolling();
-          _resetLocalHealth();
-          _coldRestore.clear();
+          _endLocalSession();
           snap = _resetSessionCounters(
             snap.copyWith(
               phase: ConnPhase.idle,
@@ -411,8 +403,7 @@ extension ConnectionColdStart on ConnectionController {
       ),
     );
     _coldRestore.armed = false;
-    _resetLocalHealth();
-    _connectedAt = _clock.now();
+    _anchorLocalHealth();
     // Anchor the post-restore grace: the stage stream replays the
     // fresh-backend `disconnected` lie right after this confirm.
     _coldRestore.confirmedAt = verified ? _clock.now() : null;

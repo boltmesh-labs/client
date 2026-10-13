@@ -152,9 +152,7 @@ extension ConnectionRecovery on ConnectionController {
           // terminal state like [_surfaceRecoveryExhausted]: stop the ticks
           // and drop the stage it died on rather than leaving stale reads
           // armed behind an error.
-          _stopPolling();
-          _pollsSinceRotate = 0;
-          _resetLocalHealth();
+          _endLocalSession();
           snap = snap.copyWith(
             phase: ConnPhase.error,
             message:
@@ -271,9 +269,7 @@ extension ConnectionRecovery on ConnectionController {
       AppLog.info('recovery exhausted ($why) ${_healBudgets()}');
       await _stopTunnel('recovery-exhausted');
       if (sessionEpoch != _sessionEpoch) return;
-      _stopPolling();
-      _pollsSinceRotate = 0;
-      _resetLocalHealth();
+      _endLocalSession();
       snap = _resetSessionCounters(
         snap.copyWith(
           phase: ConnPhase.error,
@@ -347,7 +343,7 @@ extension ConnectionRecovery on ConnectionController {
       AppLog.error('auto-failover unexpected failure', e);
       if (sessionEpoch != _sessionEpoch) return;
       if (snap.phase == ConnPhase.working) {
-        _stopPolling();
+        _endLocalSession();
         snap = snap.copyWith(
           phase: ConnPhase.error,
           message:
@@ -645,7 +641,7 @@ extension ConnectionRecovery on ConnectionController {
       if (!sessionCurrent()) return;
       final vpnErr = asVpnError(e);
       AppLog.error('failover restart failed', vpnErr?.message ?? e);
-      _stopPolling();
+      _endLocalSession();
       snap = snap.copyWith(
         phase: ConnPhase.error,
         message:

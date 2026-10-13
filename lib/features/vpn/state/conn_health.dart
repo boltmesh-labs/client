@@ -148,7 +148,7 @@ extension ConnectionHealth on ConnectionController {
         now.difference(_connectedAt!) <
             ConnectionTuning.streamEstablishmentCeiling;
     if (streamEstablishing) {
-      _deadEchoStrikes = 0;
+      _health.observeEcho(null);
       if (snap.healthNote == _checkingRecoveryNote ||
           snap.healthNote == _recoveryInProgressNote) {
         snap = snap.copyWith(healthNote: null);
@@ -210,14 +210,14 @@ extension ConnectionHealth on ConnectionController {
       if (linkUp) {
         gateway = await _gatewayAlive(_overlayDnsFor(dial));
         if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
-        _deadEchoStrikes = gateway == false ? _deadEchoStrikes + 1 : 0;
+        _health.observeEcho(gateway);
       } else {
         gateway = null;
-        _deadEchoStrikes = 0;
+        _health.observeEcho(null);
       }
     } else {
       gateway = null;
-      _deadEchoStrikes = 0;
+      _health.observeEcho(null);
     }
     final echoShortens = _deadEchoStrikes >= ConnectionTuning.echoStallStrikes;
     // A stale handshake alone can't tell a dead peer from an unreachable

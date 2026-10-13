@@ -125,10 +125,7 @@ extension ConnectionLifecycle on ConnectionController {
   /// Callers must not hold [_mutex] here: reset runs after the owning op
   /// (e.g. `disconnect`) has released it.
   void _resetOp() {
-    _stopPolling();
-    _pollsSinceRotate = 0;
-    _resetLocalHealth();
-    _coldRestore.clear();
+    _endLocalSession();
     // Supersede any lock-free discovery/probe still in flight.
     _teardownEpoch++;
     snap = const ConnState(message: 'Ready');
@@ -181,9 +178,7 @@ extension ConnectionLifecycle on ConnectionController {
   /// and the server-side peer release is deferred. Shared by the API-failure
   /// and 429-skip paths so both leave the same usable idle snapshot.
   void _finishLocalDisconnect(String message) {
-    _stopPolling();
-    _pollsSinceRotate = 0;
-    _resetLocalHealth();
+    _endLocalSession();
     snap = _resetSessionCounters(
       snap.copyWith(
         phase: ConnPhase.idle,
@@ -215,9 +210,7 @@ extension ConnectionLifecycle on ConnectionController {
       // secure storage is temporarily unavailable.
       AppLog.error('forget device clear failed', e);
     }
-    _stopPolling();
-    _pollsSinceRotate = 0;
-    _resetLocalHealth();
+    _endLocalSession();
     _idleAfterDeviceGone(message: message);
   }
 

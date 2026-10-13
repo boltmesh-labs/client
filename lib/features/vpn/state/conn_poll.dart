@@ -138,7 +138,7 @@ extension ConnectionPoll on ConnectionController {
         } else {
           note = snap.healthNote;
         }
-        _lastStatusAnswered = true;
+        _health.statusAnswered = true;
         snap = snap.copyWith(
           pollFailures: 0,
           backendIssue: issue,
@@ -175,7 +175,7 @@ extension ConnectionPoll on ConnectionController {
       }
       AppLog.error('status poll transient ($failures)', e);
       final degraded = failures >= ConnectionTuning.degradedPollThreshold;
-      _lastStatusAnswered = false;
+      _health.statusAnswered = false;
       snap = snap.copyWith(
         pollFailures: failures,
         // A later transport failure supersedes an answered 5xx/429 issue;
@@ -228,9 +228,7 @@ extension ConnectionPoll on ConnectionController {
           AppLog.error('status-suspend disconnect best-effort failed', e);
         }
         if (sessionEpoch != _sessionEpoch) return;
-        _stopPolling();
-        _pollsSinceRotate = 0;
-        _resetLocalHealth();
+        _endLocalSession();
         // The device is kept so the user can renew, but its peer is gone:
         // drop the cached dial so an offline cold start can't optimistically
         // restore (or sit verifying) the suspended session.
@@ -294,8 +292,8 @@ extension ConnectionPoll on ConnectionController {
     // A status poll proves the API is reachable, but may use a route outside
     // the tunnel. Only a fresh handshake (or an unsupported reader, where
     // echo strikes cannot fast-track) clears the dead-echo run.
-    if (handshakeFresh) _deadEchoStrikes = 0;
-    _lastStatusAnswered = false;
+    if (handshakeFresh) _health.observeEcho(null);
+    _health.statusAnswered = false;
     snap = snap.copyWith(
       deviceStatus: st,
       lastStatusAt: now,

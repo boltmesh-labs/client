@@ -239,10 +239,10 @@ extension ConnectionTransport on ConnectionController {
         : failureReason(vpnErr, e);
     final prefix = ambiguous ? ambiguousPrefix : cleanPrefix;
     if (tunnelDown) {
-      // No tunnel is running and no reconnect is scheduled: stop the ticks
-      // (they early-return while not connected, but must not linger behind
-      // an error) and drop the stale stage.
-      _stopPolling();
+      // No tunnel is running and no reconnect is scheduled: drop every
+      // session cohort (the ticks early-return while not connected, but must
+      // not linger behind an error) and the stale stage.
+      _endLocalSession();
       snap = snap.copyWith(
         phase: ConnPhase.error,
         message: 'Tunnel stopped. $prefix $reason Tap Connect to reconcile.',

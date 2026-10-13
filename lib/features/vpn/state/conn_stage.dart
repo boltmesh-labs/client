@@ -50,9 +50,7 @@ extension ConnectionStage on ConnectionController {
           stage == VpnStage.disconnecting ||
           stage == VpnStage.exiting ||
           stage == VpnStage.denied) {
-        _coldRestore.armed = false;
-        _stopPolling();
-        _resetLocalHealth();
+        _endLocalSession();
         snap = _resetSessionCounters(
           snap.copyWith(
             phase: ConnPhase.idle,
@@ -121,10 +119,8 @@ extension ConnectionStage on ConnectionController {
         AppLog.info('cold grace: ignoring stale denied stage');
         return;
       }
-      _coldRestore.confirmedAt = null;
       AppLog.info('tunnel stage=denied -> error');
-      _stopPolling();
-      _resetLocalHealth();
+      _endLocalSession();
       snap = snap.copyWith(
         phase: ConnPhase.error,
         message: _deniedMessage(),
@@ -339,9 +335,7 @@ extension ConnectionStage on ConnectionController {
         AppLog.info('corroborated teardown superseded -> skip');
         return;
       }
-      _coldRestore.confirmedAt = null;
-      _stopPolling();
-      _resetLocalHealth();
+      _endLocalSession();
       _idleAfterDeviceGone(
         message: 'VPN stopped outside the app',
         lastStage: VpnStage.disconnected,

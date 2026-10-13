@@ -1,18 +1,51 @@
 part of 'connection_controller.dart';
 
 extension ConnectionTunnel on ConnectionController {
-  /// Drops the cached local health anchors (tunnel start + traffic
-  /// counters) whenever the tunnel is no longer the one they describe.
+  /// Drops the cached local health anchors (tunnel start, status-answered
+  /// flag, dead-echo run — see [TunnelHealth]) plus the display-only traffic
+  /// counters, whenever the tunnel is no longer the one they describe.
+  ///
+  /// A new tunnel generation re-earns its dead-echo strikes
+  /// (`ConnectionTuning.echoStallStrikes`): a dead server re-confirms within
+  /// a few ticks, while a recovered tunnel is never pre-charged.
   void _resetLocalHealth() {
-    _connectedAt = null;
-    _lastStatusAnswered = false;
-    // A new tunnel generation re-earns its dead-echo strikes (see
-    // [ConnectionTuning.echoStallStrikes]); a dead server will re-confirm
-    // within a few ticks, while a recovered tunnel is never pre-charged.
-    _deadEchoStrikes = 0;
+    _health.reset();
+    _clearTrafficCounters();
+  }
+
+  /// Anchors a fresh tunnel generation: drops the previous generation's
+  /// anchors and counters, then sets the tunnel-start clock — one step, so no
+  /// write can land between the reset and the anchor (see
+  /// [TunnelHealth.connectedAt]).
+  void _anchorLocalHealth() {
+    _health.start(_clock.now());
+    _clearTrafficCounters();
+  }
+
+  /// Clears the display-only traffic counters when present. They stay in
+  /// [TunnelHealth]'s sibling cohort ([ConnState]) because the Home card
+  /// renders them.
+  void _clearTrafficCounters() {
     if (snap.rxBytes != null || snap.txBytes != null) {
       snap = snap.copyWith(rxBytes: null, txBytes: null);
     }
+  }
+
+  /// Ends the connection's local bookkeeping: stops the background ticks and
+  /// drops every anchor describing the session/tunnel that just ended (the
+  /// tunnel-generation health cohort, the rotation counter, the cold-restore
+  /// watch). Callers publish the terminal [ConnState] afterwards.
+  ///
+  /// Deliberately does NOT touch the monotonic generation tokens
+  /// ([_tunnelEpoch], [_sessionEpoch], [_teardownEpoch]): those are bumped by
+  /// their own paths to invalidate in-flight work, and clearing them would
+  /// defeat every `_sessionCurrent` guard (see the class doc's "State
+  /// cohorts").
+  void _endLocalSession() {
+    _stopPolling();
+    _resetLocalHealth();
+    _pollsSinceRotate = 0;
+    _coldRestore.clear();
   }
 
   Future<void> _ensureTunnelInit() async {
@@ -301,12 +334,11 @@ extension ConnectionTunnel on ConnectionController {
       snap = const ConnState(message: 'Session ended. Please log in again.');
       return;
     }
-    _resetLocalHealth();
     // Anchor the never-handshook branch of the handshake policy (see
-    // [_connectedAt]): a fresh tunnel gets at least the grace window
-    // before a null read can count (a full stale window on the
+    // [TunnelHealth.connectedAt]): a fresh tunnel gets at least the grace
+    // window before a null read can count (a full stale window on the
     // verification paths; unsupported readers never count).
-    _connectedAt = _clock.now();
+    _anchorLocalHealth();
     _startPolling();
   }
 

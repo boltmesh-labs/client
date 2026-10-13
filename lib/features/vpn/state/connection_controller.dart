@@ -39,6 +39,7 @@ import 'cold_restore_watch.dart';
 import 'connection_state.dart';
 import 'connection_tuning.dart';
 import 'polling_service.dart';
+import 'tunnel_health.dart';
 
 export 'connection_state.dart';
 
@@ -57,6 +58,30 @@ part 'conn_tunnel.dart';
 
 /// Orchestrates provision → connect/switch → disconnect with fresh
 /// keypairs per handshake (backend 409s on key reuse).
+///
+/// ## State cohorts
+///
+/// The controller's mutable bookkeeping falls into distinct **cohorts**, each
+/// with exactly one reset owner. Adding a field means deciding which cohort it
+/// joins and where that cohort's reset lives — that decision, not the storage
+/// location, is what keeps a stale counter from leaking into the next session:
+///
+/// * **Published session budget** — `pollFailures`, `autoHealAttempts`,
+///   `autoFailoverAttempts`, `serverConfirmedDown`, on [ConnState]. Reset by
+///   `_resetSessionCounters`.
+/// * **Private session counter** — `_pollsSinceRotate`. Reset wherever a
+///   session ends, via `_endLocalSession`.
+/// * **Tunnel generation** — `_connectedAt`, `_lastStatusAnswered`,
+///   `_deadEchoStrikes`, owned by [TunnelHealth]. Dropped by
+///   `_resetLocalHealth`, (re)anchored by `_anchorLocalHealth`.
+/// * **Cold restore** — `armed`/`confirmedAt` on [ColdRestoreWatch], cleared
+///   by `ColdRestoreWatch.clear`.
+/// * **Process/lifecycle** — `_backgrounded`, `_rateLimitedUntil`. Owned by
+///   the app lifecycle and clock expiry; never reset by a connection event.
+/// * **Monotonic generation tokens** — `_tunnelEpoch`, `_sessionEpoch`,
+///   `_teardownEpoch`. Bumped, never cleared: they exist to invalidate work
+///   across an `await`.
+/// * **Derived** — `_transportRung`. Re-derived per start by `_applyRung`.
 class ConnectionController extends Notifier<ConnState> {
   VpnApi get _api => ref.read(vpnApiProvider);
   DeviceStore get _device => ref.read(deviceStoreProvider);
@@ -131,17 +156,6 @@ class ConnectionController extends Notifier<ConnState> {
   /// connected (see [_startPolling]). Lifecycle owned by [PollingService].
   final PollingService _polling = PollingService();
 
-  /// True when the most recent status request was *rejected* by the control
-  /// plane (401/403/409/429/5xx). Such a response still proves the control
-  /// plane was reachable, so health must not reinterpret it as a transport
-  /// outage — that is what this flag gates in the heal ladder. A successful
-  /// poll clears it and reaches the same conclusion the other way, through
-  /// [ConnState.lastStatusAt] + `pollFailures: 0` (see
-  /// [isBackendCorroborated]), which is why the success path writes `false`
-  /// here. Reset with the tunnel/session health anchor in
-  /// [_resetLocalHealth].
-  bool _lastStatusAnswered = false;
-
   /// Shared single-flight guards for public/manual ticks as well as timer
   /// ticks. Resume catch-up calls the public methods directly, so the
   /// [PollingService] flags alone are not sufficient to prevent duplicate
@@ -154,13 +168,6 @@ class ConnectionController extends Notifier<ConnState> {
   /// and skips the display-only traffic read, so a swiped-away tunnel keeps
   /// auto-healing at a fraction of the foreground wake rate.
   bool _backgrounded = false;
-
-  /// When the current tunnel (re)started. Anchors the never-handshook
-  /// branch of [isHandshakeStale]: a tunnel that completes no handshake
-  /// within the grace window (supported reader) is dead, while null before
-  /// that is just unknown (slow handshake, wedged IPC, missing native
-  /// reader — which never counts at all, see the readerSupport gate).
-  DateTime? _connectedAt;
 
   /// The transport rung this app process is on (see `conn_obfuscation.dart`).
   ///
@@ -186,25 +193,11 @@ class ConnectionController extends Notifier<ConnState> {
   /// the order and why the stream rung is last.
   TransportRung _transportRung = TransportRung.native;
 
-  /// Consecutive health ticks whose in-tunnel gateway echo was
-  /// *performed-dead* (`false`, never null). Reaching
-  /// [ConnectionTuning.echoStallStrikes] shortens the dead-peer handshake
-  /// window to [ConnectionTuning.echoStallHandshakeAge], so a data-path
-  /// death is caught sooner than the full rekey cycle, and makes the run
-  /// positive path-death evidence for a direct failover. The echo is only
-  /// read once the handshake is old enough to matter (see
-  /// [ConnectionTuning.echoProbeAfter]); a skipped probe clears the run,
-  /// as does any alive/unknown echo, a tunnel restart
-  /// ([_resetLocalHealth]), and a successful status poll only while the
-  /// handshake is still fresh — a poll may answer over a route outside the
-  /// dead tunnel, so it cannot erase a stale-handshake strike run.
-  int _deadEchoStrikes = 0;
-
   /// Test seam: inspect/prime the dead-echo strike counter.
   @visibleForTesting
-  int get debugDeadEchoStrikes => _deadEchoStrikes;
+  int get debugDeadEchoStrikes => _health.deadEchoStrikes;
   @visibleForTesting
-  set debugDeadEchoStrikes(int v) => _deadEchoStrikes = v;
+  set debugDeadEchoStrikes(int v) => _health.deadEchoStrikes = v;
 
   /// Test seam: overrides the handshake read (production uses
   /// [TunnelAdapter.readHandshake]).
@@ -314,6 +307,19 @@ class ConnectionController extends Notifier<ConnState> {
   @visibleForTesting
   set debugColdRestoreConfirmedAt(DateTime? v) => _coldRestore.confirmedAt = v;
 
+  /// Anchors describing the current tunnel generation (see [TunnelHealth]):
+  /// the tunnel-start clock, whether the last status request was answered by
+  /// the control plane, and the dead-echo strike run.
+  final TunnelHealth _health = TunnelHealth();
+
+  /// Read-only views of [TunnelHealth] so the handshake and echo policy keep
+  /// their names; every *write* goes through `_health` (or its methods), so
+  /// the cohort has one owner and one reset (see the class doc's "State
+  /// cohorts").
+  DateTime? get _connectedAt => _health.connectedAt;
+  bool get _lastStatusAnswered => _health.statusAnswered;
+  int get _deadEchoStrikes => _health.deadEchoStrikes;
+
   /// Read/write view of [Notifier.state] for the same-library operation
   /// parts (`conn_*.dart`). Extensions cannot reference the protected
   /// `state` directly, so all part code goes through here. UI and tests
@@ -389,10 +395,7 @@ class ConnectionController extends Notifier<ConnState> {
       final nowUnauth = nextStatus == AuthStatus.unauthenticated;
       if (!wasAuthed || !nowUnauth) return;
       final sessionEpoch = _sessionEpoch;
-      _stopPolling();
-      _pollsSinceRotate = 0;
-      _resetLocalHealth();
-      _coldRestore.clear();
+      _endLocalSession();
       // Serialize teardown with an in-flight connect/heal/failover. The
       // teardown is queued before any post-login VPN operation, so a later
       // login cannot inherit the revoked device or tunnel.
