@@ -50,6 +50,27 @@ extension ConnectionSwitch on ConnectionController {
       return;
     }
     final release = await _mutex.acquire('switch');
+    try {
+      await _switchBody(
+        regionId: regionId,
+        serverId: serverId,
+        pinTarget: pinTarget,
+        expectedTeardown: expectedTeardown,
+      );
+    } finally {
+      release();
+    }
+  }
+
+  /// Lock-free switch body: caller must hold [_mutex] (see [_switchServerOp]).
+  /// Split out so a unified connect entry point can dispatch to a move
+  /// without re-acquiring the (non-reentrant) op mutex.
+  Future<void> _switchBody({
+    required String? regionId,
+    required String? serverId,
+    bool pinTarget = true,
+    int? expectedTeardown,
+  }) async {
     final sessionEpoch = _sessionEpoch;
     final oldDial = snap.dial;
     final wasConnected = snap.phase == ConnPhase.connected;
@@ -220,8 +241,6 @@ extension ConnectionSwitch on ConnectionController {
             '${oldDial?.serverName ?? 'the old server'}.',
         sessionEpoch: sessionEpoch,
       );
-    } finally {
-      release();
     }
   }
 
