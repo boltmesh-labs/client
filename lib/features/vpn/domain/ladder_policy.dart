@@ -7,6 +7,10 @@ import 'diagnosis_policy.dart';
 /// `ConnectionTuning`; the caller reads them and passes them in, so a retune
 /// there is a retune here.
 ///
+/// [RecoveryDecision] is deliberately named apart from the UI's `RecoveryAction`
+/// (see `connection_state.dart`): this is the pure policy output, that is the
+/// user-visible step the tick then publishes.
+///
 /// The ordering this encodes is the one a rung change depends on:
 ///
 ///  * Layer 2 (OS link) freezes everything.
@@ -19,16 +23,16 @@ import 'diagnosis_policy.dart';
 ///    from a powered-off node, and a restart costs no move budget.
 ///  * Only then does the bounded same-server heal run, and it demotes the
 ///    transport only on positive evidence that this transport is blocked (see
-///    [RecoveryStep.stepTransportRung]).
+///    [RecoveryDecision.stepTransportRung]).
 ///  * A stall that survives a heal escalates to a server move, and a stall with
 ///    no budget left waits or surfaces instead of flapping the tunnel.
 ///
 /// The decision is split in two because Layer 3 is real I/O: the caller must
 /// not probe the control plane on a tick that a local signal already decided.
 /// [decideLocalRecovery] answers from Layers 2 and 1 alone and returns
-/// [RecoveryStep.probeControlPlane] when only Layer 3 can decide; the caller
+/// [RecoveryDecision.probeControlPlane] when only Layer 3 can decide; the caller
 /// probes once and asks [decideRecoveryStep].
-enum RecoveryStep {
+enum RecoveryDecision {
   /// Layer 2: the OS reports no usable link. Wait for it to come back.
   pauseNoNetwork,
 
@@ -102,14 +106,14 @@ bool rungStepAvailable({
 /// The decision available from the OS link and the in-tunnel echo, before any
 /// control-plane probe.
 ///
-/// Returns [RecoveryStep.probeControlPlane] for every cell that only Layer 3
+/// Returns [RecoveryDecision.probeControlPlane] for every cell that only Layer 3
 /// can settle — including the ones that will later heal or demote, because a
 /// restart or a rung step is decided after the probe so a live control plane
 /// can still suppress it.
 ///
 /// [lowerRungAvailable] is the pure capability question ("would a heal lower
 /// the rung?"), not the budget-aware one; see [rungStepAvailable].
-RecoveryStep decideLocalRecovery({
+RecoveryDecision decideLocalRecovery({
   required bool hasNetwork,
   required bool? gatewayAlive,
   required bool serverConfirmedDown,
@@ -120,9 +124,9 @@ RecoveryStep decideLocalRecovery({
   required bool canHeal,
   required bool moveBudgetLeft,
 }) {
-  if (!hasNetwork) return RecoveryStep.pauseNoNetwork;
+  if (!hasNetwork) return RecoveryDecision.pauseNoNetwork;
   if (gatewayAlive == true && !serverConfirmedDown) {
-    return RecoveryStep.suppressLiveEcho;
+    return RecoveryDecision.suppressLiveEcho;
   }
   // Local evidence alone, with the control plane deliberately null: a probe
   // made while this tunnel still routes traffic can fail *because* the path is
@@ -145,9 +149,9 @@ RecoveryStep decideLocalRecovery({
         lowerRungAvailable: lowerRungAvailable,
         canHeal: canHeal,
       )) {
-    return RecoveryStep.moveServer;
+    return RecoveryDecision.moveServer;
   }
-  return RecoveryStep.probeControlPlane;
+  return RecoveryDecision.probeControlPlane;
 }
 
 /// The decision once the Layer 3 probe has been read.
@@ -159,10 +163,10 @@ RecoveryStep decideLocalRecovery({
 ///
 /// [escalateToMove] is `shouldEscalateToFailover`'s verdict for this tick (the
 /// heal threshold, the move budget and the backend-quiet gate). It is a separate
-/// step from [RecoveryStep.moveServer] rather than the same one because the two
+/// step from [RecoveryDecision.moveServer] rather than the same one because the two
 /// carry different evidence into the move: a fast-track is a confirmed dead
 /// path, while an escalation is a stall that outlived a heal.
-RecoveryStep decideRecoveryStep({
+RecoveryDecision decideRecoveryStep({
   required bool? gatewayAlive,
   required bool? apiReachable,
   required bool serverConfirmedDown,
@@ -178,7 +182,7 @@ RecoveryStep decideRecoveryStep({
   // function that could heal or move a tunnel whose own path just answered
   // would be a trap for the next caller.
   if (gatewayAlive == true && !serverConfirmedDown) {
-    return RecoveryStep.suppressLiveEcho;
+    return RecoveryDecision.suppressLiveEcho;
   }
   final cause = classifyFailure(
     hasNetwork: true,
@@ -200,28 +204,28 @@ RecoveryStep decideRecoveryStep({
   if (cause == ConnectionFailureCause.tunnelPathDead &&
       moveBudgetLeft &&
       !canStepRung) {
-    return RecoveryStep.moveServer;
+    return RecoveryDecision.moveServer;
   }
   if (!canHeal && apiReachable != true) {
     // A move still requires a positive control-plane result: without one,
     // discovery and the switch POST would only fail, so a failed or unknown
     // probe is not a reason to stop a tunnel or spend a move budget.
-    return RecoveryStep.waitForControlPlane;
+    return RecoveryDecision.waitForControlPlane;
   }
   if (!canHeal && !moveBudgetLeft) {
     // Nothing left to try, and worth surfacing only because the control plane
     // answered: a terminal decision needs one.
-    return RecoveryStep.surfaceExhausted;
+    return RecoveryDecision.surfaceExhausted;
   }
   // Checked before the trailing wait: a stall that outlived its heal is exactly
   // what the escalation gate exists for, and it stays reachable with no heal
   // budget left — there is a move to make, only no restart left to try.
-  if (escalateToMove) return RecoveryStep.escalateToServer;
+  if (escalateToMove) return RecoveryDecision.escalateToServer;
   if (!canHeal) {
     // Heal budget spent, move budget intact, escalation gate not met: keep the
     // tunnel and wait for fresh positive evidence rather than spending a move
     // on a stall that may not be a dead server.
-    return RecoveryStep.verifyTunnel;
+    return RecoveryDecision.verifyTunnel;
   }
   // The cheap rung step is licensed by *local* path-death evidence alone: a
   // performed-dead echo run, the hard handshake ceiling, or a handshake that
@@ -229,12 +233,12 @@ RecoveryStep decideRecoveryStep({
   // required here. It is routed through the very rung under test — in a full
   // tunnel a blocked transport kills the probe too — so requiring it made the
   // step unreachable exactly when it is needed, while the uncorroborated
-  // [RecoveryStep.moveServer] above already acts on the same evidence. Only the
+  // [RecoveryDecision.moveServer] above already acts on the same evidence. Only the
   // cheap action is widened: the move keeps its `cause == tunnelPathDead`
   // criterion, so a bare single dead echo still only restarts.
   final locallyDead =
       cause == ConnectionFailureCause.tunnelPathDead || neverHandshookPastGrace;
   return canStepRung && locallyDead
-      ? RecoveryStep.stepTransportRung
-      : RecoveryStep.restartTunnel;
+      ? RecoveryDecision.stepTransportRung
+      : RecoveryDecision.restartTunnel;
 }
