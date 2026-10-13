@@ -148,13 +148,12 @@ extension ConnectionTunnel on ConnectionController {
     }
     final allowLocal = await _device.allowLocal();
     if (!sessionCurrent()) return;
-    // The rung this start runs on: the serving node's floor, then whatever rung the
-    // health policy has selected through demotion or a confirmed promotion probe.
-    // Applied here because this is the one point a connect, switch, heal,
-    // promotion and cold restore all pass through, so a move onto a node with a
-    // different rung list can never inherit the previous node's rung, and can
-    // never start on a rung the new node does not serve. See
-    // `conn_obfuscation.dart`.
+    // The rung this start runs on: the serving node's floor, then whatever rung
+    // the health policy has selected through demotion. Applied here because
+    // this is the one point a connect, switch, heal and cold restore all pass
+    // through, so a move onto a node with a different rung list can never
+    // inherit the previous node's rung, and can never start on a rung the new
+    // node does not serve. See `conn_obfuscation.dart`.
     _applyRung(dial);
     // The transport the ladder selected for this start. Native resolves to null
     // and costs an unobstructed network nothing; the stream rung rewrites the

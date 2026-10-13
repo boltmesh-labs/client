@@ -42,8 +42,6 @@
   "homeRecoveryReasonDeviceIdentity": "die lokale Geräteidentität ist nicht verfügbar",
   "homeRecoveryReasonRateLimited": "die API verlangt eine Wartezeit vor dem nächsten Versuch",
   "homeRecoveryReasonNoAlternative": "kein anderer Server hatte freie Kapazität",
-  "homeRecoveryReasonTransportProbe": "der Transport wurde nicht rechtzeitig erreichbar",
-  "homeRecoveryReasonStableProbe": "die Verbindung war einen Tag lang stabil",
   "homeRecoveryReasonUnknown": "der Tunnelzustand konnte nicht bestätigt werden",
   "homeTrafficTitle": "Sitzungsdaten",
   "homeTrafficLabel": "Download {down} · Upload {up}",

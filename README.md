@@ -719,16 +719,14 @@ rest of the pipeline (which files, when, verify) is unchanged.
   on format at all: every server advertises `native`, so every region is dialable
   everywhere and a per-region filter could only ever exclude regions that would
   have worked. Demotion rides the existing heal (no new timer or state, and the
-  heal budget is the ladder's whole walk) and is sticky across connects — a
-  reconnect preserves a demotion but never causes one. The one exception is deliberate:
-  after `rungPromotionHealthyFor` (24h) of positively healthy traffic the tick
-  may probe a single cheaper rung, because a blocked transport is usually
-  temporary (a captive portal, a hotel network, one blocked port) and a process
-  that demoted once would otherwise pay the expensive rung for the rest of its
-  life. The last working rung stays armed as the rollback target until the
-  candidate proves live — a fresh handshake or a live gateway echo — and reverts
-  within `rungPromotionProbeTimeout` (45s), so a probe costs one controlled
-  restart and one stale connection at worst.
+  heal budget is the ladder's whole walk) and is sticky within the process — a
+  reconnect preserves a demotion but never causes one. There is no promotion
+  probe: a process that demoted once stays on the cheaper rung for the rest of
+  its life, and only an app restart resets the rung to the node's floor. That
+  drops the one exception the ladder used to carry — a blocked transport is often
+  temporary (a captive portal, a hotel network, one blocked port), and a process
+  that demoted once would otherwise keep paying for the expensive rung — in
+  exchange for no rollback target to arm and no probe window to time out.
   One rung at a time — a start runs on a single rung. The **stream** rung's inner
   format is *always* stock, whatever else the node serves: its bridge injects
   into the stock device, so a session's datagrams have to be readable there. A
@@ -737,10 +735,7 @@ rest of the pipeline (which files, when, verify) is unchanged.
   only against the address on the obfuscated overlay.
   The rung step is the next entry in the advertised list, not the next value in a
   fixed cost order: a node serving stock and stream demotes straight to stream,
-  and one whose `awg` entry this platform cannot run skips it. That also makes the
-  promotion probe structurally non-trivial — every entry carries the port and
-  payload its own rung needs, so a rung below can never build the identical conf
-  the rung above just proved dead.
+  and one whose `awg` entry this platform cannot run skips it.
   The rung step comes *before* the server move, because Layer 1 cannot tell a
   blocked transport from a dead node: a middlebox dropping this rung's traffic
   is indistinguishable from a powered-off server at the echo and the handshake.

@@ -167,14 +167,6 @@ class AppLocalizationsEn extends AppLocalizations {
       'no alternative server had capacity';
 
   @override
-  String get homeRecoveryReasonTransportProbe =>
-      'the transport did not become responsive';
-
-  @override
-  String get homeRecoveryReasonStableProbe =>
-      'the connection has been healthy for a day';
-
-  @override
   String get homeRecoveryReasonUnknown =>
       'tunnel health could not be confirmed';
 

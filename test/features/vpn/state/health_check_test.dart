@@ -1244,11 +1244,11 @@ void main() {
         expect(state.recoveryDetail, contains('never completed'));
       });
 
-      test('a long-healthy session probes one cheaper rung', () async {
+      test('a demoted rung stays put through a long healthy session', () async {
         useLinuxDataPlane();
         final clock = support.FakeClock();
         final controlProbe = support.FakeControlProbe(true);
-        final (container, socket) = await seedStream(
+        final (container, _) = await seedStream(
           clock: clock,
           controlProbe: controlProbe,
         );
@@ -1260,79 +1260,14 @@ void main() {
         expect(ctl.transportRung, TransportRung.awg);
         ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
 
+        // No promotion probe exists: a long, positively healthy session must
+        // not climb back to a cheaper rung. Demotion is sticky for the
+        // process's lifetime and only a restart resets the rung to the floor.
         ctl.debugHandshakeReader = () async => clock.now();
-
-        clock.advance(ConnectionTuning.rungPromotionHealthyFor);
+        clock.advance(const Duration(days: 2));
         await ctl.checkHealthOnce();
-
-        // The probe is one step only: awg -> native, on the stock port and with
-        // a stock body. Because the floor is the node's own cheapest rung, a
-        // probe can never be a no-op that rebuilds the identical conf — the
-        // candidate always carries a different port and format.
-        expect(ctl.transportRung, TransportRung.native);
-        expect(
-          container.read(connectionProvider).recoveryAction,
-          RecoveryAction.tryingNative,
-        );
-        expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51820'));
-        expect(socket.lastConfig, isNot(contains('Jc =')));
-        expect(socket.lastTransport, isNull);
-
-        // A fresh handshake on the candidate confirms it. A later outage must
-        // not revert to the expensive rung as though this probe had failed. The
-        // evidence here is a merely stale observed handshake (not the
-        // never-handshake that now steps a rung), so the only thing this outage
-        // can do is rebuild in place.
-        ctl.debugHandshakeReader = () async => clock.now();
-        await ctl.checkHealthOnce();
-        ctl.debugHandshakeReader = () async => clock.now().subtract(
-          ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
-        );
-        controlProbe.reachable = false;
-        clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
-        await ctl.checkHealthOnce();
-        expect(ctl.transportRung, TransportRung.native);
+        expect(ctl.transportRung, TransportRung.awg);
       });
-
-      test(
-        'a cheaper-rung probe without liveness rolls back quickly',
-        () async {
-          useLinuxDataPlane();
-          final clock = support.FakeClock();
-          final controlProbe = support.FakeControlProbe(true);
-          final (container, socket) = await seedStream(
-            clock: clock,
-            controlProbe: controlProbe,
-          );
-          final ctl = container.read(connectionProvider.notifier);
-          ctl.debugHandshakeReader = () async => clock.now().subtract(
-            ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
-          );
-          await ctl.checkHealthOnce();
-          expect(ctl.transportRung, TransportRung.awg);
-          ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
-
-          ctl.debugHandshakeReader = () async => clock.now();
-
-          clock.advance(ConnectionTuning.rungPromotionHealthyFor);
-          await ctl.checkHealthOnce();
-          expect(ctl.transportRung, TransportRung.native);
-
-          ctl.debugHandshakeReader = () async => null;
-          controlProbe.reachable = false;
-          clock.advance(ConnectionTuning.rungPromotionProbeTimeout);
-          await ctl.checkHealthOnce();
-
-          expect(ctl.transportRung, TransportRung.awg);
-          expect(
-            container.read(connectionProvider).recoveryAction,
-            RecoveryAction.tryingAwg,
-          );
-          expect(socket.lastConfig, contains('Endpoint = 203.0.113.10:51821'));
-          expect(socket.lastConfig, contains('Jc = 3'));
-          expect(socket.lastTransport, isNull);
-        },
-      );
 
       test(
         'the rung step is bounded by the heal budget, then moves servers',

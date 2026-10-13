@@ -175,11 +175,9 @@ class ConnectionController extends Notifier<ConnState> {
   /// plane answers: in a full tunnel the probe shares the dead rung's route, so
   /// requiring it would leave the ladder unable to walk when it is needed.
   ///
-  /// Demotion is sticky: once the ladder has stepped while the tunnel path
-  /// is dead, every later connect stays on the lower rung rather than re-paying
-  /// the failed-probe cycle. After 24 hours of healthy operation, the client
-  /// probes one cheaper rung; absent liveness within the probe window, it
-  /// returns to the rung that was working. A restart re-probes the node's floor.
+  /// Demotion is sticky within the process: once the ladder has stepped while
+  /// the tunnel path is dead, every later connect stays on the lower rung. A
+  /// restart resets the rung to the node's floor, which is the only way back up.
   ///
   /// Walked one rung per qualifying heal by [_demoteRung], so an incident spends
   /// up to [ConnectionTuning.maxHealsPerIncident] of them — a node serving two
@@ -187,11 +185,6 @@ class ConnectionController extends Notifier<ConnState> {
   /// serving a single rung below gets exactly one step. See [TransportRung] for
   /// the order and why the stream rung is last.
   TransportRung _transportRung = TransportRung.native;
-
-  /// Previous known-working rung while a controlled cheaper-rung probe is in
-  /// flight. Cleared on positive liveness or restored on probe failure.
-  TransportRung? _promotionFallbackRung;
-  DialParams? _promotionFallbackDial;
 
   /// Consecutive health ticks whose in-tunnel gateway echo was
   /// *performed-dead* (`false`, never null). Reaching

@@ -319,36 +319,6 @@ extension ConnectionHealth on ConnectionController {
     // not needed to corroborate it — but it is still gated on the link and
     // the control plane below, and a never-polled/blank read leaves it false.
     final serverDown = snap.serverConfirmedDown;
-    final connectedAt = _connectedAt;
-    final promotionProbeTimedOut =
-        _promotionFallbackRung != null &&
-        connectedAt != null &&
-        now.difference(connectedAt) >=
-            ConnectionTuning.rungPromotionProbeTimeout;
-    final handshakeFresh =
-        handshake != null &&
-        handshakeAge != null &&
-        handshakeAge < ConnectionTuning.handshakeStaleAfter;
-    if (_promotionFallbackRung != null) {
-      if (serverDown) {
-        // The backend attributed this failure to the node, not the probed
-        // rung. A subsequent server move will apply that region's rung.
-        _promotionFallbackRung = null;
-        _promotionFallbackDial = null;
-      } else if (gateway == true || handshakeFresh) {
-        _confirmTransportPromotion();
-      } else if (promotionProbeTimedOut) {
-        await _autoHeal(
-          'cheaper transport probe timed out',
-          localConfirmed: true,
-          recoveryReason: RecoveryReason.cheaperTransportUnresponsive,
-          expectedSession: sessionEpoch,
-          expectedEpoch: epoch,
-          expectedDial: dial,
-        );
-        return;
-      }
-    }
     final localEvidence =
         stageStalled ||
         localEchoStalled ||
@@ -371,15 +341,10 @@ extension ConnectionHealth on ConnectionController {
       if (snap.healthNote == _recoveryInProgressNote) {
         snap = snap.copyWith(healthNote: null);
       }
-      if (handshakeFresh) _confirmTransportPromotion();
       snap = snap.copyWith(
         recoveryAction: null,
         recoveryReason: null,
         recoveryDetail: null,
-      );
-      await _maybeProbeCheaperRung(
-        dial,
-        pathHealthy: gateway == true || handshakeFresh,
       );
       return;
     }
@@ -470,7 +435,6 @@ extension ConnectionHealth on ConnectionController {
         return;
       case RecoveryStep.suppressLiveEcho:
         AppLog.info('health suppressed ($why) gateway echo alive');
-        _confirmTransportPromotion();
         // Nothing will run, so the recovery banner would outlive the tick on a
         // proven-alive tunnel. Only this tick's own note is dropped: a note from
         // elsewhere (an outside-stop verification) still owns the snapshot.

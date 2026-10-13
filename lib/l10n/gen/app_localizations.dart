@@ -350,18 +350,6 @@ abstract class AppLocalizations {
   /// **'no alternative server had capacity'**
   String get homeRecoveryReasonNoAlternative;
 
-  /// Recovery reason: the cheaper transport probe did not show liveness in time.
-  ///
-  /// In en, this message translates to:
-  /// **'the transport did not become responsive'**
-  String get homeRecoveryReasonTransportProbe;
-
-  /// Recovery reason: the client is checking whether it can return to a cheaper transport.
-  ///
-  /// In en, this message translates to:
-  /// **'the connection has been healthy for a day'**
-  String get homeRecoveryReasonStableProbe;
-
   /// Fallback recovery reason when no more specific signal was classified.
   ///
   /// In en, this message translates to:

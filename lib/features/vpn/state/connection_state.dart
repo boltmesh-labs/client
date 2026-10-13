@@ -30,8 +30,6 @@ enum RecoveryReason {
   deviceIdentityUnavailable,
   rateLimited,
   noAlternativeServer,
-  cheaperTransportUnresponsive,
-  stableSessionProbe,
   unknown,
 }
 

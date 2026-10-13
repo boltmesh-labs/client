@@ -169,14 +169,6 @@ class AppLocalizationsDe extends AppLocalizations {
       'kein anderer Server hatte freie Kapazität';
 
   @override
-  String get homeRecoveryReasonTransportProbe =>
-      'der Transport wurde nicht rechtzeitig erreichbar';
-
-  @override
-  String get homeRecoveryReasonStableProbe =>
-      'die Verbindung war einen Tag lang stabil';
-
-  @override
   String get homeRecoveryReasonUnknown =>
       'der Tunnelzustand konnte nicht bestätigt werden';
 

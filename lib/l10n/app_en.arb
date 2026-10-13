@@ -222,14 +222,6 @@
   "@homeRecoveryReasonNoAlternative": {
     "description": "Recovery reason: failover discovery returned no other available server."
   },
-  "homeRecoveryReasonTransportProbe": "the transport did not become responsive",
-  "@homeRecoveryReasonTransportProbe": {
-    "description": "Recovery reason: the cheaper transport probe did not show liveness in time."
-  },
-  "homeRecoveryReasonStableProbe": "the connection has been healthy for a day",
-  "@homeRecoveryReasonStableProbe": {
-    "description": "Recovery reason: the client is checking whether it can return to a cheaper transport."
-  },
   "homeRecoveryReasonUnknown": "tunnel health could not be confirmed",
   "@homeRecoveryReasonUnknown": {
     "description": "Fallback recovery reason when no more specific signal was classified."

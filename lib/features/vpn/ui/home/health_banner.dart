@@ -81,9 +81,6 @@ String _recoveryText(
       l10n.homeRecoveryReasonDeviceIdentity,
     RecoveryReason.rateLimited => l10n.homeRecoveryReasonRateLimited,
     RecoveryReason.noAlternativeServer => l10n.homeRecoveryReasonNoAlternative,
-    RecoveryReason.cheaperTransportUnresponsive =>
-      l10n.homeRecoveryReasonTransportProbe,
-    RecoveryReason.stableSessionProbe => l10n.homeRecoveryReasonStableProbe,
     RecoveryReason.unknown => l10n.homeRecoveryReasonUnknown,
   };
   return switch (action) {

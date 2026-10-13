@@ -51,11 +51,7 @@ extension ConnectionRecovery on ConnectionController {
       }
       final dial = snap.dial;
       if (dial == null || snap.phase != ConnPhase.connected) return;
-      final promotionFallback = _promotionFallbackRung;
-      if (promotionFallback == null &&
-          !hardStalled &&
-          !localConfirmed &&
-          _lastStatusAnswered) {
+      if (!hardStalled && !localConfirmed && _lastStatusAnswered) {
         return;
       }
       // A status poll may have proven the backend reachable after the tick
@@ -66,10 +62,7 @@ extension ConnectionRecovery on ConnectionController {
       // is still dead. Checked before the first write below so a suppressed
       // heal does not publish `working` and then walk it back, which cost
       // the UI two rebuilds and a visible "Reconnecting…" flicker.
-      if (promotionFallback == null &&
-          _backendLooksReachable() &&
-          !hardStalled &&
-          !localConfirmed) {
+      if (_backendLooksReachable() && !hardStalled && !localConfirmed) {
         AppLog.info('auto-heal suppressed ($why) backend reachable');
         snap = snap.copyWith(
           healthNote: null,
@@ -95,15 +88,7 @@ extension ConnectionRecovery on ConnectionController {
       // looks dead, whether or not the control plane answers — in a full
       // tunnel the probe shares the dead rung's route, so it cannot be the
       // gate. A bare single dead echo still only rebuilds the current rung.
-      if (promotionFallback != null) {
-        _transportRung = promotionFallback;
-        _promotionFallbackRung = null;
-        _promotionFallbackDial = null;
-        AppLog.info(
-          'transport promotion failed ($why), reverting to '
-          '${promotionFallback.name}',
-        );
-      } else if (demoteTransport) {
+      if (demoteTransport) {
         _demoteRung(dial, why);
       }
       final action = _transportRung == previousRung
