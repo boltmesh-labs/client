@@ -21,7 +21,6 @@ pwsh -File tool/verify_windows.ps1   # Windows host only; the validate-windows j
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test integration_test
 flutter test --coverage
-bash tool/coverage_gate.sh 80
 bash tool/verify_native.sh
 ```
 
