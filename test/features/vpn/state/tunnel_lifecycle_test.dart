@@ -1937,88 +1937,90 @@ void main() {
       expect(state.explicitTarget, isFalse);
     });
 
-    test(
-      'disconnect during discovery is not undone by the in-flight connect',
-      () async {
-        final events = <String>[];
-        final store = FakeStore();
-        await store.setDeviceId('dev-1');
-        await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
-        final regionsStarted = Completer<void>();
-        final releaseRegions = Completer<void>();
-        final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
-        dio.interceptors.add(
-          InterceptorsWrapper(
-            onRequest: (options, handler) async {
-              events.add('${options.method}:${options.path}');
-              if (options.path.endsWith('/vpn-regions')) {
-                regionsStarted.complete();
-                await releaseRegions.future;
-                handler.resolve(
-                  Response(
-                    requestOptions: options,
-                    statusCode: 200,
-                    data: [regionJson('r-best', 'srv-b', 1)],
-                  ),
-                );
-                return;
-              }
-              if (options.path.endsWith('/disconnect')) {
-                handler.resolve(
-                  Response(
-                    requestOptions: options,
-                    statusCode: 200,
-                    data: <String, dynamic>{},
-                  ),
-                );
-                return;
-              }
-              // A live peer on the best target: the buggy path would reuse it
-              // and start the tunnel, silently reversing the Disconnect.
-              if (options.path.endsWith('/connect')) {
-                handler.resolve(
-                  Response(
-                    requestOptions: options,
-                    statusCode: 200,
-                    data: dialJson(serverId: 'srv-b', serverName: 'b'),
-                  ),
-                );
-                return;
-              }
-              throw StateError('unexpected ${options.path}');
-            },
-          ),
-        );
-        final container = makeContainer(
-          store: store,
-          keys: FakeKeys(const []),
-          api: VpnApi(dio),
-        );
-        final ctl = container.read(connectionProvider.notifier);
-        ctl.debugTunnel = FakeTunnel(events);
+    test('disconnect queues behind an in-flight connect, then wins', () async {
+      final events = <String>[];
+      final store = FakeStore();
+      await store.setDeviceId('dev-1');
+      await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
+      final regionsStarted = Completer<void>();
+      final releaseRegions = Completer<void>();
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) async {
+            events.add('${options.method}:${options.path}');
+            if (options.path.endsWith('/vpn-regions')) {
+              regionsStarted.complete();
+              await releaseRegions.future;
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: [regionJson('r-best', 'srv-b', 1)],
+                ),
+              );
+              return;
+            }
+            if (options.path.endsWith('/disconnect')) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: <String, dynamic>{},
+                ),
+              );
+              return;
+            }
+            if (options.path.endsWith('/connect')) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: dialJson(serverId: 'srv-b', serverName: 'b'),
+                ),
+              );
+              return;
+            }
+            throw StateError('unexpected ${options.path}');
+          },
+        ),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: VpnApi(dio),
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.debugTunnel = FakeTunnel(events);
 
-        // Auto (unpinned) discovery is in flight …
-        final quick = ctl.quickConnect();
-        await regionsStarted.future;
-        // … when the user taps Disconnect, which completes first.
-        await ctl.disconnect();
-        expect(container.read(connectionProvider).phase, ConnPhase.idle);
-        releaseRegions.complete();
-        await quick;
+      // Auto (unpinned) discovery is in flight and holds the op mutex …
+      final quick = ctl.quickConnect();
+      await regionsStarted.future;
+      // … when the user taps Disconnect. The whole connect runs under one
+      // mutex slot now, so FIFO order queues the Disconnect behind it instead
+      // of preempting it: the connect completes, then the disconnect tears it
+      // back down. The net state is still idle.
+      final disconnecting = ctl.disconnect();
+      releaseRegions.complete();
+      await quick;
+      await disconnecting;
 
-        // The later Disconnect wins: the in-flight connect must not probe,
-        // bind, or start a tunnel behind it.
-        final state = container.read(connectionProvider);
-        expect(state.phase, ConnPhase.idle);
-        expect(state.dial, isNull);
-        expect(events, contains('GET:/vpn-regions'));
-        expect(events, contains('POST:/vpn-devices/dev-1/disconnect'));
-        expect(
-          events.where((e) => e == 'tunnel:start' || e.contains('/connect')),
-          isEmpty,
-        );
-      },
-    );
+      final state = container.read(connectionProvider);
+      expect(state.phase, ConnPhase.idle);
+      // The connect ran and its dial survives the teardown (kept for a
+      // one-tap reconnect); Auto stayed unpinned.
+      expect(state.dial?.serverId, 'srv-b');
+      expect(state.serverId, isNull);
+      expect(events, contains('GET:/vpn-regions'));
+      expect(events, contains('POST:/vpn-devices/dev-1/connect'));
+      expect(events, contains('tunnel:start'));
+      expect(events, contains('POST:/vpn-devices/dev-1/disconnect'));
+      // The connect is issued *before* the queued teardown, not after it.
+      expect(
+        events.indexOf('tunnel:start'),
+        lessThan(events.indexOf('POST:/vpn-devices/dev-1/disconnect')),
+      );
+    });
 
     test('working guard is a no-op', () async {
       final events = <String>[];

@@ -37,7 +37,7 @@ extension ConnectionTunnel on ConnectionController {
   /// watch). Callers publish the terminal [ConnState] afterwards.
   ///
   /// Deliberately does NOT touch the monotonic generation tokens
-  /// ([_tunnelEpoch], [_sessionEpoch], [_teardownEpoch]): those are bumped by
+  /// ([_tunnelEpoch], [_sessionEpoch]): those are bumped by
   /// their own paths to invalidate in-flight work, and clearing them would
   /// defeat every `_sessionCurrent` guard (see the class doc's "State
   /// cohorts").

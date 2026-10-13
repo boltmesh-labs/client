@@ -78,9 +78,8 @@ part 'conn_tunnel.dart';
 ///   by `ColdRestoreWatch.clear`.
 /// * **Process/lifecycle** — `_backgrounded`, `_rateLimitedUntil`. Owned by
 ///   the app lifecycle and clock expiry; never reset by a connection event.
-/// * **Monotonic generation tokens** — `_tunnelEpoch`, `_sessionEpoch`,
-///   `_teardownEpoch`. Bumped, never cleared: they exist to invalidate work
-///   across an `await`.
+/// * **Monotonic generation tokens** — `_tunnelEpoch`, `_sessionEpoch`.
+///   Bumped, never cleared: they exist to invalidate work across an `await`.
 /// * **Derived** — `_transportRung`. Re-derived per start by `_applyRung`.
 class ConnectionController extends Notifier<ConnState> {
   VpnApi get _api => ref.read(vpnApiProvider);
@@ -142,15 +141,6 @@ class ConnectionController extends Notifier<ConnState> {
   bool get _alive => ref.mounted && !_disposed;
 
   bool _sessionIsCurrent(int epoch) => _alive && epoch == _sessionEpoch;
-
-  /// Bumped on every explicit teardown: Disconnect, Reset/Forget-device, and
-  /// session revocation. A lock-free operation spanning awaits — Quick
-  /// Connect discovery then probe/bind/start — captures it before its first
-  /// await and refuses to dial once it changed, so a Disconnect tapped while
-  /// discovery is in flight can never be undone by the earlier connect.
-  /// Distinct from [_sessionEpoch] (auth transitions) and [_tunnelEpoch]
-  /// (every tunnel stop, including internal restarts).
-  int _teardownEpoch = 0;
 
   /// Background ticks (status poll + local health check); run only while
   /// connected (see [_startPolling]). Lifecycle owned by [PollingService].
@@ -348,8 +338,8 @@ class ConnectionController extends Notifier<ConnState> {
       identical(snap.dial, dial);
 
   /// [_sessionCurrent] for callers that captured only *some* of the anchors
-  /// (a lock-free discovery op that knows no tunnel epoch, or a public tick
-  /// that may run before any tunnel exists). A null anchor is not checked —
+  /// (a recovery path handed just the ones it knows, or a public tick that may
+  /// run before any tunnel exists). A null anchor is not checked —
   /// the check is skipped, never treated as a mismatch. Callers that do have
   /// every anchor should prefer [_sessionCurrent]: it is one expression
   /// rather than three independent early returns.
@@ -429,12 +419,14 @@ class ConnectionController extends Notifier<ConnState> {
   Future<void> ensureProvisioned({String? regionId, String? serverId}) =>
       _ensureProvisionedOp(regionId: regionId, serverId: serverId);
 
-  /// Connect: the single binding call, with or without a target.
-  Future<void> connect() => _connectOp();
+  /// Connect: the single binding call, with or without a target. No discovery:
+  /// the backend binds/replays/rotates/moves on the stored key (the reconcile
+  /// path).
+  Future<void> connect() => _connectOp(const ReconcileTarget());
 
   /// Quick Connect (Home power button / Regions tile): sticky target,
   /// else the lowest-load region with capacity.
-  Future<void> quickConnect() => _quickConnectOp();
+  Future<void> quickConnect() => _connectOp(const StickyTarget());
 
   /// Restart the tunnel onto another region/server. [pinTarget] false
   /// dials one-shot without pinning (Auto moves keep the state unpinned); a
@@ -443,10 +435,8 @@ class ConnectionController extends Notifier<ConnState> {
     required String? regionId,
     required String? serverId,
     bool pinTarget = true,
-  }) => _switchServerOp(
-    regionId: regionId,
-    serverId: serverId,
-    pinTarget: pinTarget,
+  }) => _connectOp(
+    ExplicitTarget(regionId: regionId, serverId: serverId, pin: pinTarget),
   );
 
   /// Rotate the WireGuard key in place (same server + overlay IP).

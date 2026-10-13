@@ -10,7 +10,12 @@ extension ConnectionSwitch on ConnectionController {
   /// binding is. The
   /// key we already hold is moved, which preserves the overlay IP and byte
   /// counters; a device that somehow holds no key binds a fresh one.
-  Future<void> _switchServerOp({
+  ///
+  /// Lock-free: caller must hold [_mutex] (see [_connectOp], which resolves the
+  /// target and dispatches here). Split out from the old lock-taking
+  /// `switchServer` so the single connect entry point can run it without
+  /// re-acquiring the non-reentrant op mutex.
+  Future<void> _switchBody({
     required String? regionId,
     required String? serverId,
     // False for one-shot Auto moves: the picked target is dialed without
@@ -19,57 +24,6 @@ extension ConnectionSwitch on ConnectionController {
     // considers automatic — so this single flag also carries the explicit bit
     // written by [selectTarget].
     bool pinTarget = true,
-    // Quick Connect's snapshot of [_teardownEpoch]: a Disconnect that landed
-    // during its lock-free discovery must win over this queued switch.
-    int? expectedTeardown,
-  }) async {
-    // Clear any previous failure signal first: only an actual failure below
-    // sets it again, so the benign same-target no-op never snacks.
-    snap = snap.copyWith(opFailed: false);
-    // Skip only against a target the tunnel is actually on. A pin outlives
-    // the target it names — it is restored from storage on every cold start —
-    // so a restored pin can name a server the live dial is not on, and
-    // skipping there would swallow a real tap while reporting "already
-    // connected" for a tunnel that is somewhere else. A server request
-    // therefore compares against the live dial, and only while one is up.
-    final live = snap.phase == ConnPhase.connected ? snap.dial?.serverId : null;
-    final sameServer = serverId != null && serverId == live;
-    if (sameServer) {
-      AppLog.info('switch skipped: already on $serverId');
-      // No tunnel work needed, but an explicit tap still carries pin intent:
-      // Auto (unpinned) tapping the live server must land pinned so the
-      // Regions tab highlights it. One-shot Auto moves (pinTarget false)
-      // stay unpinned.
-      if (pinTarget) {
-        selectTarget(serverId: serverId, explicitTarget: pinTarget);
-      }
-      snap = snap.copyWith(
-        message:
-            'Already connected to ${snap.dial?.serverName ?? 'this server'}.',
-      );
-      return;
-    }
-    final release = await _mutex.acquire('switch');
-    try {
-      await _switchBody(
-        regionId: regionId,
-        serverId: serverId,
-        pinTarget: pinTarget,
-        expectedTeardown: expectedTeardown,
-      );
-    } finally {
-      release();
-    }
-  }
-
-  /// Lock-free switch body: caller must hold [_mutex] (see [_switchServerOp]).
-  /// Split out so a unified connect entry point can dispatch to a move
-  /// without re-acquiring the (non-reentrant) op mutex.
-  Future<void> _switchBody({
-    required String? regionId,
-    required String? serverId,
-    bool pinTarget = true,
-    int? expectedTeardown,
   }) async {
     final sessionEpoch = _sessionEpoch;
     final oldDial = snap.dial;
@@ -83,12 +37,6 @@ extension ConnectionSwitch on ConnectionController {
     var tunnelDown = false;
     String? id;
     try {
-      // Quick Connect snapshotted [_teardownEpoch] before its lock-free
-      // discovery: a Disconnect that landed while this switch was queued must
-      // win. Checked first so a superseded switch surfaces nothing.
-      if (expectedTeardown != null && expectedTeardown != _teardownEpoch) {
-        return;
-      }
       // A throttled client must not spend more of the shared limiter budget:
       // surface the countdown and skip the POST (a live tunnel stays up).
       if (_blockedByRateLimit('switch')) return;
@@ -281,7 +229,7 @@ extension ConnectionSwitch on ConnectionController {
     const wasConnected = true;
     final sessionEpoch = _sessionEpoch;
     // Snapshot the working identity; read inside the `try` so a throwing
-    // secure-storage read still releases the mutex (see _switchServerOp).
+    // secure-storage read still releases the mutex (see _switchBody).
     String? oldPriv;
     String? oldPub;
     // True once a transport failure leaves the server-side outcome

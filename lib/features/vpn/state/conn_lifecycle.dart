@@ -90,9 +90,6 @@ extension ConnectionLifecycle on ConnectionController {
       // Every step here reads providers through `ref` and the terminal write
       // touches `state`, so re-check liveness before each of them.
       if (!_alive) return;
-      // An in-flight lock-free discovery/probe belonging to the revoked
-      // session must not dial once this queued teardown has run.
-      _teardownEpoch++;
       if (sessionEpoch != _sessionEpoch) {
         // A new login may already have changed the auth generation, but the
         // physical tunnel and device identity still belong to the revoked
@@ -126,8 +123,6 @@ extension ConnectionLifecycle on ConnectionController {
   /// (e.g. `disconnect`) has released it.
   void _resetOp() {
     _endLocalSession();
-    // Supersede any lock-free discovery/probe still in flight.
-    _teardownEpoch++;
     snap = const ConnState(message: 'Ready');
   }
 
@@ -300,9 +295,6 @@ extension ConnectionLifecycle on ConnectionController {
   /// instead of racing a second read that could cache a transient null and
   /// silently skip the hard delete.
   Future<String?> _disconnectBody() async {
-    // Bump before the first await so a lock-free Quick Connect discovery
-    // that already ran can never bind/dial after this explicit teardown.
-    _teardownEpoch++;
     String? id;
     try {
       // The tunnel stop is authoritative and never throws: run it first so
