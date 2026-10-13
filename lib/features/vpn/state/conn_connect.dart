@@ -73,29 +73,63 @@ extension ConnectionConnect on ConnectionController {
       await _startWith(dial, sessionEpoch: expectedSession);
       return;
     }
-    try {
-      AppLog.info('connect config device=${AppLog.redact(id)}');
-      final reconciled = await _configReconciled(
-        id,
-        sessionEpoch: expectedSession,
-      );
-      if (!sessionCurrent()) return;
-      await _startWith(reconciled.dial, sessionEpoch: expectedSession);
-      return;
-    } on DioException catch (e) {
-      // Only peerless (config after disconnect/GC) falls through to a
-      // fresh connect. A true 404 (revoked/foreign device) and every other
-      // failure (401/503/offline) surface instead of wasting a key
-      // rotation on a handshake that would fail the same way.
-      final kind = asVpnError(e)?.kind;
-      if (kind != ApiErrorKind.noActivePeer) rethrow;
-      AppLog.info(
-        'connect config peerless device=${AppLog.redact(id)} -> bind fresh peer',
-      );
+    // Ensure a peer on the key we already hold, in one call: the backend's
+    // `connect` is idempotent on that key (a device already carrying it
+    // replays the live peer) and creates the peer when the device is peerless.
+    // So the common reconnect needs no separate `GET …/config` probe and never
+    // sees `DEVICE_NO_PEER`. A graceful disconnect deletes the server peer but
+    // keeps the local key, so replaying the stored key is exactly the reconnect
+    // case.
+    final storedPub = await _device.publicKey();
+    if (!sessionCurrent()) return;
+    if (storedPub != null) {
+      try {
+        final dial = await _api.connect(
+          deviceId: id,
+          publicKey: storedPub,
+          serverId: snap.serverId,
+        );
+        if (!sessionCurrent()) return;
+        _peerReleasedLocally = false;
+        await _startWith(dial, sessionEpoch: expectedSession);
+        return;
+      } on DioException catch (e) {
+        // `connect` 409s only when a *different* key is already bound (a lost
+        // bind response, or a rolled-back local store): reconcile from server
+        // truth, which rotates the peer onto a key we control. Anything else
+        // (revoked device, 401/503/offline) propagates instead of binding a
+        // tunnel that would fail the same way.
+        final kind = asVpnError(e)?.kind;
+        if (kind != ApiErrorKind.alreadyConnected) rethrow;
+        AppLog.info(
+          'connect stored key divergent device=${AppLog.redact(id)} '
+          '-> reconcile via config',
+        );
+      }
+      // Read server truth and reconcile (rotate the peer onto a key we
+      // control). If the peer vanished between the 409 and the read (server
+      // GC), fall through to a fresh bind rather than surface a failure.
+      try {
+        final reconciled = await _configReconciled(
+          id,
+          sessionEpoch: expectedSession,
+        );
+        if (!sessionCurrent()) return;
+        await _startWith(reconciled.dial, sessionEpoch: expectedSession);
+        return;
+      } on DioException catch (e) {
+        final kind = asVpnError(e)?.kind;
+        if (kind != ApiErrorKind.noActivePeer) rethrow;
+        AppLog.info(
+          'connect peer gone during reconcile device=${AppLog.redact(id)} '
+          '-> bind fresh peer',
+        );
+      }
     }
-    // Ephemeral until the server binds it: persisting first would clobber
-    // the working key when the POST times out (e.g. API routed into a
-    // live full-tunnel) and leave the store unrecoverable.
+    // No stored key (an identity whose keypair was lost): bind a fresh peer.
+    // Ephemeral until the server binds it: persisting first would clobber the
+    // working key when the POST times out (e.g. API routed into a live
+    // full-tunnel) and leave the store unrecoverable.
     final dial = await _bindFreshPeer(
       id,
       regionId: oneShotRegionId,
@@ -325,10 +359,11 @@ extension ConnectionConnect on ConnectionController {
   /// Auto Quick Connect onto [best] without pinning, without ever issuing a
   /// doomed `POST /connect`.
   ///
-  /// The backend binds a fresh peer on `connect` only for a *peerless*
-  /// device and 409s otherwise, but a device can already hold a server-side
-  /// peer — the norm right after provision, or after a session that ended
-  /// without a graceful disconnect. Ask server truth first ([_probeActiveDial]):
+  /// The backend binds a fresh peer on `connect` for a peerless device and
+  /// replays the live one when the supplied key already matches, but a device
+  /// can already hold a server-side peer on a *different* key — the norm right
+  /// after provision, or after a session that ended without a graceful
+  /// disconnect. Ask server truth first ([_probeActiveDial]):
   ///  - live peer already inside [best] → start it as-is (no mutation);
   ///  - live peer elsewhere → one-shot `switch` onto [best];
   ///  - peerless → `connect` a fresh peer on [best].

@@ -977,7 +977,7 @@ void main() {
   });
 
   test(
-    'missing device config surfaces reprovision without bind attempt',
+    'missing device on connect surfaces reprovision without a bind attempt',
     () async {
       final events = <String>[];
       final store = FakeStore();
@@ -986,7 +986,8 @@ void main() {
       final keys = FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]);
       final api = VpnApi(
         recordingDio(events, (o) {
-          if (o.path.endsWith('/config')) throw missingDevice(o);
+          // The idempotent connect reports the revoked/foreign device.
+          if (o.path.endsWith('/connect')) throw missingDevice(o);
           throw StateError('unexpected ${o.path}');
         }),
       );
@@ -996,8 +997,9 @@ void main() {
 
       await ctl.connect();
 
-      // True 404 must not fall through to POST /connect: no key burned.
-      expect(events, ['GET:/vpn-devices/dev-1/config']);
+      // A true 404 must not reprovision blindly: the identity is wiped and
+      // no bind key is spent.
+      expect(events, ['POST:/vpn-devices/dev-1/connect']);
       expect(await store.deviceId(), isNull);
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.error);
@@ -1349,6 +1351,9 @@ void main() {
         if (o.path.endsWith('/config')) return dialJson();
         if (o.path.endsWith('/switch')) throw peerless(o);
         if (o.path.endsWith('/connect')) {
+          // The seed replays the stored key on the current server; the
+          // peerless rebind binds a fresh key on the new target.
+          if ((o.data as Map)['public_key'] == 'OLD-PUB') return dialJson();
           return dialJson(serverId: 'srv-2', serverName: 'two');
         }
         throw StateError('unexpected ${o.path}');
@@ -1758,7 +1763,7 @@ void main() {
       // still listed before dialing it.
       expect(events, [
         'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
+        'POST:/vpn-devices/dev-1/connect',
         'tunnel:start',
       ]);
       final state = container.read(connectionProvider);
@@ -1847,7 +1852,7 @@ void main() {
       // The pin survives the disconnect and discovery confirms it.
       expect(events, [
         'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
+        'POST:/vpn-devices/dev-1/connect',
         'tunnel:start',
       ]);
       final state = container.read(connectionProvider);
@@ -1883,7 +1888,7 @@ void main() {
 
       expect(events, [
         'GET:/vpn-regions',
-        'GET:/vpn-devices/dev-1/config',
+        'POST:/vpn-devices/dev-1/connect',
         'tunnel:start',
       ]);
       final state = container.read(connectionProvider);

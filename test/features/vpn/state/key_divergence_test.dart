@@ -73,6 +73,9 @@ void main() {
       String? rotatedKey;
       final api = VpnApi(
         recordingDio(events, (o) {
+          // The idempotent connect 409s when a different key is already bound:
+          // the stored OLD-PUB cannot handshake, so the client reconciles.
+          if (o.path.endsWith('/connect')) throw alreadyConnected(o);
           if (o.path.endsWith('/config')) {
             // The server's active peer holds a key whose bind response was
             // lost: the stored OLD-PUB can never handshake.
@@ -96,6 +99,7 @@ void main() {
       await container.read(connectionProvider.notifier).connect();
 
       expect(events, [
+        'POST:/vpn-devices/dev-1/connect',
         'GET:/vpn-devices/dev-1/config',
         'POST:/vpn-devices/dev-1/rotate-keys',
         'tunnel:start',
@@ -107,14 +111,15 @@ void main() {
     },
   );
 
-  test('connect starts as-is when the server peer key matches', () async {
+  test('connect replays a matching peer key without rotating', () async {
     final events = <String>[];
     final store = support.FakeDeviceStore();
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final api = VpnApi(
       recordingDio(events, (o) {
-        if (o.path.endsWith('/config')) {
+        // The idempotent connect replays the live peer for the supplied key.
+        if (o.path.endsWith('/connect')) {
           return dialJson(clientPublicKey: 'OLD-PUB');
         }
         throw StateError('unexpected ${o.path}');
@@ -131,7 +136,7 @@ void main() {
 
     await container.read(connectionProvider.notifier).connect();
 
-    expect(events, ['GET:/vpn-devices/dev-1/config', 'tunnel:start']);
+    expect(events, ['POST:/vpn-devices/dev-1/connect', 'tunnel:start']);
     expect(await store.privateKey(), 'OLD-PRIV');
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
   });
@@ -295,11 +300,16 @@ void main() {
           }
           if (o.path.endsWith('/switch')) throw peerless(o);
           if (o.path.endsWith('/connect')) {
-            return dialJson(
-              serverId: 'srv-2',
-              serverName: 'two',
-              clientPublicKey: 'FRESH-PUB',
-            );
+            // The seed replays the stored key on the current server; the
+            // peerless rebind binds the fresh switch key on the new target.
+            if ((o.data as Map)['public_key'] == 'FRESH-PUB') {
+              return dialJson(
+                serverId: 'srv-2',
+                serverName: 'two',
+                clientPublicKey: 'FRESH-PUB',
+              );
+            }
+            return dialJson(clientPublicKey: 'OLD-PUB');
           }
           throw StateError('unexpected ${o.path}');
         }),

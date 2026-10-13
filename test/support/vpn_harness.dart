@@ -271,10 +271,31 @@ DioException idempotencyConflict(RequestOptions o) => DioException(
 /// Dio that records every outgoing `METHOD:path` into [events] and answers
 /// from [respond] (return the response body, or throw a [DioException] to
 /// simulate a failure).
+///
+/// The connect path binds through the idempotent `POST …/connect`, while most
+/// fixtures model the connected state as a `GET …/config` dial. A fixture that
+/// does not model `/connect` (its [respond] throws `StateError: unexpected`)
+/// therefore falls back to its `config` answer for that one path — the dial is
+/// the same request either way. A fixture that wants a distinct `/connect`
+/// answer, or wants it to fail, handles `/connect` itself and never reaches the
+/// fallback; one that answers neither still fails on the rewritten `config`.
 Dio recordingDio(
   List<String> events,
   dynamic Function(RequestOptions options) respond,
 ) {
+  dynamic answer(RequestOptions options) {
+    try {
+      return respond(options);
+    } on StateError {
+      if (!options.path.endsWith('/connect')) rethrow;
+      return respond(
+        options.copyWith(
+          path: options.path.replaceFirst('/connect', '/config'),
+        ),
+      );
+    }
+  }
+
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost:8000/v1'));
   dio.interceptors.add(
     InterceptorsWrapper(
@@ -285,7 +306,7 @@ Dio recordingDio(
             Response(
               requestOptions: options,
               statusCode: 200,
-              data: respond(options),
+              data: answer(options),
             ),
           );
         } on DioException catch (e) {
