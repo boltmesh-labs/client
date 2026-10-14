@@ -275,14 +275,14 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
-  String regionsServerSubtitle(String endpoint, int port, int peers) {
+  String regionsServerSubtitle(int peers) {
     String _temp0 = intl.Intl.pluralLogic(
       peers,
       locale: localeName,
       other: '$peers Peers',
       one: '1 Peer',
     );
-    return '$endpoint:$port · $_temp0';
+    return '$_temp0';
   }
 
   @override

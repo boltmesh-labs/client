@@ -68,7 +68,7 @@
   "regionsLowestLoad": "Region mit niedrigster Last: {name}",
   "regionsNoMatch": "Keine Regionen für diese Suche.",
   "regionsServerCount": "{count, plural, =1{1 Server} other{{count} Server}} · {peers, plural, =1{1 Peer} other{{peers} Peers}}",
-  "regionsServerSubtitle": "{endpoint}:{port} · {peers, plural, =1{1 Peer} other{{peers} Peers}}",
+  "regionsServerSubtitle": "{peers, plural, =1{1 Peer} other{{peers} Peers}}",
   "regionsSwitching": "Wechsle …",
   "regionsRefresh": "Regionen aktualisieren",
   "regionsRefreshed": "Regionen aktualisiert ({count} Regionen)",

@@ -368,16 +368,10 @@
       }
     }
   },
-  "regionsServerSubtitle": "{endpoint}:{port} · {peers, plural, =1{1 peer} other{{peers} peers}}",
+  "regionsServerSubtitle": "{peers, plural, =1{1 peer} other{{peers} peers}}",
   "@regionsServerSubtitle": {
-    "description": "Server row subtitle with endpoint and peer count.",
+    "description": "Server row subtitle with active peer count.",
     "placeholders": {
-      "endpoint": {
-        "type": "String"
-      },
-      "port": {
-        "type": "int"
-      },
       "peers": {
         "type": "int"
       }

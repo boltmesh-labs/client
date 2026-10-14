@@ -506,11 +506,11 @@ abstract class AppLocalizations {
   /// **'{count, plural, =1{1 server} other{{count} servers}} · {peers, plural, =1{1 peer} other{{peers} peers}}'**
   String regionsServerCount(int count, int peers);
 
-  /// Server row subtitle with endpoint and peer count.
+  /// Server row subtitle with active peer count.
   ///
   /// In en, this message translates to:
-  /// **'{endpoint}:{port} · {peers, plural, =1{1 peer} other{{peers} peers}}'**
-  String regionsServerSubtitle(String endpoint, int port, int peers);
+  /// **'{peers, plural, =1{1 peer} other{{peers} peers}}'**
+  String regionsServerSubtitle(int peers);
 
   /// Footer shown while a server switch is in progress.
   ///

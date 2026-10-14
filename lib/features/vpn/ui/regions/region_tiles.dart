@@ -69,9 +69,7 @@ class RegionExpansionTile extends StatelessWidget {
         for (final s in region.servers)
           ListTile(
             title: Text(s.name),
-            subtitle: Text(
-              l10n.regionsServerSubtitle(s.endpoint, s.wgPort, s.activePeers),
-            ),
+            subtitle: Text(l10n.regionsServerSubtitle(s.activePeers)),
             enabled: !busy,
             selected: selectedServerId == s.id,
             trailing: selectedServerId == s.id ? const Icon(Icons.check) : null,
