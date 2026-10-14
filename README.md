@@ -915,11 +915,11 @@ rest of the pipeline (which files, when, verify) is unchanged.
 `wireguard_flutter_plus` exposes only byte counters, so a handshake read needs a
 source of its own. Android reads it from the in-process AWG host's status — the
 `statusAwg` reply's `lastHandshake`, see `AndroidTunnelAdapter` — and Linux and
-Windows read it from the `boltmeshd` helper's status. The app's own
-`com.boltmesh/handshake` → `getLastHandshake` channel served the stock plugin's
-`GoBackend` and is no longer implemented on any platform; Apple still asks it as
-a placeholder for its future handler, where a missing handler resolves as
-unknown. A null never heals — only the degraded-stage path acts. Dart side:
+Windows read it from the `boltmeshd` helper's status. The stock plugin's
+`GoBackend` was once asked over an app-owned `com.boltmesh/handshake` channel;
+nothing implements that channel today and `WireGuardTunnelAdapter` no longer
+reaches for one, so on Apple the read is unknown unless a reader is injected.
+A null never heals — only the degraded-stage path acts. Dart side:
 `lib/features/vpn/data/` — `tunnel_adapter.dart`, whose
 `handshakeReaderSupported` gates the never-handshook branch. Every
 `isHandshakeStale` call site must pass it: the default is `true`, which reads a
