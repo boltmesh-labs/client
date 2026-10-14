@@ -453,6 +453,32 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   }
 }
 
+/// Asks the OS to authorize this app to run a VPN tunnel, showing the system
+/// consent dialog when consent has not been granted yet. False when the user
+/// declines.
+///
+/// The single implementation of [TunnelAdapter.requestConsent]'s host-channel
+/// contract: Android's `TunnelHost` answers `requestVpnConsent` on the app's
+/// own `com.boltmesh/tunnel` channel. Read the split from [start] in
+/// [TunnelAdapter.requestConsent] — consent is an unbounded human interaction
+/// and must not sit inside start's wedged-driver budget.
+///
+/// Never throws: a denial is a user decision, not a fault.
+Future<bool> _requestVpnConsent(MethodChannel channel) async {
+  try {
+    return await channel.invokeMethod<bool>('requestVpnConsent') ?? true;
+  } on MissingPluginException {
+    // No native host (plain `flutter test`): there is nothing to consent to,
+    // and `start` will fail on its own terms if the platform is wrong.
+    return true;
+  } catch (e) {
+    // Fail closed. Guessing "granted" would push the dialog back inside
+    // `start`'s timeout, which is the exact failure this split avoids.
+    AppLog.error('vpn consent request failed', e);
+    return false;
+  }
+}
+
 /// Android runs *every* rung through BoltMesh's in-process AmneziaWG host.
 ///
 /// Android can host only one owning VpnService TUN, and this app gives it to
@@ -503,23 +529,10 @@ class AndroidTunnelAdapter implements TunnelAdapter {
   bool get handshakeReaderSupported => true;
 
   @override
-  Future<bool> requestConsent() async {
-    // The AWG host's VpnService needs the same OS consent the plugin's would,
-    // and TunnelHost services the round-trip itself — so consent no longer
-    // drags in the plugin's backend (which is what loads libwg-go).
-    try {
-      return await awgChannel.invokeMethod<bool>('requestVpnConsent') ?? true;
-    } on MissingPluginException {
-      // No native host (plain `flutter test`): nothing to consent to, and
-      // `start` fails on its own terms if the platform is wrong.
-      return true;
-    } catch (e) {
-      // Fail closed: guessing "granted" would push the dialog back inside
-      // `start`'s timeout, the exact failure the split exists to avoid.
-      AppLog.error('vpn consent request failed', e);
-      return false;
-    }
-  }
+  // The AWG host's VpnService needs the same OS consent the plugin's would,
+  // and TunnelHost services the round-trip itself — so consent no longer
+  // drags in the plugin's backend (which is what loads libwg-go).
+  Future<bool> requestConsent() => _requestVpnConsent(awgChannel);
 
   @override
   Future<void> start({
