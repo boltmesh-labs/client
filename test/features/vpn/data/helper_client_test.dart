@@ -475,12 +475,11 @@ void main() {
     expect(calls, 2);
   });
 
-  test('a retry waits for the previous raw mutation exchange', () async {
+  test('a timed-out mutation does not block a later mutation', () async {
     var calls = 0;
-    final firstExchange = Completer<Map<String, dynamic>>();
     final socket = _ScriptedSocket((request) {
       calls++;
-      if (calls == 1) return firstExchange.future;
+      if (calls == 1) return Completer<Map<String, dynamic>>().future;
       return Future.value(_ok(request['id'], _status()));
     });
     final client = HelperClient(
@@ -488,14 +487,15 @@ void main() {
       callTimeout: const Duration(milliseconds: 100),
     );
 
+    // A mutation that never answers within its caller's budget holds no
+    // client-side lane: the daemon's FIFO operation gate orders lifecycle
+    // mutations, and this client-side deadline only bounds the caller's wait.
     final first = client.down(timeout: const Duration(milliseconds: 20));
-    final retry = client.down(timeout: const Duration(milliseconds: 100));
     await expectLater(first, throwsA(isA<HelperTransportException>()));
-    await Future<void>.delayed(Duration.zero);
-    expect(calls, 1, reason: 'retry must wait for the first raw exchange');
 
-    firstExchange.complete(_ok('1', _status()));
-    await retry;
+    // The next mutation is issued immediately rather than queued behind the
+    // abandoned exchange.
+    await client.down(timeout: const Duration(milliseconds: 100));
     expect(calls, 2);
   });
 
