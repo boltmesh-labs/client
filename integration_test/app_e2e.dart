@@ -587,6 +587,17 @@ Future<void> _runFirewallHelper(List<String> args) async {
   }
 }
 
+Future<List<String>> _resolveFirewallAddresses(String endpoint) async {
+  final literal = InternetAddress.tryParse(endpoint);
+  if (literal != null) return [literal.address];
+  final addresses = await InternetAddress.lookup(endpoint);
+  final unique = <String>{for (final address in addresses) address.address};
+  if (unique.isEmpty) {
+    throw StateError('E2E endpoint resolved to no addresses: $endpoint');
+  }
+  return unique.toList();
+}
+
 Future<void> _runWindowsFirewallHelper(List<String> args) async {
   final script = '${Directory.current.path}\\tool\\e2e\\firewall_windows.ps1';
   final result = await Process.run('powershell', [
@@ -614,8 +625,19 @@ class _LinuxHost extends _Host {
       FileSystemEntityType.notFound;
 
   @override
-  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
-      _runFirewallHelper([blocked ? 'block' : 'unblock', endpoint, '$port']);
+  Future<void> setEndpointBlocked(
+    String endpoint,
+    int port,
+    bool blocked,
+  ) async {
+    for (final address in await _resolveFirewallAddresses(endpoint)) {
+      await _runFirewallHelper([
+        blocked ? 'block' : 'unblock',
+        address,
+        '$port',
+      ]);
+    }
+  }
 
   @override
   Future<void> clearEndpointBlocks() => _runFirewallHelper(['clear']);
@@ -677,12 +699,19 @@ class _WindowsHost extends _Host {
       Process.runSync('sc.exe', ['query', 'boltmeshd']).exitCode == 0;
 
   @override
-  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
-      _runWindowsFirewallHelper([
+  Future<void> setEndpointBlocked(
+    String endpoint,
+    int port,
+    bool blocked,
+  ) async {
+    for (final address in await _resolveFirewallAddresses(endpoint)) {
+      await _runWindowsFirewallHelper([
         blocked ? 'block' : 'unblock',
-        endpoint,
+        address,
         '$port',
       ]);
+    }
+  }
 
   @override
   Future<void> clearEndpointBlocks() => _runWindowsFirewallHelper(['clear']);
