@@ -246,39 +246,13 @@ jobs:
           cache: true
           cache-dependency-path: android/awg-native/go.sum
 
-      # `sdkmanager` downloads the NDK archive without an integrity check and
-      # feeds a truncated download straight to the unzipper -- "Error on ZipFile
-      # unknown archive", at whatever percentage the transfer died. It also keeps
-      # that partial archive, so a plain rerun fails identically; the retry has
-      # to clear the leftovers first. This is the flakiest step in the pipeline:
-      # two of the last several Android jobs died here, both mid-download, and
-      # each attempt is a ~700 MB fetch.
+      # The pinned NDK, shared with release.yml through this script so the two
+      # cannot drift on the retry/cleanup that `sdkmanager`'s unverified,
+      # partially-cached downloads need. It also exports ANDROID_NDK_HOME, so
+      # the AWG check below resolves the same toolchain the shipped build uses
+      # instead of the runner image's default NDK.
       - name: Install the Flutter-pinned Android NDK
-        run: |
-          ndk_version="28.2.13676358"
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          for attempt in 1 2 3; do
-            if "$sdkmanager" "ndk;$ndk_version"; then
-              # The runner image exports ANDROID_NDK_HOME/ANDROID_NDK_ROOT for its
-              # own default NDK (27.3.13750724 on ubuntu-24.04), and
-              # build_awg_android.py prefers those over the pinned copy under
-              # $ANDROID_HOME/ndk -- so without pointing them at the install this
-              # step just made, the AWG check below vets and lints against a
-              # toolchain the shipped build never uses. Gradle is unaffected
-              # either way: android/app/build.gradle.kts passes the pinned path
-              # to the JNI build explicitly.
-              echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk_version" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo "::warning::NDK install attempt $attempt failed; clearing the partial download and retrying"
-            rm -rf \
-              "$ANDROID_HOME/ndk/$ndk_version" \
-              "$ANDROID_HOME/.temp" \
-              "$ANDROID_HOME/temp"
-            sleep $((attempt * 15))
-          done
-          echo "::error::Could not install NDK $ndk_version after 3 attempts"
-          exit 1
+        run: bash tool/install_android_ndk.sh
 
       - name: Install dependencies
         run: flutter pub get

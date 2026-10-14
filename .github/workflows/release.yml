@@ -71,6 +71,27 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # The JNI library is built by android/app/build.gradle.kts on `preBuild`
+      # through tool/build_awg_android.py, so this job needs a Go toolchain and
+      # the pinned NDK -- and the runner image supplies neither: its Go is older
+      # than android/awg-native/go.mod's `go 1.27.0`, and its NDK is not the
+      # 28.2.13676358 Flutter's Gradle plugin pins. Without these steps the
+      # release leans on Go's automatic toolchain download and on AGP fetching
+      # ~700 MB it never verifies, which is the download that truncates.
+      # `build.gradle.kts` hard-fails rather than building against a different
+      # NDK, so the first tag would have failed here.
+      - name: Set up Go for the Android AWG JNI library
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache: true
+          cache-dependency-path: android/awg-native/go.sum
+
+      # Shares the retry/cleanup with ci.yml, so the flake cannot be fixed in one
+      # workflow and left in the other.
+      - name: Install the Flutter-pinned Android NDK
+        run: bash tool/install_android_ndk.sh
+
       # The git tag is the release source of truth; pubspec's checked-in
       # version is dev-only. Android versionName and the fastforge artifact
       # names both derive from pubspec.
