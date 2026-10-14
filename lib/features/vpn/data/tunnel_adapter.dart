@@ -20,14 +20,6 @@ import 'stream_server_resolver_stub.dart'
 import 'stream_transport.dart';
 import 'tunnel_tuning.dart';
 
-/// True where a native host channel would answer the plugin's otherwise missing
-/// handshake source. Only Android ever did; it reads its handshake from the
-/// in-process AWG host's status now and does not use this adapter at all, so
-/// nothing implements `com.boltmesh/handshake` today. Linux and Windows read
-/// handshakes from the `boltmeshd` helper instead.
-bool get _hostHandshakeSupported =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-
 /// Reads the last completed WireGuard handshake. Null means "unknown"
 /// and must never be treated as a stall on its own.
 typedef HandshakeReader = Future<DateTime?> Function();
@@ -141,30 +133,29 @@ abstract class TunnelAdapter {
   Future<bool> killGhost();
 
   /// True when [readHandshake] can actually observe the peer: Linux and
-  /// Windows (the `boltmeshd` helper), Android (the `com.boltmesh/handshake`
-  /// host channel), or an injected reader. There a null read means "no
-  /// handshake yet". On unsupported platforms the read is always null —
-  /// absence of evidence — and `isHandshakeStale`'s never-handshook branch
-  /// must not fire.
+  /// Windows (the `boltmeshd` helper's status), Android (the in-process AWG
+  /// host's status), or an injected reader. There a null read means "no
+  /// handshake yet". On unsupported platforms — Apple, whose reader is still
+  /// unimplemented — the read is always null: absence of evidence, and
+  /// `isHandshakeStale`'s never-handshook branch must not fire.
   bool get handshakeReaderSupported;
 }
 
-/// [TunnelAdapter] over `wireguard_flutter_plus`.
+/// [TunnelAdapter] over `wireguard_flutter_plus`, for Apple and web.
 ///
 /// `instance` is resolved lazily because the plugin throws
-/// UnsupportedError on unsupported platforms (web).
+/// UnsupportedError on unsupported platforms (web). Android runs every rung
+/// through its in-process AWG host instead (see [AndroidTunnelAdapter]), and
+/// Linux and Windows run through the privileged `boltmeshd` helper (see
+/// [HelperTunnelAdapter]), so this adapter is selected only where the plugin
+/// owns the data plane.
 ///
-/// `wireguard_flutter_plus` exposes only byte counters, so handshakes would come
-/// from our own channel (the plugin is never forked), which Android's
-/// `MainActivity` once answered with the GoBackend peer
-/// `latestHandshakeEpochMillis`. Android reads its handshake from the in-process
-/// AWG host's status now (see `AndroidTunnelAdapter`) and no longer uses this
-/// adapter, so nothing implements the channel. Linux and Windows do not use this
-/// adapter either (they run through the privileged `boltmeshd` helper, see
-/// [HelperTunnelAdapter]). Apple asks the host channel as a placeholder for its
-/// future handler (see `client/README.md`) — there a missing handler resolves as
-/// unknown, and [handshakeReaderSupported] reports false so the null never counts
-/// as a never-handshook stall.
+/// It has no native host channel. `wireguard_flutter_plus` exposes only byte
+/// counters, and nothing implements a peer-handshake or ghost-control channel
+/// on Apple today (see `README.md` § Handshake readers), so [readHandshake] is
+/// null unless a reader is injected, [getActivePeer] is always unknown and
+/// [killGhost] is a no-op. Each of those is what the controller already reads
+/// as "no evidence", never as a stall.
 class WireGuardTunnelAdapter implements TunnelAdapter {
   WireGuardTunnelAdapter() : _handshakeReader = null;
 
@@ -192,30 +183,18 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
     return adapter;
   }
 
-  /// Own host channel for handshake reads (never the VPN plugin's).
-  /// Missing handler (web, or a platform whose native code hasn't landed)
-  /// resolves as unknown, never as a stall.
-  @visibleForTesting
-  static const handshakeChannel = MethodChannel('com.boltmesh/handshake');
-
-  /// Tunnel helpers on the app's own host channel (Android
-  /// `MainActivity`/`TunnelHost`): ghost-aware tunnel control and VPN consent.
-  @visibleForTesting
-  static const ghostChannel = MethodChannel('com.boltmesh/tunnel');
-
   WireGuardFlutterInterface? _raw;
   final HandshakeReader? _handshakeReader;
-
-  /// Test seam: counts [killGhost] calls.
-  int ghostKills = 0;
   bool _initialized = false;
 
   @override
   bool get isReady => _initialized && _raw != null;
 
+  /// True only when a reader was injected: the Apple/web host has no handshake
+  /// source (see the class docs), so a null read there is absence of evidence
+  /// and never counts as a never-handshook stall.
   @override
-  bool get handshakeReaderSupported =>
-      _handshakeReader != null || _hostHandshakeSupported;
+  bool get handshakeReaderSupported => _handshakeReader != null;
 
   /// No daemon on this path — the plugin owns the data plane — so no
   /// capability tokens. An explicit override because `implements` does not
@@ -284,37 +263,13 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
         .timeout(TunnelTuning.opTimeout);
   }
 
-  /// Asks the OS for VPN consent through the app's own `com.boltmesh/tunnel`
-  /// host channel, so the system dialog is answered *before* [start]'s
-  /// wedged-driver budget applies.
-  ///
-  /// Must run before [ensureInitialized]: the plugin's `initialize()` calls
-  /// `VpnService.prepare` itself and pops the dialog from there, and its
-  /// `startVpn` then blocks until the user answers — inside the very timeout
-  /// this split exists to keep clear. Once consent exists, both of the
-  /// plugin's own `prepare` calls return null and show nothing, so the user
-  /// still sees exactly one dialog.
-  ///
-  /// The plugin's own `checkVpnPermission()` is deliberately not used: it
-  /// stores its pending `MethodChannel.Result` in a field that
-  /// `onActivityResult` never completes, so that future hangs forever
-  /// whenever consent is actually missing.
+  /// No consent step on the paths this adapter serves: Apple negotiates
+  /// through its Network Extension, web has no tunnel, and the Android
+  /// `VpnService` consent this once brokered now belongs to
+  /// [AndroidTunnelAdapter]. Explicit rather than inherited because
+  /// `implements` does not bring over an interface default.
   @override
-  Future<bool> requestConsent() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return true;
-    try {
-      return await ghostChannel.invokeMethod<bool>('requestVpnConsent') ?? true;
-    } on MissingPluginException {
-      // No native host (plain `flutter test`): there is nothing to consent
-      // to, and `start` will fail on its own terms if the platform is wrong.
-      return true;
-    } catch (e) {
-      // Fail closed. Guessing "granted" would push the dialog back inside
-      // `start`'s timeout, which is the exact failure this split avoids.
-      AppLog.error('vpn consent request failed', e);
-      return false;
-    }
-  }
+  Future<bool> requestConsent() async => true;
 
   @override
   Future<void> stop(String reason) async {
@@ -381,30 +336,17 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
     }
   }
 
+  /// Only an injected reader can observe a handshake here (see the class
+  /// docs). Without one the answer is unknown, never a stall on its own; the
+  /// degraded-stage path still heals those cases.
   @override
   Future<DateTime?> readHandshake() async {
     final reader = _handshakeReader;
-    if (reader != null) {
-      try {
-        return await reader().timeout(TunnelTuning.healthTimeout);
-      } catch (e) {
-        AppLog.error('health handshake read failed', e);
-        return null;
-      }
-    }
+    if (reader == null) return null;
     try {
-      final epochSecs = await handshakeChannel
-          .invokeMethod<num?>('getLastHandshake')
-          .timeout(TunnelTuning.healthTimeout);
-      if (epochSecs == null || epochSecs <= 0) return null;
-      return DateTime.fromMillisecondsSinceEpoch(
-        (epochSecs * 1000).toInt(),
-        isUtc: true,
-      );
+      return await reader().timeout(TunnelTuning.healthTimeout);
     } catch (e) {
-      // No native handler yet on this platform (or web): unknown, never a
-      // stall on its own. The degraded-stage path still heals those cases.
-      AppLog.info('health handshake unavailable (unknown, ignoring): $e');
+      AppLog.error('health handshake read failed', e);
       return null;
     }
   }
@@ -415,42 +357,16 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   // tick treats as "not a stream rung" rather than as evidence either way.
   Future<bool?> readStreamSession() async => null;
 
+  /// Unknown on the plugin path: the plugin exposes no peer identity and no
+  /// host channel answers for one (see the class docs), so a cold restore here
+  /// always takes the clean-bounce path rather than an adopt-if-match.
   @override
-  Future<ActivePeer?> getActivePeer() async {
-    try {
-      final m = await ghostChannel
-          .invokeMapMethod<String, dynamic>('getActivePeer')
-          .timeout(TunnelTuning.healthTimeout);
-      if (m == null) return null;
-      final pub = (m['publicKey'] as String?)?.trim() ?? '';
-      if (pub.isEmpty) return null;
-      return ActivePeer(
-        publicKey: pub,
-        endpoint: (m['endpoint'] as String?)?.trim() ?? '',
-      );
-    } catch (e) {
-      // No native handler on this platform (or under `flutter test`):
-      // unknown, never a stall on its own.
-      AppLog.info('ghost active-peer unavailable (unknown, ignoring): $e');
-      return null;
-    }
-  }
+  Future<ActivePeer?> getActivePeer() async => null;
 
+  /// A no-op on the plugin path: there is no backend object to bring down
+  /// directly (see the class docs), and the plain [stop] above already ran.
   @override
-  Future<bool> killGhost() async {
-    ghostKills++;
-    try {
-      final ok = await ghostChannel
-          .invokeMethod<bool>('killGhost')
-          .timeout(TunnelTuning.opTimeout);
-      return ok ?? false;
-    } catch (e) {
-      // No native handler on this platform (or under `flutter test`):
-      // the plain stop above already ran; nothing more to kill.
-      AppLog.info('ghost kill unavailable (ignoring): $e');
-      return false;
-    }
-  }
+  Future<bool> killGhost() async => false;
 }
 
 /// Asks the OS to authorize this app to run a VPN tunnel, showing the system

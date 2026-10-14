@@ -4,22 +4,20 @@
 // Plain `test()` suites never call `runApp()`, so `ServicesBinding.instance`
 // stays unset unless a widget test happens to run first. Production providers
 // nonetheless reach for platform state while building — secure-storage reads in
-// the auth/device stores and the `com.boltmesh/{handshake,tunnel}` host channels
-// in the tunnel adapter — and every one of them logged "Binding has not yet
-// been initialized". Initializing the binding is only half the fix: with a
-// binding but no host plugin the same calls fail as `MissingPluginException`,
-// which their handlers report as real errors. The stubs below answer those
-// channels with the "absent" values the production catch branches already treat
-// as unknown, so the plain suites stay quiet without changing their behaviour.
+// the auth/device stores — and those logged "Binding has not yet been
+// initialized". Initializing the binding is only half the fix: with a binding
+// but no host plugin the same calls fail as `MissingPluginException`. The stub
+// below answers that channel with the "no value" reply the store already reads
+// as absent, so the plain suites stay quiet without changing their behaviour.
 //
 // Store *logic* stays covered by `session_store_test` / `device_store_test`,
-// which inject `MapSecureStorage` below the channel, and the host-channel
-// contract stays covered by `tunnel_adapter_test`, which clears these stubs
-// before exercising the real missing-handler path.
+// which inject `MapSecureStorage` below the channel. No tunnel host channel is
+// stubbed any more: the plugin adapter reaches no channel at all (its reads are
+// unknown by construction) and the Android adapter's channel is covered by
+// `tunnel_adapter_test`, which stubs it per test.
 
 import 'dart:async';
 
-import 'package:boltmesh/features/vpn/data/tunnel_adapter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -36,16 +34,6 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   messenger.setMockMethodCallHandler(
     _secureStorageChannel,
     (call) async => null,
-  );
-  // No native host under `flutter test`: handshakes/peers read as unknown and
-  // the ghost-kill is a no-op, exactly as their catch branches already decide.
-  messenger.setMockMethodCallHandler(
-    WireGuardTunnelAdapter.handshakeChannel,
-    (call) async => null,
-  );
-  messenger.setMockMethodCallHandler(
-    WireGuardTunnelAdapter.ghostChannel,
-    (call) async => call.method == 'killGhost' ? false : null,
   );
   await testMain();
 }

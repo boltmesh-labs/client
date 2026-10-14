@@ -948,6 +948,11 @@ void main() {
       tunnel.onStart = () async {
         started = true;
       };
+      // A supported reader that has observed no handshake: corroborating death
+      // from a null only counts when a reader exists (with none, the read is
+      // absence of evidence and defers — see the Apple siblings above). Stated
+      // through the seam rather than assumed from the platform.
+      ctl.debugHandshakeReader = () async => null;
 
       await ctl.reconcileColdStart();
 

@@ -8,6 +8,8 @@ import 'package:boltmesh/features/vpn/data/vpn_api.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `Override` lives behind `misc.dart` rather than the main barrel.
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
@@ -61,6 +63,7 @@ ProviderContainer makeContainer({
   required FakeStore store,
   required FakeKeys keys,
   required VpnApi api,
+  List<Override> overrides = const [],
 }) {
   final container = ProviderContainer(
     overrides: [
@@ -70,6 +73,7 @@ ProviderContainer makeContainer({
       networkMonitorProvider.overrideWithValue(
         support.FakeNetworkMonitor(true),
       ),
+      ...overrides,
     ],
   );
   addTearDown(container.dispose);
@@ -2049,26 +2053,35 @@ void main() {
 
   // The OS VPN consent dialog is asked for before `start`, so a slow "OK" tap
   // can never be mistaken for a wedged driver inside `start`'s 10s budget.
+  // Driven through the real Android adapter: it is the only backend whose
+  // consent reaches a host channel, so routing these through it keeps the
+  // orchestration assertions on the path production runs.
   group('VPN consent', () {
-    /// Answers the app's `com.boltmesh/tunnel` host channel with [granted] for
-    /// the consent request, leaving the other methods on the global stub.
-    void stubConsent(bool granted) {
+    /// Answers Android's `com.boltmesh/tunnel` channel — [granted] for the
+    /// consent request, a live status for the health reads — and returns the
+    /// recorded method names so the start assertions can see what reached the
+    /// host.
+    List<String> stubConsent(bool granted) {
+      final calls = <String>[];
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.ghostChannel,
-        (call) async => switch (call.method) {
+      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        return switch (call.method) {
           'requestVpnConsent' => granted,
-          'killGhost' => false,
-          _ => null,
-        },
-      );
+          'statusAwg' => <String, Object?>{'up': true, 'stage': 'connected'},
+          _ => <String, Object?>{},
+        };
+      });
       addTearDown(
         () => messenger.setMockMethodCallHandler(
-          WireGuardTunnelAdapter.ghostChannel,
-          (call) async => call.method == 'killGhost' ? false : null,
+          AndroidTunnelAdapter.awgChannel,
+          null,
         ),
       );
+      return calls;
     }
 
     Future<ProviderContainer> consentContainer(List<String> events) async {
@@ -2082,6 +2095,9 @@ void main() {
             throw StateError('unexpected ${o.path}');
           }),
         ),
+        overrides: [
+          tunnelAdapterProvider.overrideWithValue(AndroidTunnelAdapter()),
+        ],
       );
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
@@ -2091,13 +2107,9 @@ void main() {
     test('a denial returns to idle and never starts the tunnel', () async {
       final events = <String>[];
       final container = await consentContainer(events);
-      final tunnel = FakeTunnel(events);
-      addTearDown(tunnel.close);
-      stubConsent(false);
+      final calls = stubConsent(false);
 
-      final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      await ctl.connect();
+      await container.read(connectionProvider.notifier).connect();
 
       final snap = container.read(connectionProvider);
       // A denial is a user decision, not a fault: idle and re-armed, so the
@@ -2105,44 +2117,37 @@ void main() {
       // on, and never `connected`.
       expect(snap.phase, ConnPhase.idle);
       expect(snap.message, contains('permission denied'));
-      // Nothing was brought up: no wgQuick config ever reached the driver.
-      expect(tunnel.configs, isEmpty);
+      // Nothing was brought up: the denial stopped before any AWG start.
+      expect(calls, contains('requestVpnConsent'));
+      expect(calls, isNot(contains('startAwg')));
     });
 
     test('granted consent proceeds to the tunnel start', () async {
       final events = <String>[];
       final container = await consentContainer(events);
-      final tunnel = FakeTunnel(events);
-      addTearDown(tunnel.close);
-      stubConsent(true);
+      final calls = stubConsent(true);
 
-      final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      await ctl.connect();
+      await container.read(connectionProvider.notifier).connect();
 
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      expect(tunnel.configs, hasLength(1));
+      expect(calls.where((m) => m == 'startAwg'), hasLength(1));
     });
 
     test('a denial leaves the op mutex free for a retry', () async {
       final events = <String>[];
       final container = await consentContainer(events);
-      final tunnel = FakeTunnel(events);
-      addTearDown(tunnel.close);
       stubConsent(false);
 
-      final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      await ctl.connect();
+      await container.read(connectionProvider.notifier).connect();
       expect(container.read(connectionProvider).phase, ConnPhase.idle);
 
       // The second tap must reach the tunnel, so the consent step released the
       // mutex instead of leaving the op wedged mid-flight.
-      stubConsent(true);
-      await ctl.connect();
+      final calls = stubConsent(true);
+      await container.read(connectionProvider.notifier).connect();
 
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
-      expect(tunnel.configs, hasLength(1));
+      expect(calls.where((m) => m == 'startAwg'), hasLength(1));
     });
   });
 }

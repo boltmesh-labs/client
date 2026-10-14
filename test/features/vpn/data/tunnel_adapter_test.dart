@@ -80,23 +80,6 @@ class HangingTunnel implements WireGuardFlutterInterface {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  // The global `test/flutter_test_config.dart` stubs the host channels with
-  // "absent" answers so unrelated suites stay quiet. Clear them here so the
-  // missing-handler contract below keeps exercising the real
-  // `MissingPluginException` path instead of a stub returning null.
-  setUp(() {
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(
-      WireGuardTunnelAdapter.handshakeChannel,
-      null,
-    );
-    messenger.setMockMethodCallHandler(
-      WireGuardTunnelAdapter.ghostChannel,
-      null,
-    );
-  });
-
   test('wedged stop retries the hard-kill and returns', () {
     // Field case: graceful teardown hangs (3s timeout), the automated
     // retry lands — `stop` never throws and the tunnel is down.
@@ -129,7 +112,7 @@ void main() {
     });
   });
 
-  test('injected handshake reader wins over the host channel', () async {
+  test('an injected handshake reader is used', () async {
     final at = DateTime.utc(2026, 9, 19, 12);
     final adapter = WireGuardTunnelAdapter.test(
       HangingTunnel([]),
@@ -148,206 +131,67 @@ void main() {
     expect(await adapter.readHandshake(), isNull);
   });
 
-  test('missing host handler resolves as unknown, never throws', () async {
-    // No native `com.boltmesh/handshake` handler under `flutter test`
-    // (and no injected reader): MissingPluginException must not escape.
+  test('no reader resolves as unknown, never throws', () async {
+    // The plugin path has no native handshake source, so the read is absence
+    // of evidence rather than a stall.
     final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
 
     expect(await adapter.readHandshake(), isNull);
   });
 
-  test(
-    'missing ghost channel resolves peer as unknown, never throws',
-    () async {
-      // No native `com.boltmesh/tunnel` handler under `flutter test`:
-      // MissingPluginException must not escape.
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+  test('the plugin path reports no active peer', () async {
+    // The plugin exposes no peer identity and no host channel answers one, so
+    // a cold restore here clean-bounces rather than adopting.
+    final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
 
-      expect(await adapter.getActivePeer(), isNull);
-    },
-  );
+    expect(await adapter.getActivePeer(), isNull);
+  });
 
-  test('missing ghost channel makes killGhost a no-op false', () async {
+  test('killGhost is a no-op false on the plugin path', () async {
     final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
 
     expect(await adapter.killGhost(), isFalse);
-    expect(adapter.ghostKills, 1);
   });
 
-  // The contract the native hosts must satisfy: Android's `TunnelHost` answers
-  // these channels with the shapes exercised here. Windows no longer uses
-  // them (its helper owns the reads).
-  group('host channel contract', () {
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  test('requestConsent is a no-op on every platform it serves', () async {
+    // Apple negotiates through its Network Extension and web has no tunnel;
+    // neither pops a system dialog. Android's consent belongs to
+    // AndroidTunnelAdapter, covered below.
+    final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
+    final original = debugDefaultTargetPlatformOverride;
+    addTearDown(() => debugDefaultTargetPlatformOverride = original);
 
-    tearDown(() {
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.handshakeChannel,
-        null,
-      );
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.ghostChannel,
-        null,
-      );
-    });
-
-    test('parses epoch seconds from the handshake channel', () async {
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.handshakeChannel,
-        (call) async {
-          expect(call.method, 'getLastHandshake');
-          return 1718000000.0;
-        },
-      );
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-      expect(
-        await adapter.readHandshake(),
-        DateTime.fromMillisecondsSinceEpoch(1718000000 * 1000, isUtc: true),
-      );
-    });
-
-    test('null and zero handshakes resolve as unknown', () async {
-      final values = <Object?>[null, 0.0];
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.handshakeChannel,
-        (call) async => values.removeAt(0),
-      );
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-      expect(await adapter.readHandshake(), isNull);
-      expect(await adapter.readHandshake(), isNull);
-    });
-
-    test('parses the active peer map', () async {
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.ghostChannel,
-        (call) async => call.method == 'getActivePeer'
-            ? {'publicKey': 'SRVKEY', 'endpoint': '[2001:db8::1]:51820'}
-            : null,
-      );
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-      final peer = await adapter.getActivePeer();
-      expect(peer?.publicKey, 'SRVKEY');
-      expect(peer?.endpoint, '[2001:db8::1]:51820');
-    });
-
-    test('a blank public key resolves as unknown', () async {
-      messenger.setMockMethodCallHandler(
-        WireGuardTunnelAdapter.ghostChannel,
-        (call) async => {'publicKey': '  ', 'endpoint': '203.0.113.10:51820'},
-      );
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-      expect(await adapter.getActivePeer(), isNull);
-    });
-
-    test('killGhost returns the host result', () async {
-      messenger.setMockMethodCallHandler(WireGuardTunnelAdapter.ghostChannel, (
-        call,
-      ) async {
-        expect(call.method, 'killGhost');
-        return true;
-      });
-      final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-      expect(await adapter.killGhost(), isTrue);
-      expect(adapter.ghostKills, 1);
-    });
-
-    group('requestConsent', () {
-      tearDown(() => debugDefaultTargetPlatformOverride = null);
-
-      test('returns the host answer on Android', () async {
-        for (final granted in [true, false]) {
-          var calls = 0;
-          messenger.setMockMethodCallHandler(
-            WireGuardTunnelAdapter.ghostChannel,
-            (call) async {
-              expect(call.method, 'requestVpnConsent');
-              calls++;
-              return granted;
-            },
-          );
-          final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-          expect(await adapter.requestConsent(), granted);
-          expect(calls, 1, reason: 'consent must be asked exactly once');
-        }
-      });
-
-      test('no-op off Android, without touching the host channel', () async {
-        messenger.setMockMethodCallHandler(
-          WireGuardTunnelAdapter.ghostChannel,
-          (call) async => fail('must not ask for consent on ${call.method}'),
-        );
-        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-        for (final platform in [
-          TargetPlatform.linux,
-          TargetPlatform.windows,
-          TargetPlatform.iOS,
-          TargetPlatform.macOS,
-        ]) {
-          debugDefaultTargetPlatformOverride = platform;
-          expect(await adapter.requestConsent(), isTrue, reason: '$platform');
-        }
-      });
-
-      test('a missing host answers granted, deferring to start', () async {
-        // The group's tearDown cleared the mock, so this is the real
-        // MissingPluginException path. There is no dialog to show without a
-        // native host, and `start` fails on its own terms if the platform is
-        // genuinely wrong.
-        debugDefaultTargetPlatformOverride = TargetPlatform.android;
-        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-        expect(await adapter.requestConsent(), isTrue);
-      });
-
-      test('a null host answer counts as granted', () async {
-        // Android with no VpnService to consent to must not read as denied.
-        messenger.setMockMethodCallHandler(
-          WireGuardTunnelAdapter.ghostChannel,
-          (call) async => null,
-        );
-        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-        expect(await adapter.requestConsent(), isTrue);
-      });
-
-      test('a failing host answers denied rather than throwing', () async {
-        // Fail closed: reporting "granted" would push the dialog back inside
-        // `start`'s 10s budget, the exact failure this split exists to avoid.
-        messenger.setMockMethodCallHandler(
-          WireGuardTunnelAdapter.ghostChannel,
-          (call) async => throw PlatformException(code: 'NO_ACTIVITY'),
-        );
-        final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-
-        expect(await adapter.requestConsent(), isFalse);
-      });
-    });
+    for (final platform in [
+      TargetPlatform.android,
+      TargetPlatform.linux,
+      TargetPlatform.windows,
+      TargetPlatform.iOS,
+      TargetPlatform.macOS,
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      expect(await adapter.requestConsent(), isTrue, reason: '$platform');
+    }
   });
 
   group('handshakeReaderSupported', () {
     tearDown(() => debugDefaultTargetPlatformOverride = null);
 
-    test('true on Android only, false elsewhere (helper/Apple)', () {
+    test('false without an injected reader, on every platform', () {
       final adapter = WireGuardTunnelAdapter.test(HangingTunnel([]));
-      const expectations = {
-        TargetPlatform.android: true,
-        TargetPlatform.windows: false,
-        TargetPlatform.iOS: false,
-        TargetPlatform.macOS: false,
-        TargetPlatform.linux: false,
-      };
-      expectations.forEach((platform, expected) {
+      for (final platform in [
+        TargetPlatform.android,
+        TargetPlatform.windows,
+        TargetPlatform.iOS,
+        TargetPlatform.macOS,
+        TargetPlatform.linux,
+      ]) {
         debugDefaultTargetPlatformOverride = platform;
-        expect(adapter.handshakeReaderSupported, expected, reason: '$platform');
-      });
+        expect(
+          adapter.handshakeReaderSupported,
+          isFalse,
+          reason: '$platform has no host handshake channel',
+        );
+      }
     });
 
     test('an injected reader is always supported', () {
@@ -446,18 +290,70 @@ void main() {
       expect(adapter.daemonCapabilities, contains(capStreamTransport));
     });
 
-    test('requests OS consent through the AWG host channel', () async {
-      final adapter = AndroidTunnelAdapter();
-      final calls = <String>[];
-      messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
-        call,
-      ) async {
-        calls.add(call.method);
-        return true;
+    // The consent contract the Android host must satisfy. This is the path
+    // production runs (the plugin adapter never brokers Android consent), so
+    // the fail-closed cases live here rather than on a WireGuard copy.
+    group('requestConsent', () {
+      test('asks the AWG host channel exactly once', () async {
+        final adapter = AndroidTunnelAdapter();
+        final calls = <String>[];
+        messenger.setMockMethodCallHandler(AndroidTunnelAdapter.awgChannel, (
+          call,
+        ) async {
+          calls.add(call.method);
+          return true;
+        });
+
+        expect(await adapter.requestConsent(), isTrue);
+        expect(calls, ['requestVpnConsent']);
       });
 
-      expect(await adapter.requestConsent(), isTrue);
-      expect(calls, ['requestVpnConsent']);
+      test('returns the host answer', () async {
+        for (final granted in [true, false]) {
+          final adapter = AndroidTunnelAdapter();
+          messenger.setMockMethodCallHandler(
+            AndroidTunnelAdapter.awgChannel,
+            (call) async => granted,
+          );
+
+          expect(await adapter.requestConsent(), granted);
+        }
+      });
+
+      test('a null host answer counts as granted', () async {
+        // Android with no VpnService to consent to must not read as denied.
+        final adapter = AndroidTunnelAdapter();
+        messenger.setMockMethodCallHandler(
+          AndroidTunnelAdapter.awgChannel,
+          (call) async => null,
+        );
+
+        expect(await adapter.requestConsent(), isTrue);
+      });
+
+      test('a missing host answers granted, deferring to start', () async {
+        // No native host: there is no dialog to show, and `start` fails on its
+        // own terms if the platform is genuinely wrong.
+        final adapter = AndroidTunnelAdapter();
+        messenger.setMockMethodCallHandler(
+          AndroidTunnelAdapter.awgChannel,
+          null,
+        );
+
+        expect(await adapter.requestConsent(), isTrue);
+      });
+
+      test('a failing host answers denied rather than throwing', () async {
+        // Fail closed: reporting "granted" would push the dialog back inside
+        // `start`'s budget, the exact failure this split exists to avoid.
+        final adapter = AndroidTunnelAdapter();
+        messenger.setMockMethodCallHandler(
+          AndroidTunnelAdapter.awgChannel,
+          (call) async => throw PlatformException(code: 'NO_ACTIVITY'),
+        );
+
+        expect(await adapter.requestConsent(), isFalse);
+      });
     });
 
     test(
