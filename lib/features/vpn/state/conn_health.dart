@@ -141,7 +141,7 @@ extension ConnectionHealth on ConnectionController {
     // a live transport's session is not established; null means no stream
     // transport (or a daemon that predates the field), which is not this case.
     final streamEstablishing =
-        _transportRung == TransportRung.stream &&
+        _ladder.rung == TransportRung.stream &&
         handshake == null &&
         streamSession == false &&
         _connectedAt != null &&
@@ -208,7 +208,7 @@ extension ConnectionHealth on ConnectionController {
       final linkUp = await _hasLink();
       if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
       if (linkUp) {
-        gateway = await _gatewayAlive(_overlayDnsFor(dial));
+        gateway = await _gatewayAlive(_ladder.overlayDnsFor(dial));
         if (!_healthSessionCurrent(sessionEpoch, epoch, dial)) return;
         _health.observeEcho(gateway);
       } else {
@@ -407,7 +407,7 @@ extension ConnectionHealth on ConnectionController {
     // Pure capability question ("would a heal lower the rung?"), kept separate
     // from the budget-aware one the policy applies, so the tick can ask it
     // without mutating the ladder.
-    final lowerRungAvailable = _hasLowerRung(dial);
+    final lowerRungAvailable = _ladder.hasLowerRung(dial);
     // Fresh read rather than the one above: it also catches a link that dropped
     // while the echo probe was in flight.
     final hasNetwork = await _hasLink();
@@ -625,7 +625,8 @@ extension ConnectionHealth on ConnectionController {
   }
 
   /// Layer 1 read: in-tunnel gateway echo against a probeable IP in the
-  /// **rung's own** overlay resolver — [_overlayDnsFor], not always `wgDns`:
+  /// **rung's own** overlay resolver — [TransportLadder.overlayDnsFor], not
+  /// always `wgDns`:
   /// the awg device routes only its own overlay, so probing the stock resolver
   /// from the awg rung merely fails and would demote a working rung (see
   /// [firstDnsProbeIp]). Tri-state: true = alive (suppresses

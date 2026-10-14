@@ -15,7 +15,7 @@ int regionLoad(Region r) => r.servers.fold<int>(0, (a, s) => a + s.activePeers);
 /// data plane excluded the whole region even though its stock device was right
 /// there and readable; it was a filter that could only ever exclude regions that
 /// would have worked. Whether a *particular* rung is buildable is the ladder's
-/// question at start time (see `conn_obfuscation.dart`), where the answer differs
+/// question at start time (see `transport_ladder.dart`), where the answer differs
 /// per rung rather than per region.
 Region? autoPickRegion(List<Region> regions) {
   Region? best;

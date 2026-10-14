@@ -652,7 +652,7 @@ void main() {
     });
 
     test('a payload with no usable rung is refused, not guessed at', () async {
-      // The one thing `_applyRung` still refuses: a list with nothing in it this
+      // The one thing `TransportLadder.apply` still refuses: a list with nothing in it this
       // build can start. There is no entry to build a conf from, so any start
       // would be a guess at what the node runs.
       final events = <String>[];
@@ -825,7 +825,7 @@ void main() {
 
       test('the debug seam starts a rung the node advertises', () async {
         // What the app e2e's full-ladder walk relies on. Pinning it here means a
-        // regression in _rungFor's admission shows up as a fast unit failure
+        // regression in TransportLadder.rungFor's admission shows up as a fast unit failure
         // rather than a baffling end-to-end one.
         //
         // The awg rung is the one that can be pinned on a first start: the
@@ -1343,7 +1343,7 @@ void main() {
 
           final state = container.read(connectionProvider);
           // The move kept the rung, because the new node advertises it too
-          // (see the ceiling clamp in `_rungFor`): a roam is not charged for
+          // (see the ceiling clamp in TransportLadder.rungFor): a roam is not charged for
           // the walk again, and the sticky rung only yields to a node that
           // cannot serve it.
           expect(ctl.transportRung, TransportRung.stream);

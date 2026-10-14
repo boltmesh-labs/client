@@ -1,32 +1,56 @@
-part of 'connection_controller.dart';
+import '../../../core/log.dart';
+import '../data/helper_client.dart' show capStreamTransport;
+import '../data/models.dart';
+import '../data/platform_info.dart';
+import '../data/stream_transport.dart';
 
 /// The transport ladder.
 ///
 /// The serving node advertises which rungs it runs, in cost order (see
-/// `TransportOption`), and where the walk *starts* is the cheapest rung on that
-/// list this platform can run (see [_rungFor]). So a node serving both stock and
+/// [TransportOption]), and where the walk *starts* is the cheapest rung on that
+/// list this platform can run (see [rungFor]). So a node serving both stock and
 /// obfuscated starts stock and demotes, rather than being treated as a
 /// single-format node with one option — and a node that serves only `awg` and
 /// `stream` floors a platform with no obfuscated data plane to `stream` rather
 /// than refusing it.
 ///
-/// The demotion rides the existing heal rung — [_autoHeal] already restarts the
+/// This is the process's rung *state* plus the pure rules that read and move it
+/// (which rung is the floor, which rung is next, what config each rung implies).
+/// It was an extension over the controller because it moved with the
+/// connect/switch/heal flow; it is a collaborator because none of that logic
+/// needs the notifier — only the two ambient inputs it is constructed with
+/// (the platform/helper capability gate and the e2e force seam).
+///
+/// The demotion rides the existing heal rung — `_autoHeal` already restarts the
 /// cached config offline, which is exactly the moment a fingerprint-blocked path
 /// should be retried on a lower rung. It is licensed by local path-death
 /// evidence alone, not the control plane: in a full tunnel the probe is routed
 /// through the very rung that is dead, so requiring it made the step
 /// unreachable exactly when it is needed. It costs no polling timer and no
-/// budget of its own: [ConnectionTuning.maxHealsPerIncident] is what bounds the
+/// budget of its own: `ConnectionTuning.maxHealsPerIncident` is what bounds the
 /// walk. A demoted rung is sticky for the process's lifetime: there is no
 /// promotion probe, so the rung climbs back to a cheaper one only when the
 /// process restarts.
-extension ConnectionObfuscation on ConnectionController {
+class TransportLadder {
+  TransportLadder({
+    required this._daemonCapabilities,
+    required this._forcedRung,
+  });
+
+  /// The installed helper's capability tokens, read lazily so a test seam or a
+  /// later adapter swap is observed at the point of use.
+  final Set<String> Function() _daemonCapabilities;
+
+  /// The e2e force seam (see `ConnectionController.debugForceRung`), read
+  /// lazily for the same reason.
+  final TransportRung? Function() _forcedRung;
+
   /// The rung this process is on. Demotions stay sticky across connects to
   /// avoid re-paying for a failed path, and there is no promotion probe: the
   /// rung resets to the node's floor when the process restarts. A server move
   /// also moves the rung to the new node's floor, or to the highest rung that
   /// node advertises.
-  TransportRung get transportRung => _transportRung;
+  TransportRung rung = TransportRung.native;
 
   /// The obfuscation parameters to build a conf for [dial] with, or null when
   /// this start's tunnel is stock WireGuard.
@@ -37,18 +61,17 @@ extension ConnectionObfuscation on ConnectionController {
   /// rung because the node's bridge injects into its *stock* device whatever else
   /// that node serves, so a stream session carries stock datagrams inside its TLS
   /// session.
-  ObfuscationParams? _obfuscationParamsFor(DialParams dial) =>
-      _transportFor(dial).params;
+  ObfuscationParams? obfuscationParamsFor(DialParams dial) =>
+      transportFor(dial).params;
 
   /// The advertised entry for the rung this start is on.
   ///
   /// The one place a rung's advertisement is read, so the port, the parameters
   /// and the credential used to build a start can never come from a rung other
-  /// than the one being started. Non-null by construction: [_applyRung] has
+  /// than the one being started. Non-null by construction: [apply] has
   /// already refused a rung this node does not advertise or this build cannot
   /// assemble, and nothing between it and here changes the rung.
-  TransportOption _transportFor(DialParams dial) =>
-      dial.transportFor(_transportRung)!;
+  TransportOption transportFor(DialParams dial) => dial.transportFor(rung)!;
 
   /// The node's own port for the rung this start is on.
   ///
@@ -56,7 +79,7 @@ extension ConnectionObfuscation on ConnectionController {
   /// separate device per transport, so a stock device cannot read obfuscation
   /// directives and an obfuscated device cannot read a stock handshake, and
   /// neither port is interchangeable with the other in either direction.
-  int _tunnelPortFor(DialParams dial) => _transportFor(dial).port;
+  int tunnelPortFor(DialParams dial) => transportFor(dial).port;
 
   /// The overlay address this start must claim.
   ///
@@ -67,15 +90,13 @@ extension ConnectionObfuscation on ConnectionController {
   /// rung that was working.
   ///
   /// Only the obfuscated rung has a second address, and it is exactly the case
-  /// [_awgRungRunnable] gates on, so there is nothing to fall back to here. The
+  /// [awgRungRunnable] gates on, so there is nothing to fall back to here. The
   /// stream rung is stock because the node's bridge injects into its *stock*
   /// device: a stream session carries stock WireGuard datagrams whatever else
   /// that node serves, and handing those to the obfuscated device is a handshake
   /// into a void.
-  String _overlayAddressFor(DialParams dial) =>
-      _transportRung == TransportRung.awg
-      ? dial.awgAssignedIp!
-      : dial.assignedIp;
+  String overlayAddressFor(DialParams dial) =>
+      rung == TransportRung.awg ? dial.awgAssignedIp! : dial.assignedIp;
 
   /// The in-tunnel resolver for this start.
   ///
@@ -83,8 +104,8 @@ extension ConnectionObfuscation on ConnectionController {
   /// interface, so the resolver has to be the one on the device this start's
   /// traffic reaches. Pushing the stock stub's address onto the obfuscated rung
   /// would send every DNS query to a device with no route for it.
-  String _overlayDnsFor(DialParams dial) =>
-      _transportRung == TransportRung.awg ? dial.awgDns! : dial.wgDns;
+  String overlayDnsFor(DialParams dial) =>
+      rung == TransportRung.awg ? dial.awgDns! : dial.wgDns;
 
   /// Whether the obfuscated rung is something this start could actually build.
   ///
@@ -99,7 +120,7 @@ extension ConnectionObfuscation on ConnectionController {
   /// Both fields, because the pair is emitted together or not at all (see the
   /// backend factory) — checking one and then asserting the other would be a
   /// check of an invariant, not of input.
-  bool _awgRungRunnable(DialParams dial) =>
+  bool awgRungRunnable(DialParams dial) =>
       dial.transportFor(TransportRung.awg) != null &&
       (dial.awgAssignedIp?.isNotEmpty ?? false) &&
       (dial.awgDns?.isNotEmpty ?? false);
@@ -107,14 +128,14 @@ extension ConnectionObfuscation on ConnectionController {
   /// The stream transport for this start, or null unless this process is on the
   /// stream rung.
   ///
-  /// Total by construction now: [_rungRunnableHere] is what admits the stream
+  /// Total by construction now: [rungRunnableHere] is what admits the stream
   /// rung onto the ladder, and it requires both a usable credential from the
   /// advertised entry and a data plane that can run it. So there is nothing left
   /// to check here — every value below is the one that gate accepted, and the
   /// rung below can neither be silently substituted nor invented.
-  Future<TunnelTransport?> _streamTransportFor(DialParams dial) async {
-    if (_transportRung != TransportRung.stream) return null;
-    final credential = _transportFor(dial).credential!;
+  Future<TunnelTransport?> streamTransportFor(DialParams dial) async {
+    if (rung != TransportRung.stream) return null;
+    final credential = transportFor(dial).credential!;
     final ports = await allocateLoopbackPorts();
     return TunnelTransport(
       listen: '${TunnelTransport.loopbackHost}:${ports.listen}',
@@ -137,13 +158,11 @@ extension ConnectionObfuscation on ConnectionController {
   ///
   /// [why] is the health reason that triggered the heal, so the log names the
   /// evidence the demotion acted on.
-  bool _demoteRung(DialParams dial, String why) {
-    final next = _nextRungFor(dial);
+  bool demoteRung(DialParams dial, String why) {
+    final next = nextRungFor(dial);
     if (next == null) return false;
-    AppLog.info(
-      'transport demoted ($why) ${_transportRung.name} -> ${next.name}',
-    );
-    _transportRung = next;
+    AppLog.info('transport demoted ($why) ${rung.name} -> ${next.name}');
+    rung = next;
     return true;
   }
 
@@ -155,12 +174,12 @@ extension ConnectionObfuscation on ConnectionController {
   /// one whose awg entry this platform cannot run must skip it. Reading the list
   /// is what makes both work without a per-server special case.
   ///
-  /// Split out of [_demoteRung] so the health tick can ask whether a heal
+  /// Split out of [demoteRung] so the health tick can ask whether a heal
   /// would lower the rung *before* spending one, without mutating it: the
   /// ladder is only worth a restart when there is a rung underneath it.
-  TransportRung? _nextRungFor(DialParams dial) {
-    final rungs = _runnableRungs(dial);
-    final at = rungs.indexOf(_transportRung);
+  TransportRung? nextRungFor(DialParams dial) {
+    final rungs = runnableRungs(dial);
+    final at = rungs.indexOf(rung);
     if (at < 0 || at + 1 >= rungs.length) return null;
     return rungs[at + 1];
   }
@@ -168,7 +187,7 @@ extension ConnectionObfuscation on ConnectionController {
   /// Whether a heal against [dial] would leave the rung lower. Pure: it reads
   /// the ladder without moving it, so a caller can gate on it and leave the
   /// ladder alone when the answer is no.
-  bool _hasLowerRung(DialParams dial) => _nextRungFor(dial) != null;
+  bool hasLowerRung(DialParams dial) => nextRungFor(dial) != null;
 
   /// The rungs [dial]'s node advertises that this platform can actually start,
   /// cheapest first.
@@ -178,9 +197,9 @@ extension ConnectionObfuscation on ConnectionController {
   /// than down a fixed cost order the node may not serve — the two diverge the
   /// moment a node runs two devices and omits one, which is the case that used to
   /// be unrepresentable on the wire.
-  List<TransportRung> _runnableRungs(DialParams dial) => [
+  List<TransportRung> runnableRungs(DialParams dial) => [
     for (final rung in dial.advertisedRungs)
-      if (_rungRunnableHere(dial, rung)) rung,
+      if (rungRunnableHere(dial, rung)) rung,
   ];
 
   /// Whether this build can start [rung] against [dial], given the node
@@ -191,15 +210,15 @@ extension ConnectionObfuscation on ConnectionController {
   /// gate, and scoping it to *this dial* rather than to the rung alone is what
   /// lets the floor be a lookup: the answer differs per server (whether the node
   /// serves it) and per platform (whether it can be run), and both have to hold.
-  bool _rungRunnableHere(DialParams dial, TransportRung rung) => switch (rung) {
+  bool rungRunnableHere(DialParams dial, TransportRung rung) => switch (rung) {
     TransportRung.native => true,
-    TransportRung.awg => awgDataPlaneSupported() && _awgRungRunnable(dial),
+    TransportRung.awg => awgDataPlaneSupported() && awgRungRunnable(dial),
     // Two halves: the platform needs a bridge to run at all, and the installed
     // helper has to be one whose `up` would honour the spec. The credential's own
     // usability is already settled by `TransportOption.isComplete`.
     TransportRung.stream =>
       streamTransportSupported() &&
-          _daemonCapabilities.contains(capStreamTransport),
+          _daemonCapabilities().contains(capStreamTransport),
   };
 
   /// The rung to start [dial] on, given the process's current one.
@@ -222,7 +241,7 @@ extension ConnectionObfuscation on ConnectionController {
   ///    `stream`, which is the right answer rather than a refusal.
   ///  * Never keep a rung the node does not advertise. A server move can land on a
   ///    node with no stream credential, where a sticky stream rung could only throw
-  ///    (see [_streamTransportFor]).
+  ///    (see [streamTransportFor]).
   ///
   /// The health policy's demotion survives both: this only raises to the floor and
   /// lowers to the ceiling, so a walk down the ladder is never undone. A move onto a
@@ -230,21 +249,21 @@ extension ConnectionObfuscation on ConnectionController {
   /// charged for the walk again.
   ///
   /// Null means the node advertises no rung this build can start — a payload with no
-  /// usable entry at all, not a format this build lacks. [_applyRung] refuses rather
+  /// usable entry at all, not a format this build lacks. [apply] refuses rather
   /// than inventing a start the node could not read.
-  TransportRung? _rungFor(DialParams dial) {
-    final runnable = _runnableRungs(dial);
+  TransportRung? rungFor(DialParams dial) {
+    final runnable = runnableRungs(dial);
     if (runnable.isEmpty) return null;
-    // Test seam (see [debugForceRung]): an e2e walks the whole ladder by
-    // pinning each rung, which the health policy would otherwise only reach on
-    // a blocked network. Still scoped to `runnable`, so it can only start a
-    // rung this node serves and this build can assemble.
-    final forced = debugForceRung;
+    // Test seam (see `ConnectionController.debugForceRung`): an e2e walks the
+    // whole ladder by pinning each rung, which the health policy would otherwise
+    // only reach on a blocked network. Still scoped to `runnable`, so it can only
+    // start a rung this node serves and this build can assemble.
+    final forced = _forcedRung();
     if (forced != null && runnable.contains(forced)) return forced;
-    if (runnable.contains(_transportRung)) return _transportRung;
+    if (runnable.contains(rung)) return rung;
     final ceiling = runnable.last;
     final floor = runnable.first;
-    if (_transportRung.index < floor.index) return floor;
+    if (rung.index < floor.index) return floor;
     // Above the ceiling, or *between* two advertised rungs but served by neither
     // — the case an index range would read as "still inside the ladder" and start
     // on a rung the node does not serve. The ceiling is the right side of it:
@@ -253,10 +272,10 @@ extension ConnectionObfuscation on ConnectionController {
     return ceiling;
   }
 
-  /// Applies [_rungFor] before a start, logging the move, and refuses a server
+  /// Applies [rungFor] before a start, logging the move, and refuses a server
   /// advertising no rung this build can produce a start for.
   ///
-  /// Called at the top of every [_startWith] — the one point a connect, a
+  /// Called at the top of every `_startWith` — the one point a connect, a
   /// switch, a heal and a cold restore all pass through — so a move onto a server
   /// with a different rung list can never start on the previous server's rung, and
   /// can never start on a rung the new node does not serve.
@@ -265,19 +284,19 @@ extension ConnectionObfuscation on ConnectionController {
   /// here to build a conf from, so any start would be a guess. It is no longer the
   /// path a platform without an obfuscated data plane takes on an obfuscated
   /// region, because such a region advertises `native` and is started on it.
-  void _applyRung(DialParams dial) {
-    final next = _rungFor(dial);
+  void apply(DialParams dial) {
+    final next = rungFor(dial);
     if (next == null) {
       throw UnsupportedError(
         'The server "${dial.serverName}" offers no transport this app build '
         'can use. Choose another server.',
       );
     }
-    if (next == _transportRung) return;
+    if (next == rung) return;
     AppLog.info(
-      'transport rung set ${_transportRung.name} -> ${next.name} '
+      'transport rung set ${rung.name} -> ${next.name} '
       'server=${dial.serverName}',
     );
-    _transportRung = next;
+    rung = next;
   }
 }

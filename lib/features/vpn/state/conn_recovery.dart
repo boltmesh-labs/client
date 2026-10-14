@@ -81,7 +81,7 @@ extension ConnectionRecovery on ConnectionController {
       // every heal before the stall can escalate.
       final prevFailovers = snap.autoFailoverAttempts;
       final prevPollFailures = snap.pollFailures;
-      final previousRung = _transportRung;
+      final previousRung = _ladder.rung;
       final reason =
           recoveryReason ?? snap.recoveryReason ?? RecoveryReason.unknown;
       // A lower transport is warranted on local evidence that the data path
@@ -89,11 +89,11 @@ extension ConnectionRecovery on ConnectionController {
       // tunnel the probe shares the dead rung's route, so it cannot be the
       // gate. A bare single dead echo still only rebuilds the current rung.
       if (demoteTransport) {
-        _demoteRung(dial, why);
+        _ladder.demoteRung(dial, why);
       }
-      final action = _transportRung == previousRung
+      final action = _ladder.rung == previousRung
           ? RecoveryAction.restarting
-          : switch (_transportRung) {
+          : switch (_ladder.rung) {
               TransportRung.native => RecoveryAction.restarting,
               TransportRung.awg => RecoveryAction.tryingAwg,
               TransportRung.stream => RecoveryAction.tryingStream,
@@ -121,8 +121,8 @@ extension ConnectionRecovery on ConnectionController {
       // still the only action left.
       String? skipToFailover;
       if (demoteTransport &&
-          _transportRung == TransportRung.stream &&
-          _transportRung != previousRung &&
+          _ladder.rung == TransportRung.stream &&
+          _ladder.rung != previousRung &&
           snap.autoFailoverAttempts < ConnectionTuning.maxAutoFailovers) {
         final reachable = await _probeStreamTcp(dial);
         if (sessionEpoch != _sessionEpoch) return;
@@ -132,7 +132,7 @@ extension ConnectionRecovery on ConnectionController {
           AppLog.info(
             'auto-heal demote skipped ($why) $where unreachable -> failover',
           );
-          _transportRung = previousRung;
+          _ladder.rung = previousRung;
           skipToFailover = '$why ($where unreachable)';
         }
       }

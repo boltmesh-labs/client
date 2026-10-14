@@ -18,7 +18,6 @@ import '../../auth/state/auth_providers.dart';
 import '../data/control_probe.dart';
 import '../data/device_store.dart';
 import '../data/gateway_probe.dart';
-import '../data/helper_client.dart';
 import '../data/key_manager.dart';
 import '../data/models.dart';
 import '../data/network_monitor.dart';
@@ -39,6 +38,7 @@ import 'cold_restore_watch.dart';
 import 'connection_state.dart';
 import 'connection_tuning.dart';
 import 'polling_service.dart';
+import 'transport_ladder.dart';
 import 'tunnel_health.dart';
 
 export 'connection_state.dart';
@@ -47,7 +47,6 @@ part 'conn_coldstart.dart';
 part 'conn_connect.dart';
 part 'conn_health.dart';
 part 'conn_lifecycle.dart';
-part 'conn_obfuscation.dart';
 part 'conn_poll.dart';
 part 'conn_provision.dart';
 part 'conn_recovery.dart';
@@ -80,7 +79,8 @@ part 'conn_tunnel.dart';
 ///   the app lifecycle and clock expiry; never reset by a connection event.
 /// * **Monotonic generation tokens** — `_tunnelEpoch`, `_sessionEpoch`.
 ///   Bumped, never cleared: they exist to invalidate work across an `await`.
-/// * **Derived** — `_transportRung`. Re-derived per start by `_applyRung`.
+/// * **Derived** — the transport rung (`_ladder`). Re-derived per start by
+/// `TransportLadder.apply`.
 class ConnectionController extends Notifier<ConnState> {
   VpnApi get _api => ref.read(vpnApiProvider);
   DeviceStore get _device => ref.read(deviceStoreProvider);
@@ -159,13 +159,13 @@ class ConnectionController extends Notifier<ConnState> {
   /// auto-healing at a fraction of the foreground wake rate.
   bool _backgrounded = false;
 
-  /// The transport rung this app process is on (see `conn_obfuscation.dart`).
+  /// The transport rung this app process is on (see `transport_ladder.dart`).
   ///
   /// It starts at the serving node's floor: the cheapest rung that node
   /// advertises and this platform can start, which is `native` on every platform
-  /// because every node advertises its stock device. [_applyRung] re-derives it on
-  /// every start, so a server move follows the new node's advertised list and
-  /// never keeps a rung the new node does not serve.
+  /// because every node advertises its stock device. [TransportLadder.apply]
+  /// re-derives it on every start, so a server move follows the new node's
+  /// advertised list and never keeps a rung the new node does not serve.
   ///
   /// Below the floor, a stall that looks like a dead tunnel path escalates one
   /// rung at a time on local path-death evidence, whether or not the control
@@ -176,12 +176,23 @@ class ConnectionController extends Notifier<ConnState> {
   /// the tunnel path is dead, every later connect stays on the lower rung. A
   /// restart resets the rung to the node's floor, which is the only way back up.
   ///
-  /// Walked one rung per qualifying heal by [_demoteRung], so an incident spends
-  /// up to [ConnectionTuning.maxHealsPerIncident] of them — a node serving two
-  /// rungs below its floor is walked to the bottom of its own list, and one
-  /// serving a single rung below gets exactly one step. See [TransportRung] for
-  /// the order and why the stream rung is last.
-  TransportRung _transportRung = TransportRung.native;
+  /// Walked one rung per qualifying heal by [TransportLadder.demoteRung], so an
+  /// incident spends up to [ConnectionTuning.maxHealsPerIncident] of them — a
+  /// node serving two rungs below its floor is walked to the bottom of its own
+  /// list, and one serving a single rung below gets exactly one step. See
+  /// [TransportRung] for the order and why the stream rung is last.
+  ///
+  /// The ladder owns the rung and the rules that move it; the two ambient inputs
+  /// it needs stay here and are read lazily through the closures, so the
+  /// capability gate follows a swapped adapter and the e2e force seam stays a
+  /// plain mutable field.
+  late final TransportLadder _ladder = TransportLadder(
+    daemonCapabilities: () => _daemonCapabilities,
+    forcedRung: () => debugForceRung,
+  );
+
+  /// The rung this process is currently on (see [TransportLadder.rung]).
+  TransportRung get transportRung => _ladder.rung;
 
   /// Test seam: inspect/prime the dead-echo strike counter.
   @visibleForTesting
@@ -268,11 +279,12 @@ class ConnectionController extends Notifier<ConnState> {
   /// exercise every data plane in turn without fabricating the blocked network
   /// that would normally demote it.
   ///
-  /// Null (production) leaves the ladder to [_rungFor]'s advertised-list rule.
-  /// A non-null value is honored only while that rung is advertised by the
-  /// serving node and runnable here; a rung the node does not serve is ignored
-  /// rather than started, so the seam cannot conjure a start the payload cannot
-  /// back. See [_applyRung], which re-derives the rung on every start.
+  /// Null (production) leaves the ladder to [TransportLadder.rungFor]'s
+  /// advertised-list rule. A non-null value is honored only while that rung is
+  /// advertised by the serving node and runnable here; a rung the node does not
+  /// serve is ignored rather than started, so the seam cannot conjure a start the
+  /// payload cannot back. See [TransportLadder.apply], which re-derives the rung
+  /// on every start.
   @visibleForTesting
   TransportRung? debugForceRung;
 

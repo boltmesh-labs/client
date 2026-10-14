@@ -20,7 +20,7 @@ import '../data/helper_socket.dart';
 /// Anything else is left exactly as it stands: every other error the VPN layer
 /// raises is already a sentence written for the user (the identity guards in
 /// `ConnectionController._startWith`, the unsupported-region refusal in
-/// `ConnectionController._applyRung`), and flattening those into a generic
+/// `TransportLadder.apply`), and flattening those into a generic
 /// sentence would throw away better copy than it replaced.
 String failureReason(ApiException? apiError, Object e) =>
     apiError?.message ?? _helperIssueText(e) ?? e.toString();

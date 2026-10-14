@@ -186,33 +186,33 @@ extension ConnectionTunnel on ConnectionController {
     // this is the one point a connect, switch, heal and cold restore all pass
     // through, so a move onto a node with a different rung list can never
     // inherit the previous node's rung, and can never start on a rung the new
-    // node does not serve. See `conn_obfuscation.dart`.
-    _applyRung(dial);
+    // node does not serve. See `transport_ladder.dart`.
+    _ladder.apply(dial);
     // The transport the ladder selected for this start. Native resolves to null
     // and costs an unobstructed network nothing; the stream rung rewrites the
     // peer endpoint onto the helper's bridge and pins the local listen port it
-    // delivers to. See `conn_obfuscation.dart`.
-    final transport = await _streamTransportFor(dial);
+    // delivers to. See `transport_ladder.dart`.
+    final transport = await _ladder.streamTransportFor(dial);
     if (!sessionCurrent()) return;
     debugLastTransport = transport;
     // The endpoint this start actually dials, which follows the rung: the
     // node's own device on its own port for native/awg, the helper's loopback
     // bridge for stream. Logged here rather than up front because the rung is
-    // only known after [_applyRung], and a log naming the dial's native fields
-    // would read as a rung that was never applied.
+    // only known after [_ladder.apply], and a log naming the dial's native
+    // fields would read as a rung that was never applied.
     final endpointHost = transport?.listen.split(':').first ?? dial.endpoint;
-    final endpointPort = transport?.listenPort ?? _tunnelPortFor(dial);
+    final endpointPort = transport?.listenPort ?? _ladder.tunnelPortFor(dial);
     AppLog.info(
       'tunnel start gen=$_tunnelEpoch device=${AppLog.redact(dial.deviceId)} '
-      'server=${dial.serverName} rung=${_transportRung.name} '
+      'server=${dial.serverName} rung=${_ladder.rung.name} '
       '$endpointHost:$endpointPort',
     );
     final conf = buildWgQuickConfig(
       privateKey: priv,
       // The address (and below the resolver) follows the rung, because the node
       // runs one overlay per device and each device routes only its own. See
-      // `conn_obfuscation.dart`.
-      assignedIp: _overlayAddressFor(dial),
+      // `transport_ladder.dart`.
+      assignedIp: _ladder.overlayAddressFor(dial),
       serverPublicKey: dial.wgPublicKey,
       // On the stream rung the peer endpoint is the bridge's loopback address,
       // not the node: the bridge is what reaches the node.
@@ -223,9 +223,9 @@ extension ConnectionTunnel on ConnectionController {
       // cannot read it — the fingerprint the awg rung exists to hide, and a
       // guaranteed-failed attempt besides.
       endpointPort: endpointPort,
-      dns: _overlayDnsFor(dial),
+      dns: _ladder.overlayDnsFor(dial),
       allowLocal: allowLocal,
-      obfuscation: _obfuscationParamsFor(dial),
+      obfuscation: _ladder.obfuscationParamsFor(dial),
       listenPort: transport?.deliverPort,
       // The stream rung's loopback peer endpoint would otherwise make
       // `wg-quick` derive a ~64 KB MTU from the loopback interface; see

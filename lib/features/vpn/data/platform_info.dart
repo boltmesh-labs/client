@@ -36,7 +36,7 @@ String currentPlatformLabel() {
 /// A platform without it cannot start the obfuscated rung at all, so the rung
 /// never enters the ladder there: the ladder's floor is the cheapest rung the
 /// serving node *advertises* that this platform can run (see
-/// `conn_obfuscation.dart`), and a node advertising `native` alongside `awg` is
+/// `transport_ladder.dart`), and a node advertising `native` alongside `awg` is
 /// therefore still reachable — on its stock device. This predicate is the single
 /// place the capability is decided. Parameters injectable for tests.
 ///
