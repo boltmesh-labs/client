@@ -136,6 +136,7 @@ jobs:
           name: client-coverage
           path: ${{ github.workspace }}/coverage/lcov.info
           if-no-files-found: error
+          retention-days: 7
 
   validate-windows:
     name: "Validate Windows runner"

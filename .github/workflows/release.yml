@@ -118,6 +118,7 @@ jobs:
             ${{ github.workspace }}/build/app/outputs/bundle/release/app-release.aab
             ${{ github.workspace }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+          retention-days: 1
 
   build-linux:
     name: "Build Linux"
@@ -178,6 +179,7 @@ jobs:
             ${{ github.workspace }}/dist/**/*.deb
             ${{ github.workspace }}/dist/**/*.rpm
           if-no-files-found: error
+          retention-days: 1
 
   build-windows:
     name: "Build Windows"
@@ -299,6 +301,7 @@ jobs:
           name: windows-installer
           path: ${{ github.workspace }}/dist/**/*.exe
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: "Create Release"
