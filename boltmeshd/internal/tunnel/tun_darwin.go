@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,7 +133,7 @@ func (s systemTunImpl) teardown(ctx context.Context, name string) error {
 			errs = append(errs, fmt.Errorf("delete route: %w", err))
 		}
 	}
-	return joinErrors(errs)
+	return errors.Join(errs...)
 }
 
 // DNS state on macOS lives in /etc/resolver, and the system-wide default in
@@ -242,18 +241,3 @@ func hasBoltMeshRoute(name string) bool {
 	}
 	return false
 }
-
-func joinErrors(errs []error) error {
-	switch len(errs) {
-	case 0:
-		return nil
-	case 1:
-		return errs[0]
-	default:
-		return fmt.Errorf("%v", errs)
-	}
-}
-
-// unused keeps the net import meaningful if the file is trimmed during
-// review; remove it if the address parsing below starts using it.
-var _ = net.ParseIP

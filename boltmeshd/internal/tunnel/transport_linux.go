@@ -47,7 +47,6 @@ type streamClient interface {
 // The bridge itself belongs to the shared stream package; this is only the daemon's
 // record of it and of the state teardown has to undo.
 type liveTransport struct {
-	spec   protocol.TransportSpec
 	client streamClient
 	// pins are the host routes installed for the transport's server, in
 	// every table they were installed in. Teardown removes exactly these.
@@ -97,7 +96,7 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 
 	// Pin the first address through the physical path and start; the rest of
 	// the pins reuse the same via/dev.
-	tr := &liveTransport{spec: *spec, client: client}
+	tr := &liveTransport{client: client}
 	for _, ip := range ips {
 		via, dev, err := m.physicalRouteFor(ctx, ipTool, ip)
 		if err != nil {
@@ -404,15 +403,10 @@ func parseUnmarkedRuleTables(rules string) []int {
 			continue
 		}
 		tableIdx := indexToken(fields, "table")
-		keyword := "table"
 		if tableIdx < 0 {
 			tableIdx = indexToken(fields, "lookup")
-			keyword = "lookup"
 		}
 		if tableIdx < 0 || tableIdx+1 >= len(fields) || tableIdx <= markIdx {
-			continue
-		}
-		if keyword == "lookup" && fields[tableIdx-1] == "" {
 			continue
 		}
 		id, err := strconv.Atoi(fields[tableIdx+1])

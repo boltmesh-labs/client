@@ -152,11 +152,9 @@ func uninstallLaunchDaemon(opts options) error {
 
 	// Tear the tunnel down first, while the daemon is still running to service
 	// the request if it is up. A daemon that is not running has nothing to tear
-	// down, so only a genuinely live device must block removal.
+	// down, so a cleanup error here is only worth a warning.
 	if err := cleanupFromOptions(opts); err != nil {
-		if !errors.Is(err, errTunnelNotLoaded) {
-			slog.Warn("tunnel cleanup during uninstall reported an error", "error", err)
-		}
+		slog.Warn("tunnel cleanup during uninstall reported an error", "error", err)
 	}
 
 	// bootout the job.
@@ -187,11 +185,6 @@ func uninstallLaunchDaemon(opts options) error {
 	}
 	return nil
 }
-
-// errTunnelNotLoaded marks a cleanup that found no daemon to talk to. It is
-// distinct from a cleanup that failed, so the uninstaller can tell "nothing
-// was running" from "something is wrong".
-var errTunnelNotLoaded = errors.New("tunnel cleanup: daemon not running")
 
 // waitForJobGone polls until launchd no longer reports the job loaded. bootout
 // is asynchronous, so removing the plist immediately could race a job that is
