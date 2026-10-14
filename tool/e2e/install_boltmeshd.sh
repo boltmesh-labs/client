@@ -10,23 +10,32 @@
 # Usage:
 #   sudo tool/e2e/install_boltmeshd.sh
 #
-# It shares BOLTMESH_E2E_WORK_DIR with run_linux_app.sh so the built binary
-# path agrees; it needs no API credentials.
+# It builds into its own root-owned staging directory, never
+# BOLTMESH_E2E_WORK_DIR: `run_linux_app.sh` does `rm -rf` on that directory as
+# the unprivileged user, so a build left there by this script is a root-owned
+# entry that makes the next run fail at its own cleanup step, from an install
+# that reported success. It needs no API credentials.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 client_repo="$(cd "$here/../.." && pwd)"
 
-workdir="${BOLTMESH_E2E_WORK_DIR:-/tmp/boltmesh-linux-app-e2e}"
+# Root-side build staging; see the header for why this is not the run script's
+# workdir. Reset per run rather than reused: a half-written binary from a failed
+# build must never be what reaches /usr/libexec.
+build_dir="${BOLTMESH_E2E_BUILD_DIR:-/var/tmp/boltmesh-e2e-build}"
 
 [[ $EUID -eq 0 ]] \
   || { printf 'e2e: install_boltmeshd.sh must run as root: sudo tool/e2e/install_boltmeshd.sh\n' >&2; exit 1; }
 
+rm -rf "$build_dir"
+install -d -m 700 "$build_dir"
+
 printf '\n=== building boltmeshd from source\n'
-(cd "$client_repo/boltmeshd" && CGO_ENABLED=0 go build -trimpath -o "$workdir/boltmeshd" ./cmd/boltmeshd)
+(cd "$client_repo/boltmeshd" && CGO_ENABLED=0 go build -trimpath -o "$build_dir/boltmeshd" ./cmd/boltmeshd)
 
 printf '\n=== installing boltmeshd\n'
-install -Dm755 "$workdir/boltmeshd" /usr/libexec/boltmesh/boltmeshd
+install -Dm755 "$build_dir/boltmeshd" /usr/libexec/boltmesh/boltmeshd
 install -Dm755 "$here/firewall_linux.sh" /usr/local/libexec/boltmesh-e2e-firewall
 e2e_user="${SUDO_USER:-}"
 [[ -n $e2e_user && $e2e_user != root ]] \
