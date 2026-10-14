@@ -100,7 +100,6 @@ void main() {
       expect(socket.requests.single['op'], 'ping');
       expect(socket.requests.single['id'], isA<String>());
       expect(socket.requests.single['caps'], helperCapabilities);
-      expect(status.interfaceName, 'boltmesh0');
       expect(status.up, isTrue);
       expect(status.rxBytes, 10);
       expect(status.txBytes, 20);

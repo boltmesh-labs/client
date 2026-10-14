@@ -86,7 +86,6 @@ String _recoveryText(
   return switch (action) {
     RecoveryAction.checking => l10n.homeRecoveryChecking(cause),
     RecoveryAction.restarting => l10n.homeRecoveryRestarting(cause),
-    RecoveryAction.tryingNative => l10n.homeRecoveryTryingNative(cause),
     RecoveryAction.tryingAwg => l10n.homeRecoveryTryingAwg(cause),
     RecoveryAction.tryingStream => l10n.homeRecoveryTryingStream(cause),
     RecoveryAction.switchingServer => l10n.homeRecoverySwitchingServer(cause),

@@ -206,11 +206,6 @@ abstract final class ConnectionTuning {
   /// pushes detection past the next tick.
   static const gatewayProbeTimeout = Duration(seconds: 2);
 
-  /// Budget for the Layer 3 control-plane probe (`GET …/health` on its
-  /// own Dio). Shorter than Dio's 10s receive timeout; the two probes
-  /// combined (2s + 5s) still fit inside one 10s health tick.
-  static const controlProbeTimeout = Duration(seconds: 5);
-
   /// Budget for the pre-demote TCP probe of the stream rung's TLS port.
   /// Runs after the heal's tunnel stop on the direct network, so it pays
   /// no in-tunnel cost; kept short so a filtered port fails fast and the

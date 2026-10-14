@@ -23,8 +23,8 @@ import '../../../core/log.dart';
 class ControlPlaneProbe {
   /// One Dio per distinct timeout, kept for the lifetime of this
   /// (provider-singleton) probe: a fresh Dio per health tick would allocate
-  /// and drop an `HttpClient` every 15s. Both production callers use
-  /// [ConnectionTuning.controlProbeTimeout], so this holds a single entry.
+  /// and drop an `HttpClient` every 15s. Every production caller leaves
+  /// [check]'s default timeout, so this holds a single entry.
   final Map<Duration, Dio> _clients = {};
 
   /// Tests inject a client factory (and the base URL / loopback decision)

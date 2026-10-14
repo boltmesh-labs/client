@@ -57,7 +57,6 @@ class HelperException implements Exception {
 /// counters mean *unknown*, never *dead* on their own.
 class HelperStatus {
   const HelperStatus({
-    required this.interfaceName,
     required this.up,
     required this.stage,
     required this.endpoint,
@@ -99,7 +98,6 @@ class HelperStatus {
     }
     final epoch = lastHandshake.toInt();
     return HelperStatus(
-      interfaceName: interfaceName,
       up: up,
       stage: stage,
       endpoint: endpoint,
@@ -113,7 +111,6 @@ class HelperStatus {
     );
   }
 
-  final String interfaceName;
   final bool up;
   final String stage;
   final String endpoint;

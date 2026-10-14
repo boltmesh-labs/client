@@ -133,7 +133,7 @@ String formatIpV6(BigInt v) {
 }
 
 /// True when [ip] is a syntactically valid IPv4 address.
-bool isValidIpV4(String ip) {
+bool _isValidIpV4(String ip) {
   try {
     parseIpV4(ip);
     return true;
@@ -143,7 +143,7 @@ bool isValidIpV4(String ip) {
 }
 
 /// True when [ip] is a syntactically valid IPv6 address.
-bool isValidIpV6(String ip) {
+bool _isValidIpV6(String ip) {
   try {
     parseIpV6(ip);
     return true;
@@ -168,8 +168,8 @@ String? bareIp(String token) {
       return null;
     }
   }
-  if (isV6) return isValidIpV6(bare) ? bare : null;
-  return isValidIpV4(bare) ? bare : null;
+  if (isV6) return _isValidIpV6(bare) ? bare : null;
+  return _isValidIpV4(bare) ? bare : null;
 }
 
 /// True for loopback addresses (`127.0.0.0/8`, `::1`).

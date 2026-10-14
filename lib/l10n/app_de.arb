@@ -28,7 +28,6 @@
   "homeServerOffline": "Server offline. Wechsel zu einem anderen Server …",
   "homeRecoveryChecking": "VPN-Pfad wird geprüft: {reason}",
   "homeRecoveryRestarting": "Aktueller Tunnel wird neu gestartet: {reason}",
-  "homeRecoveryTryingNative": "Native WireGuard wird versucht: {reason}",
   "homeRecoveryTryingAwg": "AmneziaWG wird versucht: {reason}",
   "homeRecoveryTryingStream": "TLS-Stream wird versucht: {reason}",
   "homeRecoverySwitchingServer": "Wechsel zu einem anderen Server: {reason}",
