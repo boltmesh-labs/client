@@ -74,8 +74,8 @@ part 'conn_tunnel.dart';
 /// * **Tunnel generation** — `_connectedAt`, `_lastStatusAnswered`,
 ///   `_deadEchoStrikes`, owned by [TunnelHealth]. Dropped by
 ///   `_resetLocalHealth`, (re)anchored by `_anchorLocalHealth`.
-/// * **Cold restore** — `armed`/`confirmedAt` on [ColdRestoreWatch], cleared
-///   by `ColdRestoreWatch.clear`.
+/// * **Cold restore** — `armed` on [ColdRestoreWatch], cleared by
+///   `ColdRestoreWatch.clear`.
 /// * **Process/lifecycle** — `_backgrounded`, `_rateLimitedUntil`. Owned by
 ///   the app lifecycle and clock expiry; never reset by a connection event.
 /// * **Monotonic generation tokens** — `_tunnelEpoch`, `_sessionEpoch`.
@@ -93,9 +93,9 @@ class ConnectionController extends Notifier<ConnState> {
   ControlPlaneProbe get _controlPlaneProbe =>
       ref.read(controlPlaneProbeProvider);
   TcpProbe get _tcpProbe => ref.read(tcpProbeProvider);
-  // Wall clock behind every time window (handshake staleness, backend quiet,
-  // cold-restore grace). Injectable so those windows are aged deterministically
-  // in tests instead of by poking private anchors.
+  // Wall clock behind every time window (handshake staleness, backend quiet).
+  // Injectable so those windows are aged deterministically in tests instead of
+  // by poking private anchors.
   Clock get _clock => ref.read(clockProvider);
 
   /// Re-reads the split-tunnel preference once [setAllowLocal] persisted it.
@@ -283,19 +283,14 @@ class ConnectionController extends Notifier<ConnState> {
       _mutex.acquire(op);
 
   /// Cold-restore watch (see [reconcileColdStart]): armed while an
-  /// unconfirmed restore waits on the stage stream, plus the server-truth
-  /// confirm time that anchors the post-restore grace.
+  /// unconfirmed restore waits on the stage stream.
   final ColdRestoreWatch _coldRestore = ColdRestoreWatch();
 
-  /// Test seam: observes the cold-restore watch.
+  /// Test seam: observes/boards the cold-restore watch.
   @visibleForTesting
   bool get debugColdWatchArmed => _coldRestore.armed;
-
-  /// Test seam: observes/boards the cold-restore grace clock.
   @visibleForTesting
-  DateTime? get debugColdRestoreConfirmedAt => _coldRestore.confirmedAt;
-  @visibleForTesting
-  set debugColdRestoreConfirmedAt(DateTime? v) => _coldRestore.confirmedAt = v;
+  set debugColdWatchArmed(bool v) => _coldRestore.armed = v;
 
   /// Anchors describing the current tunnel generation (see [TunnelHealth]):
   /// the tunnel-start clock, whether the last status request was answered by

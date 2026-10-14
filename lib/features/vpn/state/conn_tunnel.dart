@@ -298,7 +298,7 @@ extension ConnectionTunnel on ConnectionController {
     // restart (heal, rotate) keeps it, which is the whole point.
     final movedServer =
         snap.dial != null && snap.dial!.serverId != dial.serverId;
-    // Any fresh tunnel start supersedes cold watching and its grace.
+    // Any fresh tunnel start supersedes a pending cold watch.
     _coldRestore.clear();
     snap = snap.copyWith(
       phase: ConnPhase.connected,

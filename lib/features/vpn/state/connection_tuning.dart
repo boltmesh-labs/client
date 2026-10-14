@@ -216,13 +216,4 @@ abstract final class ConnectionTuning {
   /// no in-tunnel cost; kept short so a filtered port fails fast and the
   /// tick still reaches failover promptly.
   static const demoteTcpProbeTimeout = Duration(seconds: 3);
-
-  /// Grace after a server-truth-confirmed cold restore during which a
-  /// `disconnected` stage event is ignored. A fresh engine re-attach
-  /// reports no running tunnels even when the OS TUN survived, so the
-  /// stage stream replays the same lie right after the confirm — honoring
-  /// it would flip a just-restored session to idle and orphan the live
-  /// native tunnel. Health ticks and status polls remain the corroboration
-  /// for a truly dead tunnel.
-  static const coldRestoreGrace = Duration(seconds: 5);
 }

@@ -76,12 +76,9 @@ extension ConnectionStage on ConnectionController {
       // a server-truth-confirmed cold restore. Honoring it here would flip
       // the just-restored session to idle and orphan the live native
       // tunnel (which then handshakes into the void once its peer is
-      // gone). Ignore it inside the grace window; otherwise server truth
-      // decides via [_corroborateExternalStop] below.
-      if (_coldRestore.inGrace(_clock.now())) {
-        AppLog.info('cold grace: ignoring stale disconnected stage');
-        return;
-      }
+      // gone). Corroborate instead of tearing down directly — a lone
+      // `disconnected` never flips the restore to idle by itself (see
+      // [_corroborateExternalStop] below).
       // A confirm (or any op) holding the mutex reconciles state itself;
       // recording the stage is enough — acting here would race it and
       // orphan the just-restored session.
@@ -115,10 +112,6 @@ extension ConnectionStage on ConnectionController {
       return;
     }
     if (stage == VpnStage.denied) {
-      if (_coldRestore.inGrace(_clock.now())) {
-        AppLog.info('cold grace: ignoring stale denied stage');
-        return;
-      }
       AppLog.info('tunnel stage=denied -> error');
       _endLocalSession();
       snap = snap.copyWith(
@@ -289,24 +282,6 @@ extension ConnectionStage on ConnectionController {
           ? null
           : snap.healthNote,
     );
-  }
-
-  /// True right after a down-stage cold restore confirmed by server truth:
-  /// [_connectedAt] was just anchored while working, so an unknown (null)
-  /// handshake read looks "fresh" even though the tunnel may have been dead
-  /// for hours. The native handshake reader is also unimplemented on some
-  /// platforms (see `client/android/.../MainActivity.kt`), where null is the
-  /// only possible read. Callers must defer on unknown evidence while this
-  /// holds instead of adopting (see [_restoreColdSession]). A real (non-null)
-  /// timestamp is unaffected: only null reads are ambiguous.
-  bool _unknownHandshakeIsColdAnchored(DateTime now) {
-    final confirmedAt = _coldRestore.confirmedAt;
-    final anchoredAt = _connectedAt;
-    if (confirmedAt == null || anchoredAt == null) return false;
-    if (now.difference(anchoredAt) >= ConnectionTuning.handshakeStaleAfter) {
-      return false;
-    }
-    return now.difference(confirmedAt) < ConnectionTuning.handshakeStaleAfter;
   }
 
   /// Tears down a corroborated-dead outside stop: idle with the dial preserved

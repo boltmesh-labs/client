@@ -67,14 +67,14 @@ Future<void> seedConnected(
 void primeCohorts(ConnectionController ctl) {
   ctl.debugDeadEchoStrikes = 3;
   ctl.debugPollsSinceRotate = 5;
-  ctl.debugColdRestoreConfirmedAt = DateTime.now();
+  ctl.debugColdWatchArmed = true;
 }
 
 /// Asserts every primed cohort is back to its default.
 void expectCohortsDropped(ConnectionController ctl) {
   expect(ctl.debugDeadEchoStrikes, 0);
   expect(ctl.debugPollsSinceRotate, 0);
-  expect(ctl.debugColdRestoreConfirmedAt, isNull);
+  expect(ctl.debugColdWatchArmed, isFalse);
 }
 
 void main() {
@@ -133,9 +133,8 @@ void main() {
     await seedConnected(container, store, tunnel);
     addTearDown(tunnel.close);
     final ctl = container.read(connectionProvider.notifier);
-    // Only the two cohorts that survive the denied handler's cold grace:
-    // `_noteStage` ignores a denied stage while the cold watch is in grace,
-    // so arming the confirm time here would disable the very path under test.
+    // A denied stage ends the session outright: both counters are dropped by
+    // the handler under test.
     ctl.debugDeadEchoStrikes = 3;
     ctl.debugPollsSinceRotate = 5;
 

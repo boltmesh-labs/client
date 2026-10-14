@@ -711,7 +711,7 @@ void main() {
     );
 
     test(
-      'post-restore grace ignores the replayed disconnected stage',
+      'post-restore replayed disconnected defers to corroboration',
       () async {
         final events = <String>[];
         final store = ColdStore();
@@ -730,14 +730,12 @@ void main() {
 
         await ctl.reconcileColdStart();
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        // The unknown-liveness path now restarts (clearing the anchor), so
-        // set the verified-promote anchor this grace test simulates.
-        ctl.debugColdRestoreConfirmedAt = DateTime.now();
         events.clear();
 
         // The stage stream replays the fresh-backend lie right after the
-        // confirm: it must not tear down the restored session nor release
-        // the server peer.
+        // confirm: with no local liveness proof it must defer to the
+        // health/status machinery, never tear down the restored session nor
+        // release the server peer.
         tunnel.emit(VpnStage.disconnected);
         await settleEvents();
 
@@ -750,7 +748,7 @@ void main() {
     );
 
     test(
-      'post-restore grace expiry with corroborated death tears down',
+      'post-restore outside kill with a stale handshake tears down',
       () async {
         final events = <String>[];
         final store = ColdStore();
@@ -769,12 +767,8 @@ void main() {
 
         await ctl.reconcileColdStart();
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        // Age the confirm past the grace window and let the handshake go
-        // stale: a later outside-kill is real and must be honored (without
-        // releasing the server peer).
-        ctl.debugColdRestoreConfirmedAt = DateTime.now().subtract(
-          const Duration(minutes: 1),
-        );
+        // Let the handshake go stale: a later outside-kill is real and must
+        // be honored (without releasing the server peer).
         ctl.debugHandshakeReader = () async =>
             DateTime.now().subtract(const Duration(minutes: 5));
         events.clear();
@@ -789,7 +783,6 @@ void main() {
         expect(events, contains('tunnel:stop'));
         // Ghost-kill downs the owning backend directly: no reclaim-start.
         expect(events, isNot(contains('tunnel:start')));
-        expect(ctl.debugColdRestoreConfirmedAt, isNull);
       },
     );
 
@@ -829,12 +822,8 @@ void main() {
 
         await ctl.reconcileColdStart();
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        // Past the cold-restore grace, so the outside stop is verified
-        // instead of ignored, and past the never-handshook window, so a null
-        // read is only counted if the call site believes a reader exists.
-        ctl.debugColdRestoreConfirmedAt = clock.now().subtract(
-          const Duration(minutes: 1),
-        );
+        // Past the never-handshook window, so a null read is only counted if
+        // the call site believes a reader exists.
         clock.advance(const Duration(minutes: 5));
         debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
         addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -854,7 +843,7 @@ void main() {
     );
 
     test(
-      'post-restore grace expiry with a live tunnel adopts, never kills',
+      'post-restore outside kill with a live tunnel adopts, never kills',
       () async {
         final events = <String>[];
         final store = ColdStore();
@@ -873,13 +862,8 @@ void main() {
 
         await ctl.reconcileColdStart();
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        // The replayed lie arrives past the grace window, but the server
-        // peer is alive and the handshake is fresh: adopt, never kill.
-        // A real (non-null) handshake timestamp is positive liveness even
-        // when the cold-restore anchor is still young.
-        ctl.debugColdRestoreConfirmedAt = DateTime.now().subtract(
-          const Duration(minutes: 1),
-        );
+        // The replayed lie arrives, but the server peer is alive and the
+        // handshake is fresh: adopt, never kill.
         ctl.debugHandshakeReader = () async => DateTime.now();
         events.clear();
 
@@ -915,9 +899,6 @@ void main() {
 
         await ctl.reconcileColdStart();
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
-        ctl.debugColdRestoreConfirmedAt = DateTime.now().subtract(
-          const Duration(minutes: 1),
-        );
         events.clear();
 
         // A confirm in flight (mutex held): the event must not flip to idle

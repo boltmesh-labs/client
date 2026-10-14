@@ -2810,7 +2810,7 @@ void main() {
     expect(events.where((e) => e.contains('/disconnect')), isEmpty);
   });
 
-  test('external OS stop grace cleared so a later stop is honored', () async {
+  test('external OS stop with a stale handshake tears down', () async {
     final events = <String>[];
     final (container, tunnel) = await seedConnected(events, (o) {
       if (o.path.endsWith('/connect')) return dialJson();
@@ -2825,7 +2825,6 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.idle);
-    expect(ctl.debugColdRestoreConfirmedAt, isNull);
     expect(events.where((e) => e.contains('/disconnect')), isEmpty);
   });
 

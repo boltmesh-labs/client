@@ -375,20 +375,14 @@ extension ConnectionColdStart on ConnectionController {
         return;
       }
       if (!_coldSessionCurrent(sessionEpoch)) return;
-      _promoteColdRestore(dial, verified: false);
+      _promoteColdRestore(dial);
     } finally {
       release();
     }
   }
 
   /// Promotes a server-truth-confirmed cold restore to Connected.
-  ///
-  /// [verified] marks a down-read restore whose liveness was positively
-  /// corroborated ([_coldRestoreAlive]): the stage stream will replay the
-  /// fresh-backend `disconnected` lie right after, so the post-restore
-  /// grace stays anchored. Up-read restores keep the previous behavior
-  /// (no grace — the OS already reported the tunnel alive).
-  void _promoteColdRestore(DialParams dial, {required bool verified}) {
+  void _promoteColdRestore(DialParams dial) {
     snap = _resetSessionCounters(
       snap.copyWith(
         phase: ConnPhase.connected,
@@ -404,13 +398,8 @@ extension ConnectionColdStart on ConnectionController {
     );
     _coldRestore.armed = false;
     _anchorLocalHealth();
-    // Anchor the post-restore grace: the stage stream replays the
-    // fresh-backend `disconnected` lie right after this confirm.
-    _coldRestore.confirmedAt = verified ? _clock.now() : null;
     _startPolling();
-    AppLog.info(
-      'cold restore ok server=${dial.serverName}${verified ? ' (verified)' : ''}',
-    );
+    AppLog.info('cold restore ok server=${dial.serverName}');
   }
 
   /// Local liveness for a down-read cold restore whose server peer exists:
@@ -484,13 +473,9 @@ extension ConnectionColdStart on ConnectionController {
         // would read its permanent null as "never handshook" and tear down a
         // live tunnel. Absence of evidence never proves death.
         readerSupported: _readerSupported,
-        // A cold-anchored `_connectedAt` must not count as fresh here: it
-        // was set minutes after the tunnel died (see
-        // [_unknownHandshakeIsColdAnchored]). Full null window, same
-        // reasoning as [_corroborateExternalStop].
-        connectedAt: _unknownHandshakeIsColdAnchored(now)
-            ? now.subtract(ConnectionTuning.handshakeStaleAfter)
-            : _connectedAt,
+        // The full null window: this only runs after a terminal stage read,
+        // so there is no reason to shorten the aging.
+        connectedAt: _connectedAt,
         graceAfter: ConnectionTuning.handshakeStaleAfter,
         staleAfter: ConnectionTuning.handshakeStaleAfter,
       );
