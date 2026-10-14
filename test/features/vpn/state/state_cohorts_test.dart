@@ -58,23 +58,23 @@ Future<void> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
 }
 
 /// Primes the three resettable private cohorts to non-default values.
 void primeCohorts(ConnectionController ctl) {
-  ctl.debugDeadEchoStrikes = 3;
-  ctl.debugPollsSinceRotate = 5;
-  ctl.debugColdWatchArmed = true;
+  ctl.testHooks.deadEchoStrikes = 3;
+  ctl.testHooks.pollsSinceRotate = 5;
+  ctl.testHooks.coldWatchArmed = true;
 }
 
 /// Asserts every primed cohort is back to its default.
 void expectCohortsDropped(ConnectionController ctl) {
-  expect(ctl.debugDeadEchoStrikes, 0);
-  expect(ctl.debugPollsSinceRotate, 0);
-  expect(ctl.debugColdWatchArmed, isFalse);
+  expect(ctl.testHooks.deadEchoStrikes, 0);
+  expect(ctl.testHooks.pollsSinceRotate, 0);
+  expect(ctl.testHooks.coldWatchArmed, isFalse);
 }
 
 void main() {
@@ -135,14 +135,14 @@ void main() {
     final ctl = container.read(connectionProvider.notifier);
     // A denied stage ends the session outright: both counters are dropped by
     // the handler under test.
-    ctl.debugDeadEchoStrikes = 3;
-    ctl.debugPollsSinceRotate = 5;
+    ctl.testHooks.deadEchoStrikes = 3;
+    ctl.testHooks.pollsSinceRotate = 5;
 
     tunnel.emit(VpnStage.denied);
     await Future<void>.delayed(Duration.zero);
 
     expect(container.read(connectionProvider).phase, ConnPhase.error);
-    expect(ctl.debugDeadEchoStrikes, 0);
-    expect(ctl.debugPollsSinceRotate, 0);
+    expect(ctl.testHooks.deadEchoStrikes, 0);
+    expect(ctl.testHooks.pollsSinceRotate, 0);
   });
 }

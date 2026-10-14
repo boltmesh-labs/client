@@ -96,7 +96,7 @@ ProviderContainer makeContainer({
       vpnApiProvider.overrideWithValue(api),
       // A suite that needs the privileged helper (the stream rung only runs
       // there) injects it; the rest drive the plugin adapter through
-      // [seedConnected]'s `debugTunnel`.
+      // [seedConnected]'s `testHooks.tunnel`.
       if (tunnel != null) tunnelAdapterProvider.overrideWithValue(tunnel),
       if (clock != null) clockProvider.overrideWithValue(clock),
       // Default pins the diagnostic pipeline to the legacy total-blackout
@@ -149,10 +149,10 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   // Fresh handshake by default: individual tests override with a stale one
   // to drive heals. Fresh means live rekeys, so nothing heals unprompted.
-  ctl.debugHandshakeReader = () async => DateTime.now();
+  ctl.testHooks.handshakeReader = () async => DateTime.now();
   await ctl.connect();
   // A connect that is expected to fail (a region this build cannot serve) has
   // its own assertions; the phase is not `connected` for it.
@@ -168,7 +168,7 @@ Future<(ProviderContainer, FakeTunnel)> seedConnected(
 /// [ConnectionTuning.hardHandshakeStaleAfter], so the backend-corroboration
 /// gate still applies.
 void staleHandshake(ConnectionController ctl) {
-  ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+  ctl.testHooks.handshakeReader = () async => DateTime.now().subtract(
     ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
   );
 }
@@ -176,7 +176,7 @@ void staleHandshake(ConnectionController ctl) {
 /// Points the controller's handshake read past the hard ceiling: the peer
 /// has missed multiple rekey cycles, so the handshake alone drives recovery.
 void hardStaleHandshake(ConnectionController ctl) {
-  ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+  ctl.testHooks.handshakeReader = () async => DateTime.now().subtract(
     ConnectionTuning.hardHandshakeStaleAfter + const Duration(seconds: 1),
   );
 }
@@ -430,7 +430,7 @@ void main() {
       staleHandshake(ctl);
       await ctl.checkHealthOnce();
       ctl.snap = ctl.snap.copyWith(autoHealAttempts: 0);
-      ctl.debugHandshakeReader = () async => DateTime.now();
+      ctl.testHooks.handshakeReader = () async => DateTime.now();
     }
 
     Future<(ProviderContainer, FakeTunnel)> seedDual() {
@@ -553,7 +553,7 @@ void main() {
 
       // Tick 1 banks strike 1 without acting: 40s opens the echo probe (>=
       // echoProbeAfter) but is not yet a stale handshake.
-      ctl.debugHandshakeReader = () async =>
+      ctl.testHooks.handshakeReader = () async =>
           DateTime.now().subtract(const Duration(seconds: 40));
       await ctl.checkHealthOnce();
       expect(ctl.transportRung, TransportRung.native);
@@ -588,7 +588,7 @@ void main() {
         final ctl = container.read(connectionProvider.notifier);
 
         // Bank strike 1 on native: the probe follows the native rung to wg_dns.
-        ctl.debugHandshakeReader = () async =>
+        ctl.testHooks.handshakeReader = () async =>
             DateTime.now().subtract(const Duration(seconds: 40));
         await ctl.checkHealthOnce();
         expect(ctl.transportRung, TransportRung.native);
@@ -688,7 +688,7 @@ void main() {
       // Arm a fresh handshake for the reconnected session so the test observes
       // the conf the connect builds, not a follow-on recovery cycle racing the
       // assertion.
-      ctl.debugHandshakeReader = () async => DateTime.now();
+      ctl.testHooks.handshakeReader = () async => DateTime.now();
       await ctl.disconnect();
       await ctl.connect();
 
@@ -784,10 +784,10 @@ void main() {
         await store.setDeviceId('dev-1');
         await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
         final ctl = container.read(connectionProvider.notifier);
-        ctl.debugHandshakeReader = () async => DateTime.now();
+        ctl.testHooks.handshakeReader = () async => DateTime.now();
         // The app e2e's full-ladder walk is driven by this seam; a suite that
         // wants a specific rung pins it before the first start, the same way.
-        ctl.debugForceRung = forceRung;
+        ctl.testHooks.forceRung = forceRung;
         await ctl.connect();
         if (expectConnected) {
           expect(container.read(connectionProvider).phase, ConnPhase.connected);
@@ -905,7 +905,7 @@ void main() {
 
         // Tick 1: old enough to probe (>= 30s) but not stale enough to act.
         // Banks strike 1 and returns without healing, so nothing resets it.
-        ctl.debugHandshakeReader = () async =>
+        ctl.testHooks.handshakeReader = () async =>
             DateTime.now().subtract(const Duration(seconds: 40));
         await ctl.checkHealthOnce();
         expect(ctl.transportRung, TransportRung.native);
@@ -1032,7 +1032,7 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
         // A supported reader reporting no handshake at all, ever.
-        ctl.debugHandshakeReader = () async => null;
+        ctl.testHooks.handshakeReader = () async => null;
         final walked = <TransportRung>[];
         for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
           clock.advance(ConnectionTuning.firstHandshakeGrace);
@@ -1075,7 +1075,7 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
         // A supported reader reporting no handshake at all, ever.
-        ctl.debugHandshakeReader = () async => null;
+        ctl.testHooks.handshakeReader = () async => null;
         // Walk to the stream rung the way a blocked first connect
         // does. Until a transport is live the daemon reports no
         // streamSession at all, which is exactly the walk's own
@@ -1133,7 +1133,7 @@ void main() {
             ),
           );
           final ctl = container.read(connectionProvider.notifier);
-          ctl.debugHandshakeReader = () async => null;
+          ctl.testHooks.handshakeReader = () async => null;
           for (var i = 0; i < ConnectionTuning.maxHealsPerIncident; i++) {
             clock.advance(ConnectionTuning.firstHandshakeGrace);
             await ctl.checkHealthOnce();
@@ -1183,7 +1183,7 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
         ctl.snap = ctl.snap.copyWith(serverConfirmedDown: true);
-        ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+        ctl.testHooks.handshakeReader = () async => DateTime.now().subtract(
           ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
         );
 
@@ -1224,7 +1224,7 @@ void main() {
         );
         final ctl = container.read(connectionProvider.notifier);
         // A real reader reporting no handshake yet, ever.
-        ctl.debugHandshakeReader = () async => null;
+        ctl.testHooks.handshakeReader = () async => null;
         clock.advance(ConnectionTuning.firstHandshakeGrace);
 
         await ctl.checkHealthOnce();
@@ -1253,7 +1253,7 @@ void main() {
           controlProbe: controlProbe,
         );
         final ctl = container.read(connectionProvider.notifier);
-        ctl.debugHandshakeReader = () async => clock.now().subtract(
+        ctl.testHooks.handshakeReader = () async => clock.now().subtract(
           ConnectionTuning.handshakeStaleAfter + const Duration(seconds: 10),
         );
         await ctl.checkHealthOnce();
@@ -1263,7 +1263,7 @@ void main() {
         // No promotion probe exists: a long, positively healthy session must
         // not climb back to a cheaper rung. Demotion is sticky for the
         // process's lifetime and only a restart resets the rung to the floor.
-        ctl.debugHandshakeReader = () async => clock.now();
+        ctl.testHooks.handshakeReader = () async => clock.now();
         clock.advance(const Duration(days: 2));
         await ctl.checkHealthOnce();
         expect(ctl.transportRung, TransportRung.awg);
@@ -1294,7 +1294,7 @@ void main() {
           );
 
           // Bank strike 1 on a handshake too fresh to act on.
-          ctl.debugHandshakeReader = () async =>
+          ctl.testHooks.handshakeReader = () async =>
               DateTime.now().subtract(const Duration(seconds: 40));
           await ctl.checkHealthOnce();
 
@@ -1389,7 +1389,7 @@ void main() {
 
           // Bank strike 1 on a handshake too fresh to act on, so the budget is
           // still whole when the path becomes confirmed-dead on the next tick.
-          ctl.debugHandshakeReader = () async =>
+          ctl.testHooks.handshakeReader = () async =>
               DateTime.now().subtract(const Duration(seconds: 40));
           await ctl.checkHealthOnce();
           expect(container.read(connectionProvider).autoHealAttempts, 0);
@@ -1981,7 +1981,7 @@ void main() {
       throw StateError('unexpected ${o.path}');
     });
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugHandshakeReader = () async => null;
+    ctl.testHooks.handshakeReader = () async => null;
     events.clear();
 
     await ctl.pollStatusOnce();
@@ -2010,7 +2010,7 @@ void main() {
       throw StateError('unexpected ${o.path}');
     }, clock: clock);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugHandshakeReader = () async => null;
+    ctl.testHooks.handshakeReader = () async => null;
     // Age the tunnel-start anchor past the never-handshook grace window
     // (the connect above anchored it at the fake clock's origin).
     clock.advance(ConnectionTuning.firstHandshakeGrace);
@@ -2059,7 +2059,7 @@ void main() {
         keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugHandshakeReader = () async => handshakeAt;
+      ctl.testHooks.handshakeReader = () async => handshakeAt;
       // Out-of-band success: pollFailures 0 with a fresh status anchor, so
       // the corroboration gate stays closed.
       await ctl.pollStatusOnce();
@@ -2333,7 +2333,7 @@ void main() {
         keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugHandshakeReader = () async => null;
+      ctl.testHooks.handshakeReader = () async => null;
       await ctl.pollStatusOnce();
       expect(container.read(connectionProvider).lastStatusAt, isNotNull);
       events.clear();
@@ -2391,7 +2391,7 @@ void main() {
       keyQueue: const [Keypair('NEW-PRIV', 'NEW-PUB')],
     );
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugHandshakeReader = () async => null;
+    ctl.testHooks.handshakeReader = () async => null;
     await ctl.pollStatusOnce();
     events.clear();
 
@@ -2487,7 +2487,7 @@ void main() {
     // the handshake stopwatch alone must not heal yet. Past the probe gate
     // so the echo is actually read. A successful API poll between echoes
     // must not erase the local dead-path evidence.
-    ctl.debugHandshakeReader = () async => DateTime.now().subtract(
+    ctl.testHooks.handshakeReader = () async => DateTime.now().subtract(
       ConnectionTuning.echoProbeAfter + const Duration(seconds: 10),
     );
     events.clear();
@@ -2500,7 +2500,7 @@ void main() {
     expect(container.read(connectionProvider).autoHealAttempts, 0);
     expect(events.where((e) => e.startsWith('tunnel:')), isEmpty);
     await ctl.pollStatusOnce();
-    expect(ctl.debugDeadEchoStrikes, 1);
+    expect(ctl.testHooks.deadEchoStrikes, 1);
 
     // The confirming strike proves the local path dead. The API probe is
     // down through the old tunnel, so stop first and use direct discovery.
@@ -2517,7 +2517,7 @@ void main() {
       lessThan(events.indexOf('GET:/vpn-regions')),
     );
     // The replacement tunnel starts with a fresh echo-strike run.
-    expect(ctl.debugDeadEchoStrikes, 0);
+    expect(ctl.testHooks.deadEchoStrikes, 0);
   });
 
   test(
@@ -2617,7 +2617,7 @@ void main() {
     final probe =
         container.read(gatewayProbeProvider) as support.FakeGatewayProbe;
     var handshakeAt = DateTime.now();
-    ctl.debugHandshakeReader = () async => handshakeAt;
+    ctl.testHooks.handshakeReader = () async => handshakeAt;
     events.clear();
 
     // Still fresh: no probe, no heal.
@@ -2657,11 +2657,11 @@ void main() {
     final ctl = container.read(connectionProvider.notifier);
     // Two dead echoes were seen, then the backend answers through the live
     // tunnel: the data path is proven reachable, so the run resets.
-    ctl.debugDeadEchoStrikes = ConnectionTuning.echoStallStrikes - 1;
+    ctl.testHooks.deadEchoStrikes = ConnectionTuning.echoStallStrikes - 1;
 
     await ctl.pollStatusOnce();
 
-    expect(ctl.debugDeadEchoStrikes, 0);
+    expect(ctl.testHooks.deadEchoStrikes, 0);
   });
 
   test('a degraded stage event kicks a health tick immediately', () async {
@@ -2845,8 +2845,8 @@ void main() {
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      ctl.debugHandshakeReader = () async => DateTime.now();
+      ctl.testHooks.tunnel = tunnel;
+      ctl.testHooks.handshakeReader = () async => DateTime.now();
       await ctl.connect();
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
       events.clear();
@@ -2917,8 +2917,8 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = tunnel;
-    ctl.debugHandshakeReader = () async => DateTime.now();
+    ctl.testHooks.tunnel = tunnel;
+    ctl.testHooks.handshakeReader = () async => DateTime.now();
     await ctl.connect();
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
     events.clear();
@@ -2979,8 +2979,8 @@ void main() {
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
-      ctl.debugHandshakeReader = () async => DateTime.now();
+      ctl.testHooks.tunnel = tunnel;
+      ctl.testHooks.handshakeReader = () async => DateTime.now();
       await ctl.connect();
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
       expect(await store.lastDialJson(), isNotNull);
@@ -3673,7 +3673,7 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
     await ctl.connect();
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
     events.clear();
@@ -3738,7 +3738,7 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
     await ctl.connect();
     staleHandshake(ctl);
     events.clear();
@@ -3875,7 +3875,7 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
     staleHandshake(ctl);
     await ctl.connect();
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
@@ -3937,7 +3937,7 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
     staleHandshake(ctl);
     await ctl.connect();
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
@@ -3970,7 +3970,7 @@ void main() {
     });
     final ctl = container.read(connectionProvider.notifier);
     tunnel.wedgeTraffic = true;
-    ctl.debugHandshakeReader = () =>
+    ctl.testHooks.handshakeReader = () =>
         throw TimeoutException('wedged', const Duration(seconds: 3));
     events.clear();
 

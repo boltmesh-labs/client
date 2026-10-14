@@ -46,7 +46,7 @@ Future<void> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
 }
@@ -82,7 +82,7 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.phase, ConnPhase.connected);
     expect(
-      container.read(connectionProvider.notifier).debugPollsSinceRotate,
+      container.read(connectionProvider.notifier).testHooks.pollsSinceRotate,
       0,
     );
   });
@@ -137,7 +137,8 @@ void main() {
     final tunnel = FakeTunnel(events);
     final container = makeContainer(store: store, keys: keys, api: api);
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
+    container.read(connectionProvider.notifier).testHooks.forceThroughTunnel =
+        true;
     events.clear();
 
     await container.read(connectionProvider.notifier).rotateKeys();
@@ -335,14 +336,14 @@ void main() {
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = tunnel;
+    ctl.testHooks.tunnel = tunnel;
     await ctl.connect();
     events.clear();
 
     // Queue disconnect first, then auto-rotation. The rotation must observe
     // the post-disconnect phase after the mutex is released, not restart the
     // tunnel from the stale dial retained for reconnect.
-    final release = await ctl.debugAcquireMutex('test-hold');
+    final release = await ctl.testHooks.acquireMutex('test-hold');
     final disconnect = ctl.disconnect();
     final rotate = ctl.rotateKeys(auto: true);
     release();
@@ -374,7 +375,7 @@ void main() {
     final tunnel = FakeTunnel(events);
     final container = makeContainer(store: store, keys: keys, api: api);
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugPollsSinceRotate =
+    container.read(connectionProvider.notifier).testHooks.pollsSinceRotate =
         Env.keyRotationPolls - 1;
     events.clear();
 
@@ -383,7 +384,7 @@ void main() {
     expect(await store.privateKey(), 'NEW-PRIV');
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
     expect(
-      container.read(connectionProvider.notifier).debugPollsSinceRotate,
+      container.read(connectionProvider.notifier).testHooks.pollsSinceRotate,
       0,
     );
   });

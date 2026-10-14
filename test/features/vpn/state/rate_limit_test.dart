@@ -75,7 +75,7 @@ void main() {
     );
     final container = makeContainer(store: store, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
     await store.setDeviceId('dev-1');
     await store.setKeypair(privateKey: 'P', publicKey: 'PUB');
     await ctl.connect();
@@ -85,7 +85,7 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.pollFailures, 0);
     expect(state.backendIssue, BackendIssue.serverError);
-    expect(ctl.debugRateLimitedUntil, isNotNull);
+    expect(ctl.testHooks.rateLimitedUntil, isNotNull);
   });
 
   test('429 on connect arms a cooldown and skips the next attempt', () async {
@@ -161,7 +161,7 @@ void main() {
     final clock = support.FakeClock();
     final container = makeContainer(store: store, api: api, clock: clock);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await ctl.connect();
     expect(container.read(connectionProvider).message, contains('Please wait'));
@@ -187,8 +187,10 @@ void main() {
     final clock = support.FakeClock();
     final container = makeContainer(store: store, api: api, clock: clock);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
-    ctl.debugRateLimitedUntil = clock.now().add(const Duration(seconds: 30));
+    ctl.testHooks.tunnel = FakeTunnel(events);
+    ctl.testHooks.rateLimitedUntil = clock.now().add(
+      const Duration(seconds: 30),
+    );
 
     await ctl.disconnect();
 
@@ -217,13 +219,15 @@ void main() {
     final clock = support.FakeClock();
     final container = makeContainer(store: store, api: api, clock: clock);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await ctl.connect();
     expect(container.read(connectionProvider).phase, ConnPhase.connected);
     final callsAfterConnect = events.length;
 
-    ctl.debugRateLimitedUntil = clock.now().add(const Duration(seconds: 30));
+    ctl.testHooks.rateLimitedUntil = clock.now().add(
+      const Duration(seconds: 30),
+    );
     await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
     expect(events.length, callsAfterConnect);

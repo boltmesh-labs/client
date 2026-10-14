@@ -78,8 +78,8 @@ Future<(ProviderContainer, support.FakeTunnel)> seedConnected(
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final tunnel = support.FakeTunnel(events: events);
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
-  ctl.debugHandshakeReader = () async => DateTime.now();
+  ctl.testHooks.tunnel = tunnel;
+  ctl.testHooks.handshakeReader = () async => DateTime.now();
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
   events.clear();

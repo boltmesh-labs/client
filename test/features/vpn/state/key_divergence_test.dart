@@ -52,7 +52,7 @@ Future<void> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
 }
@@ -81,7 +81,7 @@ void main() {
       keys: support.FakeKeys(const []),
       api: api,
     );
-    container.read(connectionProvider.notifier).debugTunnel = tunnel;
+    container.read(connectionProvider.notifier).testHooks.tunnel = tunnel;
 
     await container.read(connectionProvider.notifier).connect();
 
@@ -214,7 +214,7 @@ void main() {
       container.dispose();
     });
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = tunnel;
+    ctl.testHooks.tunnel = tunnel;
 
     await ctl.reconcileColdStart();
 
@@ -244,7 +244,7 @@ void main() {
       keys: support.FakeKeys([const Keypair('NEW-PRIV', 'NEW-PUB')]),
       api: api,
     );
-    container.read(connectionProvider.notifier).debugTunnel =
+    container.read(connectionProvider.notifier).testHooks.tunnel =
         support.FakeTunnel();
 
     await container.read(connectionProvider.notifier).connect();

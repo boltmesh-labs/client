@@ -510,7 +510,7 @@ extension ConnectionColdStart on ConnectionController {
   /// Live peer behind the native tunnel, or null when unknown/none. Never
   /// throws (see [TunnelAdapter.getActivePeer]).
   Future<ActivePeer?> _livePeer() async {
-    final seam = debugActivePeer;
+    final seam = testHooks.activePeer;
     if (seam != null) return seam;
     return _tunnel.getActivePeer();
   }

@@ -41,7 +41,7 @@ class TransportLadder {
   /// later adapter swap is observed at the point of use.
   final Set<String> Function() _daemonCapabilities;
 
-  /// The e2e force seam (see `ConnectionController.debugForceRung`), read
+  /// The e2e force seam (see `ConnectionController.testHooks.forceRung`), read
   /// lazily for the same reason.
   final TransportRung? Function() _forcedRung;
 
@@ -254,7 +254,7 @@ class TransportLadder {
   TransportRung? rungFor(DialParams dial) {
     final runnable = runnableRungs(dial);
     if (runnable.isEmpty) return null;
-    // Test seam (see `ConnectionController.debugForceRung`): an e2e walks the
+    // Test seam (see `ConnectionController.testHooks.forceRung`): an e2e walks the
     // whole ladder by pinning each rung, which the health policy would otherwise
     // only reach on a blocked network. Still scoped to `runnable`, so it can only
     // start a rung this node serves and this build can assemble.

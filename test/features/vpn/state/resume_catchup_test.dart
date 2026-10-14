@@ -186,7 +186,7 @@ Future<(ProviderContainer, ResumeTunnel)> seedResumeConnected(
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final tunnel = ResumeTunnel();
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
   events.clear();
@@ -340,7 +340,7 @@ void main() {
       await store.setDeviceId('dev-1');
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = ResumeTunnel();
+      ctl.testHooks.tunnel = ResumeTunnel();
       await ctl.connect();
       events.clear();
 
@@ -389,7 +389,7 @@ void main() {
       final events = <String>[];
       final (container, _) = await seedResumeConnected(events);
       final ctl = container.read(connectionProvider.notifier);
-      final release = await ctl.debugAcquireMutex();
+      final release = await ctl.testHooks.acquireMutex();
       try {
         await ctl.catchUpOnResume(now: DateTime.now());
       } finally {

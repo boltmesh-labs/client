@@ -60,7 +60,7 @@ Future<void> seedConnected(
   HelperStore store,
 ) async {
   await seedDevice(store);
-  ctl.debugHandshakeReader = () async => DateTime.now();
+  ctl.testHooks.handshakeReader = () async => DateTime.now();
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
 }
@@ -320,7 +320,7 @@ void main() {
         final state = container.read(connectionProvider);
         expect(state.phase, ConnPhase.connected);
         expect(state.dial?.serverName, 'cached-server');
-        expect(ctl.debugColdWatchArmed, isTrue);
+        expect(ctl.testHooks.coldWatchArmed, isTrue);
         expect(socket.ops, isNot(contains('up')));
       },
     );

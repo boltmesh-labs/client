@@ -81,7 +81,9 @@ extension ConnectionTransport on ConnectionController {
   /// with a transport error (backend unreachable through the current path);
   /// app-level errors never stop the tunnel.
   bool _tryThroughTunnelFirst(bool wasConnected) {
-    if (debugForceThroughTunnel != null) return debugForceThroughTunnel!;
+    if (testHooks.forceThroughTunnel != null) {
+      return testHooks.forceThroughTunnel!;
+    }
     return wasConnected && _tunnel.isReady;
   }
 

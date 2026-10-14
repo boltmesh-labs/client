@@ -48,8 +48,8 @@ Future<(ProviderContainer, FakeTunnel, ConnectionController)> seedPipeline(
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final tunnel = FakeTunnel(events);
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
-  ctl.debugHandshakeReader = () async => DateTime.now();
+  ctl.testHooks.tunnel = tunnel;
+  ctl.testHooks.handshakeReader = () async => DateTime.now();
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
   events.clear();
@@ -57,7 +57,7 @@ Future<(ProviderContainer, FakeTunnel, ConnectionController)> seedPipeline(
 }
 
 void staleHandshake(ConnectionController ctl) {
-  ctl.debugHandshakeReader = () async =>
+  ctl.testHooks.handshakeReader = () async =>
       DateTime.now().subtract(const Duration(minutes: 5));
 }
 
@@ -93,7 +93,7 @@ void main() {
       final probe =
           container.read(gatewayProbeProvider) as support.FakeGatewayProbe;
       // Clear any strike run left by the connect, then tick while offline.
-      ctl.debugDeadEchoStrikes = 0;
+      ctl.testHooks.deadEchoStrikes = 0;
       final probesBefore = probe.calls;
 
       await ctl.checkHealthOnce();
@@ -105,7 +105,7 @@ void main() {
       // dead-path strike that pre-arms aggressive healing when the link
       // returns. The probe is skipped and the run stays clear.
       expect(probe.calls, probesBefore);
-      expect(ctl.debugDeadEchoStrikes, 0);
+      expect(ctl.testHooks.deadEchoStrikes, 0);
       expect(state.autoHealAttempts, 0);
     });
 

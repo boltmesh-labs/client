@@ -73,7 +73,7 @@ connected() async {
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = _Tunnel(events);
+  ctl.testHooks.tunnel = _Tunnel(events);
   await ctl.connect();
   events.clear();
   return (container, auth, store, events);
@@ -86,7 +86,7 @@ void main() {
     final cleared = Completer<void>();
     store.clearDeviceHook = () async => cleared.complete();
 
-    final release = await ctl.debugAcquireMutex('test-auth-race');
+    final release = await ctl.testHooks.acquireMutex('test-auth-race');
     auth.revoke();
     await Future<void>.delayed(Duration.zero);
 
@@ -113,7 +113,7 @@ void main() {
       final ctl = container.read(connectionProvider.notifier);
       final stopStarted = Completer<void>();
       final letStopFinish = Completer<void>();
-      ctl.debugTunnel = _StoppingTunnel(
+      ctl.testHooks.tunnel = _StoppingTunnel(
         events,
         onStop: () async {
           if (!stopStarted.isCompleted) stopStarted.complete();
@@ -127,8 +127,8 @@ void main() {
       container.dispose();
       letStopFinish.complete();
 
-      final release = await ctl
-          .debugAcquireMutex('after-dispose')
+      final release = await ctl.testHooks
+          .acquireMutex('after-dispose')
           .timeout(const Duration(seconds: 1));
       release();
     },
@@ -170,7 +170,7 @@ void main() {
           await releaseStart.future;
         };
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
+      ctl.testHooks.tunnel = tunnel;
 
       final connect = ctl.connect();
       await started.future;

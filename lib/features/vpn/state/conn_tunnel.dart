@@ -125,13 +125,13 @@ extension ConnectionTunnel on ConnectionController {
   /// the never-handshook branches of [isHandshakeStale] — an unsupported
   /// reader's null is absence of evidence, never a stall.
   bool get _readerSupported =>
-      debugHandshakeReader != null || _tunnel.handshakeReaderSupported;
+      testHooks.handshakeReader != null || _tunnel.handshakeReaderSupported;
 
   /// Reads the last completed handshake, honoring the test seam
-  /// ([debugHandshakeReader]) and the adapter's short health timeout.
+  /// ([ConnectionController.testHooks.handshakeReader]) and the adapter's short health timeout.
   /// Failures resolve as null (unknown, never a stall on its own).
   Future<DateTime?> _readHandshake() async {
-    final seam = debugHandshakeReader;
+    final seam = testHooks.handshakeReader;
     try {
       if (seam != null) {
         return await seam().timeout(TunnelTuning.healthTimeout);
@@ -194,7 +194,7 @@ extension ConnectionTunnel on ConnectionController {
     // delivers to. See `transport_ladder.dart`.
     final transport = await _ladder.streamTransportFor(dial);
     if (!sessionCurrent()) return;
-    debugLastTransport = transport;
+    testHooks.lastTransport = transport;
     // The endpoint this start actually dials, which follows the rung: the
     // node's own device on its own port for native/awg, the helper's loopback
     // bridge for stream. Logged here rather than up front because the rung is

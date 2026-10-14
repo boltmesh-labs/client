@@ -55,6 +55,49 @@ part 'conn_switch.dart';
 part 'conn_transport.dart';
 part 'conn_tunnel.dart';
 
+/// Test-only controls and observations for [ConnectionController].
+///
+/// Keeping these on one object makes the controller's supported surface clear
+/// while still allowing state-machine tests to set up otherwise rare states.
+@visibleForTesting
+class ConnectionControllerTestHooks {
+  ConnectionControllerTestHooks._(this._controller);
+
+  final ConnectionController _controller;
+
+  int get deadEchoStrikes => _controller._health.deadEchoStrikes;
+  set deadEchoStrikes(int value) => _controller._health.deadEchoStrikes = value;
+
+  HandshakeReader? handshakeReader;
+  ActivePeer? activePeer;
+
+  int get pollsSinceRotate => _controller._pollsSinceRotate;
+  set pollsSinceRotate(int value) => _controller._pollsSinceRotate = value;
+
+  DateTime? get rateLimitedUntil => _controller._rateLimitedUntil;
+  set rateLimitedUntil(DateTime? value) =>
+      _controller._rateLimitedUntil = value;
+
+  set tunnel(WireGuardFlutterInterface? wg) {
+    unawaited(_controller._stageSub?.cancel());
+    _controller._stageSub = null;
+    _controller._tunnelOverride = wg == null
+        ? null
+        : WireGuardTunnelAdapter.test(wg);
+  }
+
+  TunnelTransport? lastTransport;
+  Set<String>? daemonCapabilities;
+  bool? forceThroughTunnel;
+  TransportRung? forceRung;
+
+  Future<void Function()> acquireMutex([String op = 'test']) =>
+      _controller._mutex.acquire(op);
+
+  bool get coldWatchArmed => _controller._coldRestore.armed;
+  set coldWatchArmed(bool value) => _controller._coldRestore.armed = value;
+}
+
 /// Orchestrates provision → connect/switch → disconnect with fresh
 /// keypairs per handshake (backend 409s on key reuse).
 ///
@@ -101,7 +144,7 @@ class ConnectionController extends Notifier<ConnState> {
   /// Re-reads the split-tunnel preference once [setAllowLocal] persisted it.
   void _invalidateAllowLocal() => ref.invalidate(allowLocalProvider);
   // Native tunnel behind [TunnelAdapter] (see `data/tunnel_adapter.dart`).
-  // `_tunnelOverride` is test-only (via [debugTunnel]); production uses
+  // `_tunnelOverride` is test-only (via [testHooks.tunnel]); production uses
   // [tunnelAdapterProvider]. The stage subscription is (re)built by
   // [_ensureTunnelInit] whenever the active tunnel changes.
   TunnelAdapter? _tunnelOverride;
@@ -188,49 +231,21 @@ class ConnectionController extends Notifier<ConnState> {
   /// plain mutable field.
   late final TransportLadder _ladder = TransportLadder(
     daemonCapabilities: () => _daemonCapabilities,
-    forcedRung: () => debugForceRung,
+    forcedRung: () => testHooks.forceRung,
   );
 
   /// The rung this process is currently on (see [TransportLadder.rung]).
   TransportRung get transportRung => _ladder.rung;
 
-  /// Test seam: inspect/prime the dead-echo strike counter.
-  @visibleForTesting
-  int get debugDeadEchoStrikes => _health.deadEchoStrikes;
-  @visibleForTesting
-  set debugDeadEchoStrikes(int v) => _health.deadEchoStrikes = v;
-
-  /// Test seam: overrides the handshake read (production uses
-  /// [TunnelAdapter.readHandshake]).
-  @visibleForTesting
-  HandshakeReader? debugHandshakeReader;
-
-  /// Test seam: overrides the live-peer read (production uses
-  /// [TunnelAdapter.getActivePeer]).
-  @visibleForTesting
-  ActivePeer? debugActivePeer;
-
   /// Poll ticks since the last successful rotation; reaching
   /// [Env.keyRotationPolls] triggers an automatic background rotation.
   int _pollsSinceRotate = 0;
-
-  /// Test seam: inspect/prime the auto-rotation counter.
-  @visibleForTesting
-  int get debugPollsSinceRotate => _pollsSinceRotate;
-  @visibleForTesting
-  set debugPollsSinceRotate(int v) => _pollsSinceRotate = v;
 
   /// Client-side cooldown armed by a 429 (`ApiErrorKind.rateLimited`). While
   /// active the API-mutating ops (connect/switch/rotate, and the disconnect
   /// peer release) short-circuit instead of spending more of the shared
   /// per-IP limiter budget. Expires on its own (see [_rateLimitRemaining]).
   DateTime? _rateLimitedUntil;
-
-  /// Test seam: inspect/prime the 429 cooldown deadline.
-  @visibleForTesting
-  DateTime? get debugRateLimitedUntil => _rateLimitedUntil;
-  @visibleForTesting
-  set debugRateLimitedUntil(DateTime? v) => _rateLimitedUntil = v;
 
   /// Time left in the 429 cooldown, or null when not throttled.
   Duration? get _rateLimitRemaining {
@@ -240,69 +255,17 @@ class ConnectionController extends Notifier<ConnState> {
     return remaining.isNegative ? null : remaining;
   }
 
-  /// Test seam: bypasses `WireGuardFlutter.instance` (which throws on
-  /// unsupported platforms) with a fake tunnel. The raw interface is
-  /// wrapped in a pre-initialized [WireGuardTunnelAdapter], so existing
-  /// `FakeTunnel` fakes keep working unchanged.
-  @visibleForTesting
-  set debugTunnel(WireGuardFlutterInterface? wg) {
-    unawaited(_stageSub?.cancel());
-    _stageSub = null;
-    _tunnelOverride = wg == null ? null : WireGuardTunnelAdapter.test(wg);
-  }
-
-  /// Test seam: the transport the last tunnel start handed to the adapter, so a
-  /// suite can assert the spec the helper receives without a real helper. Null
-  /// whenever the start was on the native or AmneziaWG rung.
-  @visibleForTesting
-  TunnelTransport? debugLastTransport;
-
-  /// Test seam: the capability tokens the ladder gates the stream rung on.
-  ///
-  /// Production reads [TunnelAdapter.daemonCapabilities], which is empty unless
-  /// the privileged helper is in use — and the state suites drive the *plugin*
-  /// adapter, so without this the stream rung could never be exercised at all.
-  @visibleForTesting
-  Set<String>? debugDaemonCapabilities;
-
   /// Capability tokens backing decisions, preferring the test seam.
   Set<String> get _daemonCapabilities =>
-      debugDaemonCapabilities ?? _tunnel.daemonCapabilities;
-
-  /// Test seam: when non-null, forces the through-tunnel-first decision in
-  /// [switchServer] (production reads [Env.isLoopbackApi], which is a
-  /// compile-time const stuck on `localhost` under `flutter test`).
-  @visibleForTesting
-  bool? debugForceThroughTunnel;
-
-  /// Test seam: forces the ladder onto one rung, so an end-to-end run can
-  /// exercise every data plane in turn without fabricating the blocked network
-  /// that would normally demote it.
-  ///
-  /// Null (production) leaves the ladder to [TransportLadder.rungFor]'s
-  /// advertised-list rule. A non-null value is honored only while that rung is
-  /// advertised by the serving node and runnable here; a rung the node does not
-  /// serve is ignored rather than started, so the seam cannot conjure a start the
-  /// payload cannot back. See [TransportLadder.apply], which re-derives the rung
-  /// on every start.
-  @visibleForTesting
-  TransportRung? debugForceRung;
-
-  /// Test seam: holds the op mutex so resume catch-up lock-skips can be
-  /// tested deterministically. Returns the one-shot release callback.
-  @visibleForTesting
-  Future<void Function()> debugAcquireMutex([String op = 'test']) =>
-      _mutex.acquire(op);
+      testHooks.daemonCapabilities ?? _tunnel.daemonCapabilities;
 
   /// Cold-restore watch (see [reconcileColdStart]): armed while an
   /// unconfirmed restore waits on the stage stream.
   final ColdRestoreWatch _coldRestore = ColdRestoreWatch();
 
-  /// Test seam: observes/boards the cold-restore watch.
   @visibleForTesting
-  bool get debugColdWatchArmed => _coldRestore.armed;
-  @visibleForTesting
-  set debugColdWatchArmed(bool v) => _coldRestore.armed = v;
+  late final ConnectionControllerTestHooks testHooks =
+      ConnectionControllerTestHooks._(this);
 
   /// Anchors describing the current tunnel generation (see [TunnelHealth]):
   /// the tunnel-start clock, whether the last status request was answered by

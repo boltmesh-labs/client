@@ -119,7 +119,7 @@ void main() {
     ];
     for (var i = 0; i < ladder.length; i++) {
       final rung = ladder[i];
-      ctl.debugForceRung = rung;
+      ctl.testHooks.forceRung = rung;
 
       // --- connect on this rung ------------------------------------------
       if (i == 0) {
@@ -233,7 +233,7 @@ void main() {
     await _shot('05-disconnected');
 
     // Hand the ladder back to the advertised rule for the suites that follow.
-    ctl.debugForceRung = null;
+    ctl.testHooks.forceRung = null;
   });
 
   testWidgets('switches server', (tester) async {

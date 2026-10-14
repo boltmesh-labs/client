@@ -72,9 +72,9 @@ Future<(ProviderContainer, support.FakeTunnel)> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   // Fresh handshake by default: nothing heals unless a test stales it.
-  ctl.debugHandshakeReader = () async => DateTime.now();
+  ctl.testHooks.handshakeReader = () async => DateTime.now();
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
   events.clear();
@@ -143,7 +143,7 @@ void main() {
       controlReachable: false,
     );
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugHandshakeReader = () async =>
+    ctl.testHooks.handshakeReader = () async =>
         DateTime.now().subtract(const Duration(minutes: 5));
 
     monitor.emit(false);
@@ -175,7 +175,7 @@ void main() {
       monitor: m,
     );
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     m.emit(false);
     m.emit(true);

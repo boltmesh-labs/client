@@ -88,7 +88,7 @@ Future<void> seedConnected(
   await store.setDeviceId('dev-1');
   await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   await ctl.connect();
   expect(container.read(connectionProvider).phase, ConnPhase.connected);
 }
@@ -115,7 +115,7 @@ void main() {
       await store.setKeypair(privateKey: 'OLD-PRIV', publicKey: 'OLD-PUB');
       final tunnel = FakeTunnel(events);
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = tunnel;
+      ctl.testHooks.tunnel = tunnel;
       await ctl.connect();
       expect(container.read(connectionProvider).phase, ConnPhase.connected);
 
@@ -124,8 +124,8 @@ void main() {
       store.privateKeyHook = null;
 
       // A leaked lock would make this hang; the timeout fails the test.
-      final release = await ctl
-          .debugAcquireMutex('probe')
+      final release = await ctl.testHooks
+          .acquireMutex('probe')
           .timeout(const Duration(seconds: 1));
       release();
     });
@@ -367,7 +367,7 @@ void main() {
       keys: FakeKeys(const []),
       api: api,
     );
-    container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+    container.read(connectionProvider.notifier).testHooks.tunnel = FakeTunnel(
       events,
     );
 
@@ -462,7 +462,7 @@ void main() {
         keys: FakeKeys(const []),
         api: api,
       );
-      container.read(connectionProvider.notifier).debugTunnel = tunnel;
+      container.read(connectionProvider.notifier).testHooks.tunnel = tunnel;
       // Pin restored, nothing running: the old skip answered this with
       // "Already connected to ..." and did nothing at all.
       container
@@ -526,7 +526,7 @@ void main() {
     );
     final container = makeContainer(store: store, keys: keys, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     // Stale pin: server s-1 selected earlier, now Quick Connect to r-2.
     ctl.selectTarget(serverId: 's-1');
@@ -564,7 +564,7 @@ void main() {
     );
     final container = makeContainer(store: store, keys: keys, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     // First attempt: POST reaches the timeout, device stays unbound but the
     // pending keypair + idempotency key are kept for the retry.
@@ -604,7 +604,7 @@ void main() {
     );
     final container = makeContainer(store: store, keys: keys, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     // No throw: the conflict is retried once internally with the same key.
     await ctl.ensureProvisioned();
@@ -629,7 +629,7 @@ void main() {
     );
     final container = makeContainer(store: store, keys: keys, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await expectLater(ctl.ensureProvisioned(), throwsA(isA<DioException>()));
     final state = container.read(connectionProvider);
@@ -957,7 +957,8 @@ void main() {
     var acquired = false;
     final probe = container
         .read(connectionProvider.notifier)
-        .debugAcquireMutex('probe')
+        .testHooks
+        .acquireMutex('probe')
         .then((unlock) {
           acquired = true;
           unlock();
@@ -986,7 +987,7 @@ void main() {
     );
     final container = makeContainer(store: store, keys: keys, api: api);
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await ctl.connect();
 
@@ -1011,7 +1012,7 @@ void main() {
       );
       final container = makeContainer(store: store, keys: keys, api: api);
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = FakeTunnel(events);
+      ctl.testHooks.tunnel = FakeTunnel(events);
 
       await ctl.connect();
 
@@ -1046,7 +1047,8 @@ void main() {
       api: api,
     );
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
+    container.read(connectionProvider.notifier).testHooks.forceThroughTunnel =
+        true;
     events.clear();
 
     await container
@@ -1088,7 +1090,8 @@ void main() {
       api: api,
     );
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
+    container.read(connectionProvider.notifier).testHooks.forceThroughTunnel =
+        true;
     events.clear();
 
     await container
@@ -1126,7 +1129,8 @@ void main() {
       api: api,
     );
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
+    container.read(connectionProvider.notifier).testHooks.forceThroughTunnel =
+        true;
     events.clear();
 
     await container
@@ -1168,7 +1172,8 @@ void main() {
       api: api,
     );
     await seedConnected(container, store, tunnel);
-    container.read(connectionProvider.notifier).debugForceThroughTunnel = true;
+    container.read(connectionProvider.notifier).testHooks.forceThroughTunnel =
+        true;
     events.clear();
 
     await container
@@ -1204,7 +1209,7 @@ void main() {
       api: api,
     );
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await ctl.switchServer(regionId: null, serverId: 'srv-2');
 
@@ -1244,7 +1249,7 @@ void main() {
       api: api,
     );
     final ctl = container.read(connectionProvider.notifier);
-    ctl.debugTunnel = FakeTunnel(events);
+    ctl.testHooks.tunnel = FakeTunnel(events);
 
     await ctl.disconnect();
     events.clear();
@@ -1292,7 +1297,7 @@ void main() {
         api: api,
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = FakeTunnel(events);
+      ctl.testHooks.tunnel = FakeTunnel(events);
 
       await ctl.disconnect();
       expect(container.read(connectionProvider).message, contains('pending'));
@@ -1358,9 +1363,8 @@ void main() {
           keys: FakeKeys(const []),
           api: api,
         );
-        container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-          events,
-        );
+        container.read(connectionProvider.notifier).testHooks.tunnel =
+            FakeTunnel(events);
 
         await container.read(connectionProvider.notifier).quickConnect();
 
@@ -1408,7 +1412,7 @@ void main() {
         keys: FakeKeys(const []),
         api: api,
       );
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+      container.read(connectionProvider.notifier).testHooks.tunnel = FakeTunnel(
         events,
       );
 
@@ -1449,7 +1453,7 @@ void main() {
         keys: FakeKeys(const []),
         api: api,
       );
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+      container.read(connectionProvider.notifier).testHooks.tunnel = FakeTunnel(
         events,
       );
 
@@ -1489,9 +1493,8 @@ void main() {
           keys: FakeKeys(const []),
           api: api,
         );
-        container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-          events,
-        );
+        container.read(connectionProvider.notifier).testHooks.tunnel =
+            FakeTunnel(events);
 
         await container.read(connectionProvider.notifier).quickConnect();
 
@@ -1520,7 +1523,7 @@ void main() {
         }),
       );
       final container = makeContainer(store: store, keys: keys, api: api);
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+      container.read(connectionProvider.notifier).testHooks.tunnel = FakeTunnel(
         events,
       );
       // Fresh device: quickConnect provisions onto the best region
@@ -1573,7 +1576,7 @@ void main() {
         api: api,
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = FakeTunnel(events);
+      ctl.testHooks.tunnel = FakeTunnel(events);
       ctl.selectTarget(serverId: 'srv-1');
 
       events.clear();
@@ -1615,7 +1618,7 @@ void main() {
         api: api,
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = FakeTunnel(events);
+      ctl.testHooks.tunnel = FakeTunnel(events);
       ctl.selectTarget(serverId: 'srv-gone', explicitTarget: true);
 
       events.clear();
@@ -1701,7 +1704,7 @@ void main() {
         keys: FakeKeys(const []),
         api: api,
       );
-      container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
+      container.read(connectionProvider.notifier).testHooks.tunnel = FakeTunnel(
         events,
       );
 
@@ -1772,9 +1775,8 @@ void main() {
           keys: FakeKeys(const []),
           api: api,
         );
-        container.read(connectionProvider.notifier).debugTunnel = FakeTunnel(
-          events,
-        );
+        container.read(connectionProvider.notifier).testHooks.tunnel =
+            FakeTunnel(events);
 
         await container.read(connectionProvider.notifier).quickConnect();
 
@@ -1861,8 +1863,8 @@ void main() {
 
       await expectLater(ctl.releaseDevice(), throwsA(isA<StateError>()));
       // The failed wipe must still have released the op mutex.
-      final release = await ctl
-          .debugAcquireMutex('probe')
+      final release = await ctl.testHooks
+          .acquireMutex('probe')
           .timeout(const Duration(seconds: 1));
       release();
     });
@@ -1995,7 +1997,7 @@ void main() {
         api: VpnApi(dio),
       );
       final ctl = container.read(connectionProvider.notifier);
-      ctl.debugTunnel = FakeTunnel(events);
+      ctl.testHooks.tunnel = FakeTunnel(events);
 
       // Auto (unpinned) discovery is in flight and holds the op mutex …
       final quick = ctl.quickConnect();

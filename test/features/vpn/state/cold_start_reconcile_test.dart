@@ -62,7 +62,7 @@ class ColdTunnel extends support.FakeTunnel {
     container.dispose();
   });
   final ctl = container.read(connectionProvider.notifier);
-  ctl.debugTunnel = tunnel;
+  ctl.testHooks.tunnel = tunnel;
   return (container, ctl);
 }
 
@@ -247,7 +247,7 @@ void main() {
       // Last-target label while the backend is unreachable.
       expect(state.dial?.serverName, 'cached-server');
       expect(events, isNot(contains('tunnel:start')));
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
     });
 
     test('offline without cached dial stays idle, never working', () async {
@@ -271,7 +271,7 @@ void main() {
       expect(state.phase, ConnPhase.idle);
       expect(state.message, contains('Tap Connect to reconcile'));
       expect(events, isNot(contains('tunnel:start')));
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
     });
 
     test('a surviving tunnel with no cached dial re-binds and connects', () async {
@@ -301,7 +301,7 @@ void main() {
       expect(events, isNot(contains('tunnel:start')));
       // The device is kept: an unbound device is bound, never treated as gone.
       expect(await store.deviceId(), 'dev-1');
-      expect(ctl.debugColdWatchArmed, isFalse);
+      expect(ctl.testHooks.coldWatchArmed, isFalse);
     });
 
     test('revoked device is forgotten and the tunnel stopped', () async {
@@ -467,7 +467,7 @@ void main() {
             throw StateError('unexpected ${o.path}');
           }),
         );
-        ctl.debugActivePeer = const ActivePeer(
+        ctl.testHooks.activePeer = const ActivePeer(
           publicKey: 'SRV',
           endpoint: '203.0.113.10:51820',
         );
@@ -508,7 +508,7 @@ void main() {
           throw StateError('unexpected ${o.path}');
         }),
       );
-      ctl.debugActivePeer = const ActivePeer(
+      ctl.testHooks.activePeer = const ActivePeer(
         publicKey: 'SRV',
         endpoint: '198.51.100.20:51820',
       );
@@ -576,7 +576,7 @@ void main() {
       expect(state.phase, ConnPhase.working);
       expect(state.message, contains('Verifying'));
       expect(state.dial?.serverName, 'cached-server');
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
       expect(events, isNot(contains('tunnel:start')));
     });
 
@@ -601,7 +601,7 @@ void main() {
 
       await ctl.reconcileColdStart();
       expect(container.read(connectionProvider).phase, ConnPhase.working);
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
 
       // The parked working state carries the cached dial; a terminal stage
       // event must still rescue it to idle instead of stranding the user on
@@ -612,7 +612,7 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.idle);
       expect(state.message, contains('VPN stopped'));
-      expect(ctl.debugColdWatchArmed, isFalse);
+      expect(ctl.testHooks.coldWatchArmed, isFalse);
     });
 
     test('down-read offline connected event retries the confirm', () async {
@@ -639,7 +639,7 @@ void main() {
 
       await ctl.reconcileColdStart();
       expect(container.read(connectionProvider).phase, ConnPhase.working);
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
 
       online = true;
       tunnel.emit(VpnStage.connected);
@@ -648,7 +648,7 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
-      expect(ctl.debugColdWatchArmed, isFalse);
+      expect(ctl.testHooks.coldWatchArmed, isFalse);
       expect(events, isNot(contains('tunnel:start')));
     });
 
@@ -769,7 +769,7 @@ void main() {
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
         // Let the handshake go stale: a later outside-kill is real and must
         // be honored (without releasing the server peer).
-        ctl.debugHandshakeReader = () async =>
+        ctl.testHooks.handshakeReader = () async =>
             DateTime.now().subtract(const Duration(minutes: 5));
         events.clear();
 
@@ -864,7 +864,7 @@ void main() {
         expect(container.read(connectionProvider).phase, ConnPhase.connected);
         // The replayed lie arrives, but the server peer is alive and the
         // handshake is fresh: adopt, never kill.
-        ctl.debugHandshakeReader = () async => DateTime.now();
+        ctl.testHooks.handshakeReader = () async => DateTime.now();
         events.clear();
 
         tunnel.emit(VpnStage.disconnected);
@@ -903,7 +903,7 @@ void main() {
 
         // A confirm in flight (mutex held): the event must not flip to idle
         // nor touch the tunnel — the holder reconciles on completion.
-        final release = await ctl.debugAcquireMutex('test-op');
+        final release = await ctl.testHooks.acquireMutex('test-op');
         try {
           tunnel.emit(VpnStage.disconnected);
           await settleEvents();
@@ -952,7 +952,7 @@ void main() {
       // from a null only counts when a reader exists (with none, the read is
       // absence of evidence and defers — see the Apple siblings above). Stated
       // through the seam rather than assumed from the platform.
-      ctl.debugHandshakeReader = () async => null;
+      ctl.testHooks.handshakeReader = () async => null;
 
       await ctl.reconcileColdStart();
 
@@ -1049,7 +1049,7 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.working);
       expect(state.message, contains('Restoring'));
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
     });
 
     test('no device is a no-op without touching the tunnel', () async {
@@ -1124,7 +1124,7 @@ void main() {
 
       await ctl.reconcileColdStart();
       expect(container.read(connectionProvider).phase, ConnPhase.working);
-      expect(ctl.debugColdWatchArmed, isTrue);
+      expect(ctl.testHooks.coldWatchArmed, isTrue);
 
       online = true;
       tunnel.emit(VpnStage.connected);
@@ -1133,7 +1133,7 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.connected);
       expect(state.dial?.serverId, 'srv-1');
-      expect(ctl.debugColdWatchArmed, isFalse);
+      expect(ctl.testHooks.coldWatchArmed, isFalse);
       expect(events, isNot(contains('tunnel:start')));
     });
 
@@ -1162,7 +1162,7 @@ void main() {
       final state = container.read(connectionProvider);
       expect(state.phase, ConnPhase.idle);
       expect(state.message, contains('VPN stopped'));
-      expect(ctl.debugColdWatchArmed, isFalse);
+      expect(ctl.testHooks.coldWatchArmed, isFalse);
     });
   });
 
