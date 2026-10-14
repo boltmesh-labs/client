@@ -10,11 +10,13 @@ if [[ $cmd == clear ]]; then
   fi
   exit 0
 fi
-[[ $# -eq 3 && ( $cmd == block || $cmd == unblock ) ]] || {
-  echo 'usage: boltmesh-e2e-firewall {block|unblock} IP UDP_PORT' >&2; exit 2;
+[[ ( $# -eq 3 || $# -eq 4 ) && ( $cmd == block || $cmd == unblock ) ]] || {
+  echo 'usage: boltmesh-e2e-firewall {block|unblock} IP PORT [udp|tcp]' >&2; exit 2;
 }
 address=$2
 port=$3
+protocol=${4:-udp}
+[[ $protocol == udp || $protocol == tcp ]] || { echo 'protocol must be udp or tcp' >&2; exit 2; }
 python3 - "$address" "$port" <<'PY'
 import ipaddress, sys
 ipaddress.ip_address(sys.argv[1])
@@ -30,9 +32,9 @@ if [[ $cmd == block ]]; then
     nft add table inet boltmesh_e2e
     nft 'add chain inet boltmesh_e2e output { type filter hook output priority -5; policy accept; }'
   }
-  nft add rule inet boltmesh_e2e output "$family" daddr "$address" udp dport "$port" drop
+  nft add rule inet boltmesh_e2e output "$family" daddr "$address" "$protocol" dport "$port" drop
 else
   # Delete only this tuple, leaving any other active E2E block intact.
-  handle=$(nft -a list chain inet boltmesh_e2e output | awk -v ip="$address" -v port="$port" 'index($0, "daddr " ip " udp dport " port " ") {print $NF; exit}')
+  handle=$(nft -a list chain inet boltmesh_e2e output | awk -v ip="$address" -v port="$port" -v proto="$protocol" 'index($0, "daddr " ip " " proto " dport " port " ") {print $NF; exit}')
   [[ -z $handle ]] || nft delete rule inet boltmesh_e2e output handle "$handle"
 fi

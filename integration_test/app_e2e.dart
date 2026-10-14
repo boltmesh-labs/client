@@ -39,13 +39,10 @@
 // keyring persists across tests in a run, so the session is restored between
 // them — which is itself the restore path being exercised.
 //
-// The ladder walk drives the real controller through every rung with its
-// `debugForceRung` seam: the controller starts on the node's floor and only
-// demotes on health evidence a lab run cannot fabricate, so the seam is what
-// lets one run prove all three data planes really carry bytes. It descends
-// again on purpose: the rung change back *into* stock hands Android's single
-// VpnService from the in-process AWG host to the stock plugin, which the
-// upward walk never does.
+// The Android ladder walk uses the `debugForceRung` seam to prove each data
+// plane carries bytes. Desktop instead drives production health recovery with
+// firewall blocks, including a down-server fast-track failover from stream,
+// followed by a restart on native at the replacement server.
 
 library;
 
@@ -55,6 +52,7 @@ import 'dart:io';
 
 import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
+import 'package:boltmesh/features/vpn/data/tcp_probe.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:boltmesh/features/vpn/ui/home/power_button.dart';
 import 'package:boltmesh/l10n/gen/app_localizations.dart';
@@ -104,8 +102,8 @@ void main() {
     }
 
     // Android cannot install host firewall rules from its app uid, so it
-    // retains the explicit rung walk. Desktop runs exercise the production
-    // health/recovery path by blackholing each server UDP endpoint in turn.
+    // retains the explicit rung walk. Desktop runs exercise production
+    // recovery by blackholing each rung endpoint and the stream TLS port.
     final ladder = automaticLadder
         ? const [TransportRung.native, TransportRung.awg, TransportRung.stream]
         : const [
@@ -234,12 +232,44 @@ void main() {
 
     if (automaticLadder) {
       await _host.clearEndpointBlocks();
+      final failedDial = state().dial!;
+      final streamCredential = failedDial
+          .transportFor(TransportRung.stream)!
+          .credential!;
+      final (streamHost, streamPort) = parseTcpHostPort(
+        streamCredential.server,
+      )!;
+      final failedServer = failedDial.serverName;
+      // Make the serving node unavailable at every advertised data-plane
+      // endpoint. The live stream path is killed by TCP; the UDP rules also
+      // model the node being down when recovery considers its other rungs.
+      for (final rung in const [TransportRung.native, TransportRung.awg]) {
+        final transport = failedDial.transportFor(rung);
+        if (transport != null) {
+          await _host.setEndpointBlocked(
+            failedDial.endpoint,
+            transport.port,
+            true,
+          );
+        }
+      }
+      await _host.setEndpointBlocked(streamHost, streamPort, true, tcp: true);
+      await _pumpUntil(
+        tester,
+        'fast-track failover from the down server to another stream server',
+        () =>
+            state().phase == ConnPhase.connected &&
+            ctl.transportRung == TransportRung.stream &&
+            state().dial?.serverName != failedServer,
+        timeout: const Duration(minutes: 5),
+        diagnose: state,
+      );
       ctl.testHooks.forceRung = TransportRung.native;
       await _reconnect(tester, ctl, state);
       expect(ctl.transportRung, TransportRung.native);
       await _pumpUntil(
         tester,
-        'native handoff traffic after automatic demotion',
+        'native traffic after stream failover',
         () => (state().rxBytes ?? 0) > 0,
         timeout: _trafficTimeout,
         diagnose: state,
@@ -525,8 +555,13 @@ sealed class _Host {
   /// attempt is worth making.
   bool get helperEndpointExists;
 
-  /// Adds or removes a temporary outbound UDP block for the server endpoint.
-  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked);
+  /// Adds or removes a temporary outbound transport block for an endpoint.
+  Future<void> setEndpointBlocked(
+    String endpoint,
+    int port,
+    bool blocked, {
+    bool tcp = false,
+  });
 
   /// Removes every temporary endpoint block owned by this E2E harness.
   Future<void> clearEndpointBlocks();
@@ -628,13 +663,15 @@ class _LinuxHost extends _Host {
   Future<void> setEndpointBlocked(
     String endpoint,
     int port,
-    bool blocked,
-  ) async {
+    bool blocked, {
+    bool tcp = false,
+  }) async {
     for (final address in await _resolveFirewallAddresses(endpoint)) {
       await _runFirewallHelper([
         blocked ? 'block' : 'unblock',
         address,
         '$port',
+        if (tcp) 'tcp',
       ]);
     }
   }
@@ -702,13 +739,15 @@ class _WindowsHost extends _Host {
   Future<void> setEndpointBlocked(
     String endpoint,
     int port,
-    bool blocked,
-  ) async {
+    bool blocked, {
+    bool tcp = false,
+  }) async {
     for (final address in await _resolveFirewallAddresses(endpoint)) {
       await _runWindowsFirewallHelper([
         blocked ? 'block' : 'unblock',
         address,
         '$port',
+        if (tcp) 'tcp',
       ]);
     }
   }
@@ -810,10 +849,14 @@ class _AndroidHost extends _Host {
   bool get helperEndpointExists => false;
 
   @override
-  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
-      throw UnsupportedError(
-        'Android E2E does not control host firewall rules',
-      );
+  Future<void> setEndpointBlocked(
+    String endpoint,
+    int port,
+    bool blocked, {
+    bool tcp = false,
+  }) => throw UnsupportedError(
+    'Android E2E does not control host firewall rules',
+  );
 
   @override
   Future<void> clearEndpointBlocks() async {}

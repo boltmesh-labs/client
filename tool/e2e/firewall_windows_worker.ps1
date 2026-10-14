@@ -14,12 +14,13 @@ try {
             $ip = $null
             if (-not [System.Net.IPAddress]::TryParse([string]$request.address, [ref]$ip)) { throw 'invalid endpoint IP' }
             $port = 0
-            if (-not [int]::TryParse([string]$request.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { throw 'invalid UDP port' }
-            $name = 'BoltMeshE2E-' + $ip.ToString().Replace(':', '-') + '-' + $port
+            if (-not [int]::TryParse([string]$request.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { throw 'invalid port' }
+            $protocol = if ($request.protocol -in @('UDP', 'TCP')) { $request.protocol } else { 'UDP' }
+            $name = 'BoltMeshE2E-' + $ip.ToString().Replace(':', '-') + '-' + $protocol + '-' + $port
             if ($request.action -eq 'block') {
                 Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
                 New-NetFirewallRule -Name $name -DisplayName $name -Group $group `
-                    -Direction Outbound -Action Block -Protocol UDP -RemoteAddress $ip.ToString() `
+                    -Direction Outbound -Action Block -Protocol $protocol -RemoteAddress $ip.ToString() `
                     -RemotePort $port -Profile Any | Out-Null
             } else {
                 Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
