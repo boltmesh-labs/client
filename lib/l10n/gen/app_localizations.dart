@@ -266,12 +266,6 @@ abstract class AppLocalizations {
   /// **'Restarting the current tunnel: {reason}'**
   String homeRecoveryRestarting(String reason);
 
-  /// Home banner while recovery probes the native WireGuard transport rung.
-  ///
-  /// In en, this message translates to:
-  /// **'Trying native WireGuard: {reason}'**
-  String homeRecoveryTryingNative(String reason);
-
   /// Home banner while recovery restarts the tunnel on the AWG transport rung.
   ///
   /// In en, this message translates to:

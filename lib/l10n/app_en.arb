@@ -141,15 +141,6 @@
       }
     }
   },
-  "homeRecoveryTryingNative": "Trying native WireGuard: {reason}",
-  "@homeRecoveryTryingNative": {
-    "description": "Home banner while recovery probes the native WireGuard transport rung.",
-    "placeholders": {
-      "reason": {
-        "type": "String"
-      }
-    }
-  },
   "homeRecoveryTryingAwg": "Trying AmneziaWG: {reason}",
   "@homeRecoveryTryingAwg": {
     "description": "Home banner while recovery restarts the tunnel on the AWG transport rung.",

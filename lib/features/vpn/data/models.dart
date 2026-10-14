@@ -149,9 +149,6 @@ enum TransportRung {
   /// The tunnel's datagrams carried inside a TLS session to the node.
   stream;
 
-  /// Wire value, for tests and logs.
-  String get wire => name;
-
   static TransportRung? fromWire(String? value) {
     if (value == null) return null;
     for (final v in values) {

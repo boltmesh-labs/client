@@ -108,11 +108,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String homeRecoveryTryingNative(String reason) {
-    return 'Trying native WireGuard: $reason';
-  }
-
-  @override
   String homeRecoveryTryingAwg(String reason) {
     return 'Trying AmneziaWG: $reason';
   }

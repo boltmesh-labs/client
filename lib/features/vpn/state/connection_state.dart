@@ -12,7 +12,6 @@ enum ConnPhase { idle, working, connected, error }
 enum RecoveryAction {
   checking,
   restarting,
-  tryingNative,
   tryingAwg,
   tryingStream,
   switchingServer,
