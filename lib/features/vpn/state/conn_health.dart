@@ -389,8 +389,8 @@ extension ConnectionHealth on ConnectionController {
       recoveryReason: recoveryReason,
       recoveryDetail: why,
     );
-    // 4-layer diagnostic pipeline (see `domain/diagnosis_policy.dart`): the
-    // ordering is `domain/ladder_policy.dart` — Layers 2 and 1 decide first,
+    // 4-layer diagnostic pipeline (see `domain/ladder_policy.dart`): the
+    // ordering is the ladder's — Layers 2 and 1 decide first,
     // because the control-plane probe is real I/O that a healthy-ish tick must
     // not pay for. Probes are read-only: none of them consumes
     // heal/refresh/failover budgets or touches `pollFailures` — only the
@@ -435,7 +435,6 @@ extension ConnectionHealth on ConnectionController {
       serverConfirmedDown: serverDown,
       confirmedLocalPathDeath: localEchoStalled,
       hardStalled: hardStalled,
-      neverHandshookPastGrace: neverHandshookPastGrace,
       lowerRungAvailable: lowerRungAvailable,
       canHeal: canHeal,
       moveBudgetLeft: moveBudgetLeft,

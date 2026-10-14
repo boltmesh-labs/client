@@ -68,25 +68,21 @@ Row withGateway(Row r, bool? gateway) => (
 
 /// The local verdicts, kept as arguments rather than columns: they all mean
 /// "this path is dead" and overlap, so a row never needs more than one. [hardStale]
-/// is the uncorroborated 45s ceiling, [neverHandshake] the 30s verdict the
-/// classifier honors only once the control plane has answered — the pair is the
-/// cost-of-action distinction, so they get separate names rather than a column.
-RecoveryDecision local(
-  Row r, {
-  bool echoRun = false,
-  bool hardStale = false,
-  bool neverHandshake = false,
-}) => decideLocalRecovery(
-  hasNetwork: r.hasNetwork,
-  gatewayAlive: r.gateway,
-  serverConfirmedDown: r.serverDown,
-  confirmedLocalPathDeath: echoRun,
-  hardStalled: hardStale,
-  neverHandshookPastGrace: neverHandshake,
-  lowerRungAvailable: r.lowerRung,
-  canHeal: r.canHeal,
-  moveBudgetLeft: r.moveBudgetLeft,
-);
+/// is the uncorroborated 45s ceiling; the never-handshook verdict is the 30s
+/// one the classifier honors only once the control plane has answered, so it is
+/// an argument to [decided] alone — [decideLocalRecovery] carries no
+/// control-plane answer and never consults it.
+RecoveryDecision local(Row r, {bool echoRun = false, bool hardStale = false}) =>
+    decideLocalRecovery(
+      hasNetwork: r.hasNetwork,
+      gatewayAlive: r.gateway,
+      serverConfirmedDown: r.serverDown,
+      confirmedLocalPathDeath: echoRun,
+      hardStalled: hardStale,
+      lowerRungAvailable: r.lowerRung,
+      canHeal: r.canHeal,
+      moveBudgetLeft: r.moveBudgetLeft,
+    );
 
 RecoveryDecision decided(
   Row r, {
@@ -283,7 +279,7 @@ void main() {
         for (final lowerRung in [true, false]) {
           final cell = pin(r, lowerRung: lowerRung);
           expect(
-            local(cell, neverHandshake: true),
+            local(cell),
             RecoveryDecision.probeControlPlane,
             reason: 'no control-plane answer yet: row=$cell',
           );

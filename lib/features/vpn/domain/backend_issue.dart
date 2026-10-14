@@ -4,7 +4,7 @@ import '../../../core/errors.dart';
 /// interaction, so the UI can tell "the server answered but rejected us"
 /// (auth / subscription) apart from "we could not reach the server at all".
 ///
-/// Pure (no Riverpod/timers/storage), like `diagnosis_policy.dart`, so the
+/// Pure (no Riverpod/timers/storage), like `ladder_policy.dart`, so the
 /// classification is unit-testable in isolation and reusable by banners,
 /// the diagnostics footer, and the controller.
 enum BackendIssue {

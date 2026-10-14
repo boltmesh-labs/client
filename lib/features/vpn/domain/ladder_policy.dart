@@ -1,5 +1,3 @@
-import 'diagnosis_policy.dart';
-
 /// Pure transport-ladder policy: which recovery step one health tick takes.
 ///
 /// Kept free of Riverpod/timers/storage (like `failover_policy.dart`) so the
@@ -38,7 +36,7 @@ enum RecoveryDecision {
 
   /// Layer 1: the in-tunnel echo answered, so the data path is alive. Do not
   /// touch a working tunnel (a backend-attributed dead node excepted — see
-  /// [classifyFailure]).
+  /// [_pathConfirmedDead]).
   suppressHealthy,
 
   /// Local evidence confirms the current path is dead and no rung step is
@@ -80,6 +78,55 @@ enum RecoveryDecision {
   escalateToServer,
 }
 
+/// Whether this tick's evidence positively identifies a dead tunnel path.
+///
+/// This is the bit the ladder consumes from the 4-layer diagnostic pipeline.
+/// It used to live in `diagnosis_policy.dart` as a four-variant
+/// `ConnectionFailureCause`, but the ladder only ever tested the one value
+/// "path confirmed dead": the other three were either short-circuited by the
+/// callers (`noLocalNetwork` on the link read, `transientFlap` on a live echo)
+/// or collapsed into the not-dead answer (`totalBlackout`). The enum and the
+/// second representation of the same evidence it kept are therefore folded back
+/// into the one question asked here.
+///
+/// The ordering is the whole content:
+///
+///  * [serverConfirmedDown] is the backend's own verdict on the serving node —
+///    the only *attributed* signal here. It outranks a live echo: the echo is a
+///    symptom read (the node answered one datagram, plausibly an overlapping
+///    heartbeat while it restarts) where the verdict is the cause, and honoring
+///    the echo would park the session on a node the backend has given up on.
+///  * A live echo ([gatewayAlive] true) means the data path is healthy, so
+///    nothing else may call it dead.
+///  * [hardStalled] (an observed handshake past the hard ceiling) and
+///    [confirmedLocalPathDeath] (a performed-dead echo run) are positive local
+///    evidence and need no corroboration.
+///  * A single performed-dead echo ([gatewayAlive] false) fast-tracks only once
+///    the control plane has answered ([apiReachable] true): one dropped
+///    datagram is not path death, and the probe may itself travel the path
+///    under test.
+///  * [neverHandshookPastGrace] is real local evidence too, but only while the
+///    control plane answers — the same cost-of-action rule: it licenses the
+///    cheap same-server rung step, while the uncorroborated move waits for the
+///    later hard ceiling instead.
+///
+/// A null [gatewayAlive] or [apiReachable] is unknown, never death.
+bool _pathConfirmedDead({
+  required bool? gatewayAlive,
+  required bool? apiReachable,
+  required bool serverConfirmedDown,
+  required bool hardStalled,
+  required bool neverHandshookPastGrace,
+  required bool confirmedLocalPathDeath,
+}) {
+  if (serverConfirmedDown) return true;
+  if (gatewayAlive == true) return false;
+  if (hardStalled || confirmedLocalPathDeath) return true;
+  if (gatewayAlive == false && apiReachable == true) return true;
+  if (neverHandshookPastGrace && apiReachable == true) return true;
+  return false;
+}
+
 /// Whether a heal would demote the transport instead of rebuilding it in place.
 ///
 /// The rung step is only worth a restart when there is a rung underneath, it is
@@ -119,7 +166,6 @@ RecoveryDecision decideLocalRecovery({
   required bool serverConfirmedDown,
   required bool confirmedLocalPathDeath,
   required bool hardStalled,
-  required bool neverHandshookPastGrace,
   required bool lowerRungAvailable,
   required bool canHeal,
   required bool moveBudgetLeft,
@@ -130,19 +176,18 @@ RecoveryDecision decideLocalRecovery({
   }
   // Local evidence alone, with the control plane deliberately null: a probe
   // made while this tunnel still routes traffic can fail *because* the path is
-  // broken, so a fast-track must not depend on it. `neverHandshookPastGrace` is
-  // passed in for uniformity and is inert here by construction — the classifier
-  // honors it only when the probe answered, and this call says it did not.
-  final cause = classifyFailure(
-    hasNetwork: true,
+  // broken, so a fast-track must not depend on it. The never-handshook verdict
+  // is not consulted here at all: it is honored only when the probe answered,
+  // and this call says it did not.
+  final pathDead = _pathConfirmedDead(
     gatewayAlive: gatewayAlive,
     apiReachable: null,
     hardStalled: hardStalled,
-    neverHandshookPastGrace: neverHandshookPastGrace,
+    neverHandshookPastGrace: false,
     serverConfirmedDown: serverConfirmedDown,
     confirmedLocalPathDeath: confirmedLocalPathDeath,
   );
-  if (cause == ConnectionFailureCause.tunnelPathDead &&
+  if (pathDead &&
       moveBudgetLeft &&
       !rungStepAvailable(
         serverConfirmedDown: serverConfirmedDown,
@@ -184,8 +229,7 @@ RecoveryDecision decideRecoveryStep({
   if (gatewayAlive == true && !serverConfirmedDown) {
     return RecoveryDecision.suppressHealthy;
   }
-  final cause = classifyFailure(
-    hasNetwork: true,
+  final pathDead = _pathConfirmedDead(
     gatewayAlive: gatewayAlive,
     apiReachable: apiReachable,
     hardStalled: hardStalled,
@@ -198,12 +242,10 @@ RecoveryDecision decideRecoveryStep({
     lowerRungAvailable: lowerRungAvailable,
     canHeal: canHeal,
   );
-  // A single performed-dead echo only reaches here as `tunnelPathDead` when the
-  // control plane answered; a confirmed echo run, a hard-stale handshake or the
-  // backend's node verdict carry it without the probe.
-  if (cause == ConnectionFailureCause.tunnelPathDead &&
-      moveBudgetLeft &&
-      !canStepRung) {
+  // A single performed-dead echo only reaches here as a confirmed dead path
+  // when the control plane answered; a confirmed echo run, a hard-stale
+  // handshake or the backend's node verdict carry it without the probe.
+  if (pathDead && moveBudgetLeft && !canStepRung) {
     return RecoveryDecision.moveServer;
   }
   if (!canHeal && apiReachable != true) {
@@ -234,10 +276,9 @@ RecoveryDecision decideRecoveryStep({
   // tunnel a blocked transport kills the probe too — so requiring it made the
   // step unreachable exactly when it is needed, while the uncorroborated
   // [RecoveryDecision.moveServer] above already acts on the same evidence. Only the
-  // cheap action is widened: the move keeps its `cause == tunnelPathDead`
+  // cheap action is widened: the move keeps its confirmed-dead-path
   // criterion, so a bare single dead echo still only restarts.
-  final locallyDead =
-      cause == ConnectionFailureCause.tunnelPathDead || neverHandshookPastGrace;
+  final locallyDead = pathDead || neverHandshookPastGrace;
   return canStepRung && locallyDead
       ? RecoveryDecision.demoteTransport
       : RecoveryDecision.restartTunnel;
