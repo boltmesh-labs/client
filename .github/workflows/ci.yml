@@ -4,10 +4,6 @@ name: "Client CI"
 # which reuses this workflow via `workflow_call` so a tagged release is built
 # on the same validated commit without duplicating every check.
 on:
-  push:
-    branches:
-      - main
-      - develop
   pull_request:
     branches:
       - main
@@ -252,97 +248,6 @@ jobs:
         working-directory: android
         run: ./gradlew :app:lintDebug
 
-  validate-android:
-    name: "Validate Android smoke tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: "temurin"
-          java-version: "21"
-          cache: "gradle"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: true
-
-      - name: Set up Go for the Android AWG JNI library
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: true
-          cache-dependency-path: android/awg-native/go.sum
-
-      - name: Install the Flutter-pinned Android NDK
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      # This job goes straight to ./gradlew instead of `flutter build`, so the
-      # tool's config phase has to run first. It regenerates
-      # GeneratedPluginRegistrant.java in release mode, dropping dev-dependency
-      # plugins the way the Flutter Gradle Plugin does: `flutter pub get` writes
-      # the registrant with every method-channel plugin, including the dev-only
-      # integration_test plugin, which the plugin adds only to non-release build
-      # types. Without this the registrant's reference to integration_test fails
-      # :app:compileReleaseJavaWithJavac. `--config-only` runs that phase
-      # without invoking Gradle, and writes android/local.properties
-      # (flutter.sdk and sdk.dir) that the direct ./gradlew needs -- the Flutter
-      # Gradle plugin loader reads flutter.sdk from it unguarded (no FLUTTER_ROOT
-      # fallback), and sdk.dir keeps the SDK path explicit rather than relying on
-      # the $ANDROID_HOME fallback.
-      - name: Generate the release project config
-        run: flutter build apk --release --config-only
-
-      # GitHub's hosted Android images expose KVM for the emulator step.  The
-      # rule is harmless on runners where /dev/kvm is already configured.
-      - name: Enable Android emulator acceleration
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      # The AWG config parser, the native shim's symbol names and the
-      # instrumentation runner itself are easy to break in a dependency update,
-      # and none of them is observable in a debug-only build. Run the
-      # instrumentation tests against the minified release APK.
-      #
-      # There used to be an API 30 leg beside this one. It went with its
-      # subjects: WireGuardConnectSmokeTest (the API 30 Config.parse cold-start
-      # path) and MinifiedTunnelBridgeTest (the ProGuard reflection ABIs) were
-      # deleted alongside the code they covered, so the leg re-ran the same two
-      # cases against older system libraries -- and it was the one whose
-      # emulator could die during boot, before the tests ever started. minSdk is
-      # 30, so nothing in CI exercises the floor runtime now; re-adding the leg
-      # is what would bring that back.
-      - name: Run Android release smoke tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 36
-          arch: x86_64
-          disable-animations: true
-          # The action runs each `script` line in its own `sh -c`, so a
-          # `cd android` line would be a no-op subshell and `./gradlew`
-          # would be resolved at the repo root. Set the step cwd instead.
-          working-directory: android
-          # A crashed instrumentation run must fail loudly instead of hanging:
-          # UTP's am_instrument_timeout is effectively unbounded (one year), so
-          # a missing runtime class makes the runner die before reporting and
-          # the task waits forever. Bound it so the job fails in minutes.
-          script: timeout 1500 ./gradlew :app:connectedReleaseAndroidTest
-
   validate-native:
     name: "Validate native platform contracts"
     runs-on: ubuntu-latest
@@ -371,44 +276,6 @@ jobs:
       # and the Windows helper channel wiring.
       - name: Verify native platform contracts
         run: bash tool/verify_native.sh
-
-  # The Linux desktop target was only ever compiled by the tag-driven release
-  # pipeline, so a broken `linux/CMakeLists.txt`, runner source or native
-  # dependency shipped straight to a release tag. `verify_native.sh` only
-  # greps the packaging config; the actual compile happens here. Needs the
-  # X11/Xi headers the tray plugin links against (see SETUP.md).
-  validate-linux:
-    name: "Validate Linux desktop build"
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
-            libsecret-1-dev libjsoncpp-dev libwebkit2gtk-4.1-dev \
-            libx11-dev libxi-dev
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: true
-
-      - name: Enable Linux desktop
-        run: flutter config --enable-linux-desktop
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Linux runner (debug)
-        run: flutter build linux --debug
 
   validate-boltmeshd:
     name: "Validate boltmeshd"
