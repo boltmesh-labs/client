@@ -117,6 +117,13 @@ dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
 ```
 
+`tool/check_generated.sh` (`make generated`) is also the `check-generated`
+pre-commit hook: it fires on any commit touching `lib/**.dart`, an `.arb`,
+`l10n.yaml` or `pubspec.*`, so with the hook installed the stale-generator
+mistake is caught before the push rather than in CI. The script regenerates the
+files in the working tree *before* it diffs, so when it fails, `git add` the
+regenerated output and commit again.
+
 ### Writing Tests
 
 * Write tests for all new features

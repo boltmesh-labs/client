@@ -55,7 +55,7 @@ The stream transport's wire format and bridge live in the top-level `stream/` mo
 
 ## High-risk conventions
 
-- Generated Dart is committed but excluded from analysis: `lib/l10n/gen/**`, `**/*.freezed.dart`, and `**/*.g.dart`. Never hand-edit it; after changing `.arb` files or freezed/JSON models run `bash tool/check_generated.sh` and commit the regenerated output.
+- Generated Dart is committed but excluded from analysis: `lib/l10n/gen/**`, `**/*.freezed.dart`, and `**/*.g.dart`. Never hand-edit it; after changing `.arb` files or freezed/JSON models run `bash tool/check_generated.sh` and commit the regenerated output. The `check-generated` pre-commit hook runs that script on any commit touching `lib/**.dart`, `*.arb`, `l10n.yaml` or `pubspec.*`, and `make generated` is the same gate — so a stale generator drops the commit (or, when `pre-commit install` was never run, fails `validate` in CI).
 - `analysis_options.yaml` also excludes native platform directories, so Dart analysis does not replace Android/Windows builds. Keep its strict casts/raw types/inference and custom lints intact.
 - Tests are deterministic: use `package:fake_async` and `async.elapse`, never real sleeps; `dart_test.yaml` has a 60-second timeout and no retries. Shared doubles live in `test/support/fakes.dart`; state suites build on `test/support/vpn_harness.dart` and subclass only their delta.
 - Keep public `ConnectionController` methods (`connect`, `switchServer`, `rotateKeys`, `pollStatusOnce`, …) as instance methods, never extension members. The `conn_*.dart` extensions cannot access Riverpod’s protected `ref`/`state`; use the class accessors instead.

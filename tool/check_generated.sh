@@ -23,18 +23,31 @@ cd "$(dirname "$0")/.."
 flutter gen-l10n
 dart run build_runner build
 
+# l10n.yaml owns where `flutter gen-l10n` writes, and the check has to look
+# there or it silently stops noticing those files: a `find` over a hardcoded
+# path that no longer exists matches nothing, and the drift would ship. Read
+# the setting instead, and fail loudly if the directory it names is not there
+# after `flutter gen-l10n` above. build_runner output (freezed, json_serializable)
+# is always under `lib/`, so that `find` stays hardcoded.
+l10n_out="$(sed -n 's/^output-dir:[[:space:]]*//p' l10n.yaml | head -n1)"
+l10n_out="${l10n_out:-lib/l10n/gen}"
+if [[ ! -d "$l10n_out" ]]; then
+  echo "l10n output directory '$l10n_out' (l10n.yaml output-dir) not found" >&2
+  exit 1
+fi
+
 generated=()
 while IFS= read -r file; do
   generated+=("$file")
 done < <(
   {
-    find lib/l10n/gen -type f -name '*.dart' 2>/dev/null || true
+    find "$l10n_out" -type f -name '*.dart'
     find lib -type f \( -name '*.freezed.dart' -o -name '*.g.dart' \)
   } | sort -u
 )
 
 if [[ ${#generated[@]} -eq 0 ]]; then
-  echo "no generated files found under lib/" >&2
+  echo "no generated files found (l10n output and build_runner output)" >&2
   exit 1
 fi
 

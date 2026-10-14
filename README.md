@@ -1008,7 +1008,10 @@ runner, so the macOS data plane has no executed test.
 
 `tool/check_generated.sh` regenerates `flutter gen-l10n` + `build_runner`
 output and fails on drift: those files are excluded from analysis, so a stale
-one would otherwise ship green. `tool/coverage_gate.sh` enforces a floor
+one would otherwise ship green. The `check-generated` pre-commit hook runs it on
+any commit touching `lib/**.dart`, an `.arb`, `l10n.yaml` or `pubspec.*`, and
+`make generated` is the same gate, so the drift is caught at commit time as well
+as in `validate`. `tool/coverage_gate.sh` enforces a floor
 (currently 80%) on hand-written lines only — generated code is excluded.
 `tool/verify_native.sh` covers checks the Dart suite cannot reach (see the
 `validate-native` CI job). Timer behaviour is tested with `package:fake_async`
