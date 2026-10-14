@@ -329,7 +329,11 @@ function Invoke-E2ERun {
     $env:BOLTMESH_E2E_SHOT_DIR = $shotDir
     & (Join-Path $PSScriptRoot 'firewall_windows.ps1') clear
     try {
-        $code = Invoke-Native { & flutter test integration_test/app_e2e.dart -d windows --dart-define-from-file $EnvFile }
+        $flutterArgs = @(
+            'test', 'integration_test/app_e2e.dart', '-d', 'windows',
+            '--reporter', 'expanded', '--dart-define-from-file', $EnvFile
+        )
+        $code = Invoke-Native { & flutter @flutterArgs }
     }
     finally {
         & (Join-Path $PSScriptRoot 'firewall_windows.ps1') clear

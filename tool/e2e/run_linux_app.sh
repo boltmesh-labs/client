@@ -222,6 +222,7 @@ BOLTMESH_E2E_API_PASSWORD="$api_password" \
 BOLTMESH_E2E_SHOT_DIR="$shot_dir" \
   flutter test integration_test/app_e2e.dart \
     -d linux \
+    --reporter expanded \
     --dart-define-from-file="$env_file" \
     --no-enable-impeller
 

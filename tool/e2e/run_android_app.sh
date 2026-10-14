@@ -163,6 +163,7 @@ echo "  defines:     $env_file + $CREDS_FILE"
 
 flutter test integration_test/app_e2e.dart \
   -d "$serial" \
+  --reporter expanded \
   --dart-define-from-file="$env_file" \
   --dart-define-from-file="$CREDS_FILE"
 

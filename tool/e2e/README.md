@@ -175,6 +175,8 @@ interface table from inside the process, where the app's own tun is visible.
 Four tests, in order, each building on the last. They share one `flutter test`
 process and one store, so the session and the device identity carry across them
 — which is also what puts the restore path inside what is covered.
+The platform runners select Flutter's `expanded` reporter so captured logs keep
+one test update per line instead of redrawing the compact progress display.
 
 1. **signs in** — types the real credentials into the real form and reaches the
    VPN tabs. A stored session short-circuits this and says so; each runner
