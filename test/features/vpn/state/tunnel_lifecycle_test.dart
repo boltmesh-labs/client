@@ -59,6 +59,12 @@ class ThrowingDisconnectApi extends VpnApi {
   }
 }
 
+class ThrowingProvisionTargetStore extends FakeStore {
+  @override
+  Future<String?> provisionTarget() async =>
+      throw StateError('target storage unavailable');
+}
+
 ProviderContainer makeContainer({
   required FakeStore store,
   required FakeKeys keys,
@@ -585,6 +591,30 @@ void main() {
     expect(pubKeys, ['KP1-PUB', 'KP1-PUB']);
     expect(container.read(connectionProvider).phase, ConnPhase.idle);
   });
+
+  test(
+    'provision target storage failure surfaces as a provisioning error',
+    () async {
+      final events = <String>[];
+      final store = ThrowingProvisionTargetStore();
+      final api = VpnApi(
+        recordingDio(events, (_) => throw StateError('unexpected API request')),
+      );
+      final container = makeContainer(
+        store: store,
+        keys: FakeKeys(const []),
+        api: api,
+      );
+      final ctl = container.read(connectionProvider.notifier);
+      ctl.testHooks.tunnel = FakeTunnel(events);
+
+      await expectLater(ctl.ensureProvisioned(), throwsA(isA<StateError>()));
+
+      expect(container.read(connectionProvider).phase, ConnPhase.error);
+      expect(container.read(connectionProvider).opFailed, isTrue);
+      expect(events, isEmpty);
+    },
+  );
 
   test('provision 409 replays once with the same key', () async {
     final events = <String>[];

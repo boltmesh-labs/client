@@ -35,15 +35,8 @@ extension ConnectionProvision on ConnectionController {
       final target =
           'region=${regionId ?? ''}'
           '|server=${serverId ?? snap.serverId ?? ''}';
-      String? storedTarget;
-      try {
-        storedTarget = await _device.provisionTarget();
-        if (!sessionCurrent()) return;
-      } catch (_) {
-        // Stores without target support (older fakes): fall back to
-        // unbound retries so the same-target retry still reuses the key.
-        storedTarget = target;
-      }
+      final storedTarget = await _device.provisionTarget();
+      if (!sessionCurrent()) return;
       var idem = await _device.provisionKey();
       var pub = await _device.publicKey();
       if (!sessionCurrent()) return;
@@ -58,13 +51,7 @@ extension ConnectionProvision on ConnectionController {
         await _device.setKeypair(privateKey: kp.privateKey, publicKey: pub);
         if (!sessionCurrent()) return;
         await _device.setProvisionKey(idem);
-        try {
-          await _device.setProvisionTarget(target);
-        } catch (_) {
-          // Older/test stores without the target key: fall back to
-          // unbound retries (conflicts surface as errors, not loops
-          // within a single target).
-        }
+        await _device.setProvisionTarget(target);
       }
       final name = await _device.deviceName() ?? 'BoltMesh Device';
       if (!sessionCurrent()) return;
