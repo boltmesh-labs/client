@@ -80,4 +80,6 @@ class SessionStore {
 /// Shared session backing. Lives next to [SessionStore] (rather than in VPN
 /// state) so the auth controller can read it without importing the VPN
 /// provider graph, which itself reads auth for the 401 refresh hook.
-final sessionStoreProvider = Provider((_) => const SessionStore());
+final sessionStoreProvider = Provider(
+  (_) => SessionStore(kPlatformSecureStorage),
+);

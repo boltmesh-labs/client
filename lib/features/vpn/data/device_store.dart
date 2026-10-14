@@ -223,4 +223,6 @@ class DeviceStore {
 }
 
 /// Shared device-identity backing for the tunnel controller and settings.
-final deviceStoreProvider = Provider((_) => DeviceStore());
+final deviceStoreProvider = Provider(
+  (_) => DeviceStore(kPlatformSecureStorage),
+);
