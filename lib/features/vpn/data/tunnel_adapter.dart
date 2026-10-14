@@ -48,8 +48,11 @@ abstract class TunnelAdapter {
   /// True once [ensureInitialized] has succeeded.
   bool get isReady;
 
-  /// OS-side stage events (empty when the plugin has no channel).
-  Stream<VpnStage> get stages;
+  /// OS-side stage events. Empty by default, because a data plane with no push
+  /// channel is polled through [readStage] instead — the `boltmeshd` helper and
+  /// Android's in-process AWG host both work that way. Only the plugin adapter,
+  /// which the OS does push stages to, overrides this.
+  Stream<VpnStage> get stages => const Stream<VpnStage>.empty();
 
   /// Idempotent plugin setup. Throws on failure.
   Future<void> ensureInitialized();
@@ -93,9 +96,11 @@ abstract class TunnelAdapter {
   /// the first connect after every fresh install reports a bogus timeout
   /// failure and only succeeds on a second tap.
   ///
-  /// Platforms with no consent step — Linux/Windows (privileged `boltmeshd`
-  /// helper) and Apple (Network Extension negotiation) — return true without
-  /// doing anything. Never throws: a denial is a user decision, not a fault.
+  /// Grants by default, so an adapter for a platform with no consent step —
+  /// Linux/Windows (privileged `boltmeshd` helper) and Apple (Network Extension
+  /// negotiation) — does nothing. Only Android, whose `VpnService` needs the
+  /// dialog, overrides it. Never throws: a denial is a user decision, not a
+  /// fault.
   Future<bool> requestConsent() async => true;
 
   /// Current OS stage, or null when unreadable.
@@ -111,14 +116,17 @@ abstract class TunnelAdapter {
   Future<DateTime?> readHandshake();
 
   /// The stream transport's TLS session state, or null when unknown — no
-  /// stream transport is live (every adapter but the helper's), an older
-  /// daemon that predates the field, or a read failure. Non-null
-  /// distinguishes "session establishing" (false) from "session
-  /// established" (true). The health tick uses it to keep a stream rung
-  /// still coming up from reading as a dead path: a not-yet-established
+  /// stream transport is live, an older daemon that predates the field, or a
+  /// read failure. Non-null distinguishes "session establishing" (false) from
+  /// "session established" (true). The health tick uses it to keep a stream
+  /// rung still coming up from reading as a dead path: a not-yet-established
   /// session has no completed end-to-end handshake and no flowing data
   /// path, which otherwise looks identical to a dead peer. Never throws.
-  Future<bool?> readStreamSession();
+  ///
+  /// Null by default: the plugin path has no stream transport lifecycle, so
+  /// there is never a session to report. The adapters that can run one — the
+  /// `boltmeshd` helper and Android's bridge — override this.
+  Future<bool?> readStreamSession() async => null;
 
   /// The live peer of the owning tunnel (the backend whose
   /// `runningTunnelNames` is non-empty, surviving engine restarts), or null
@@ -156,7 +164,7 @@ abstract class TunnelAdapter {
 /// null unless a reader is injected, [getActivePeer] is always unknown and
 /// [killGhost] is a no-op. Each of those is what the controller already reads
 /// as "no evidence", never as a stall.
-class WireGuardTunnelAdapter implements TunnelAdapter {
+class WireGuardTunnelAdapter extends TunnelAdapter {
   WireGuardTunnelAdapter() : _handshakeReader = null;
 
   /// Pre-initialized adapter for tests (skips plugin `initialize()`).
@@ -195,13 +203,6 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
   /// and never counts as a never-handshook stall.
   @override
   bool get handshakeReaderSupported => _handshakeReader != null;
-
-  /// No daemon on this path — the plugin owns the data plane — so no
-  /// capability tokens. An explicit override because `implements` does not
-  /// inherit the interface's default body; the empty set is what keeps a
-  /// daemon-gated rung from ever selecting itself here.
-  @override
-  Set<String> get daemonCapabilities => const <String>{};
 
   @override
   Future<void> ensureInitialized() async {
@@ -262,14 +263,6 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
         )
         .timeout(TunnelTuning.opTimeout);
   }
-
-  /// No consent step on the paths this adapter serves: Apple negotiates
-  /// through its Network Extension, web has no tunnel, and the Android
-  /// `VpnService` consent this once brokered now belongs to
-  /// [AndroidTunnelAdapter]. Explicit rather than inherited because
-  /// `implements` does not bring over an interface default.
-  @override
-  Future<bool> requestConsent() async => true;
 
   @override
   Future<void> stop(String reason) async {
@@ -351,12 +344,6 @@ class WireGuardTunnelAdapter implements TunnelAdapter {
     }
   }
 
-  @override
-  // The plugin data plane has no stream transport lifecycle, so it can
-  // never report a session state. Null means "unknown", which the health
-  // tick treats as "not a stream rung" rather than as evidence either way.
-  Future<bool?> readStreamSession() async => null;
-
   /// Unknown on the plugin path: the plugin exposes no peer identity and no
   /// host channel answers for one (see the class docs), so a cold restore here
   /// always takes the clean-bounce path rather than an adopt-if-match.
@@ -406,7 +393,7 @@ Future<bool> _requestVpnConsent(MethodChannel channel) async {
 /// Go runtimes in one process fight over process-global state (signal
 /// handlers, altstack), so the app faults the moment a stock tunnel is brought
 /// up after the AWG runtime is live. See `tool/android-debug/README.md`.
-class AndroidTunnelAdapter implements TunnelAdapter {
+class AndroidTunnelAdapter extends TunnelAdapter {
   AndroidTunnelAdapter({
     Future<String> Function(String server)? resolveStreamServer,
   }) : _resolveStreamServer =
@@ -423,9 +410,6 @@ class AndroidTunnelAdapter implements TunnelAdapter {
 
   @override
   bool get isReady => true;
-
-  @override
-  Stream<VpnStage> get stages => const Stream<VpnStage>.empty();
 
   @override
   Future<void> ensureInitialized() async {

@@ -22,7 +22,7 @@ import 'tunnel_tuning.dart';
 /// the stage, so [stages] stays empty and `readStage()` (polled by the health
 /// tick) is the truth — outside-stop corroboration still works via
 /// `_noteStage`.
-class HelperTunnelAdapter implements TunnelAdapter {
+class HelperTunnelAdapter extends TunnelAdapter {
   HelperTunnelAdapter({HelperClient? client})
     : _client = client ?? HelperClient();
 
@@ -31,15 +31,6 @@ class HelperTunnelAdapter implements TunnelAdapter {
 
   @override
   bool get isReady => _initialized;
-
-  /// The helper has no push channel; the health tick polls [readStage].
-  @override
-  Stream<VpnStage> get stages => const Stream.empty();
-
-  /// The helper runs the tunnel through a privileged daemon, so there is no
-  /// OS consent dialog to answer before the first `up`.
-  @override
-  Future<bool> requestConsent() async => true;
 
   @override
   bool get handshakeReaderSupported => true;
