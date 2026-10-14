@@ -3,20 +3,38 @@ name: "Client CI"
 # Validation only. The tag-driven release pipeline lives in `release.yml`,
 # which reuses this workflow via `workflow_call` so a tagged release is built
 # on the same validated commit without duplicating every check.
+#
+# Three trigger contexts, covered to two different depths:
+#   * a pull request runs everything;
+#   * a push to `main` runs the cheap subset -- `validate`, `validate-boltmeshd`,
+#     `validate-native` and `security`. `main` is unprotected and most commits
+#     here arrive by direct push rather than by PR, so without this a push lands
+#     with no check at all;
+#   * the tag gate (`workflow_call` from `release.yml`) runs everything again on
+#     the tagged commit. That is what `validate_all` is for: a tag is delivered
+#     as a `push` event too, so `github.event_name` cannot distinguish the two.
 on:
   pull_request:
     branches:
       - main
       - develop
+  push:
+    branches:
+      - main
   workflow_call:
+    inputs:
+      validate_all:
+        description: "Run the expensive build jobs (Android, Windows) as well."
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
-# A superseded push must not keep burning the full fan-out (two emulators,
-# Windows + Go setups). Cancel-in-progress on PRs and pushes alike; a tagged
-# release is driven by `release.yml`, which calls this workflow in its own
-# `release` context, where the same group is unique per run.
+# A superseded commit must not keep burning the fan-out (Flutter, Android and
+# Windows setups). Cancel-in-progress on PRs and pushes alike; a tagged release
+# is driven by `release.yml`, which calls this workflow in its own `release`
+# context, where the same group is unique per run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -127,6 +145,9 @@ jobs:
         run: bash tool/coverage_gate.sh 80
 
       - name: Upload coverage
+        # PR-only: a push to `main` runs this job too, and the artifact is a
+        # per-commit convenience for the PR, not something any later job reads.
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: client-coverage
@@ -134,8 +155,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The expensive half of the gate: it compiles and runs a native Windows
+  # runner, which is why it is PR/release-only and skipped on a push to `main`.
+  # NOTE: Windows runner minutes bill at twice the Linux rate.
   validate-windows:
     name: "Validate Windows runner"
+    if: inputs.validate_all || github.event_name == 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -179,13 +204,22 @@ jobs:
         shell: pwsh
         run: pwsh -File tool/verify_windows.ps1
 
-  # The minified release build and the lint result are identical on every API
-  # level, so they run once here rather than once per emulator leg. The
-  # instrumentation run below still compiles through Gradle on each leg.
+  # The Android gate. PR/release-only; a push to `main` runs the cheap subset
+  # instead (see `on:` above).
+  #
+  # It deliberately does not compile the app. The minified release build is
+  # assembled once, on the tag, by release.yml's `build-android`
+  # (`flutter build appbundle --release` + `apk --release`), which is what
+  # exercises R8 and app/proguard-rules.pro. Compiling it on every PR cost
+  # 3.5-14 min of a job whose remaining checks are ~3 min, and the
+  # instrumentation suite that compared against the minified build in CI is gone
+  # (see README.md, Android), so the build was paying that cost to re-check a
+  # variant nothing here tests.
   android-build:
-    name: "Validate Android build"
+    name: "Validate Android"
+    if: inputs.validate_all || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -220,13 +254,23 @@ jobs:
         run: flutter pub get
 
       # vet and lint for the JNI module need cgo with the NDK (this package
-      # includes <jni.h> and <android/log.h>), so the APK build's compile is not
-      # a gate on its own: it says nothing about vet, lint or formatting.
+      # includes <jni.h> and <android/log.h>), so a plain `go build` is not a
+      # gate on its own: it says nothing about vet, lint or formatting.
       # tool/build_awg_android.py owns the toolchain wiring the APK build also
       # uses and runs every ABI, mirroring the linux/Windows/macOS lint steps
       # for boltmeshd. golangci-lint is installed rather than invoked as an
-      # action because the check needs that NDK environment for all four ABIs.
+      # action because the check needs that NDK environment for all four ABIs;
+      # that also means it gets no caching from golangci-lint-action, so the
+      # binary is cached here instead (`go install` is 40-110 s uncached).
+      - name: Cache golangci-lint
+        id: golangci-lint-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/golangci-lint
+          key: golangci-lint-v2.14.0-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install golangci-lint
+        if: steps.golangci-lint-cache.outputs.cache-hit != 'true'
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
       - name: Check Android AWG Go module
@@ -235,15 +279,16 @@ jobs:
           export PATH="$GOPATH_BIN:$PATH"
           make -C android/awg-native check
 
-      # Compile the exact minified variant that is shipped. This catches R8
-      # rule/dependency regressions on every PR; the debug fallback means no
-      # keystore secret is needed here.
-      - name: Build Android APK (minified release)
-        run: flutter build apk --release
+      # Writes android/local.properties (flutter.sdk and sdk.dir) that the direct
+      # ./gradlew below needs -- the Flutter Gradle plugin loader reads
+      # flutter.sdk from it unguarded, with no FLUTTER_ROOT fallback, which is
+      # also why anything invoking Gradle without `flutter build` must write it
+      # (see AGENTS.md). --config-only generates the build files without
+      # assembling an artifact, so the lint gate no longer waits on a build.
+      - name: Generate the Android project config
+        run: flutter build apk --debug --config-only
 
-      # Android Lint needs the SDK path flutter build wrote to
-      # android/local.properties, hence after the build. It catches
-      # manifest/resource/API misuse the Dart suite cannot see.
+      # Catches manifest/resource/API misuse the Dart suite cannot see.
       - name: Run Android Lint
         working-directory: android
         run: ./gradlew :app:lintDebug
