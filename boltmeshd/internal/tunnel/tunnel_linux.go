@@ -395,25 +395,6 @@ func (m *Manager) readDeviceStatus(ctx context.Context) (*protocol.Status, error
 	return st, nil
 }
 
-// streamSessionState projects the live stream transport's TLS session
-// into a status field. It reads only streamSession — never the
-// gate-guarded transport pointer — so the status path, which does not
-// hold the up/down gate, cannot race a lifecycle mutation. It returns
-// nil when no stream transport is live (the field is then omitted,
-// which is how a native/awg rung — or a daemon that predates the
-// field — reports "not a stream tunnel"), and a fresh pointer to the
-// current session state otherwise, so the status owns its own value
-// rather than aliasing the manager's.
-func (m *Manager) streamSessionState() *bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.streamSession == nil {
-		return nil
-	}
-	up := *m.streamSession
-	return &up
-}
-
 func statusReadError(err error) error {
 	return &protocol.OpError{
 		Code: protocol.CodeInternal,

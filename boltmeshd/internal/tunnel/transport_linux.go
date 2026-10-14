@@ -29,7 +29,6 @@ import (
 	"strconv"
 	"strings"
 
-	"boltmesh/stream"
 	"boltmeshd/internal/protocol"
 )
 
@@ -138,34 +137,6 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 	return nil
 }
 
-// newStreamClient builds the in-process transport from a validated spec. The
-// credentials are decoded here, once, and never logged: the log line above
-// names the addresses only.
-func newStreamClient(spec *protocol.TransportSpec, onSession func(bool, error)) (streamClient, error) {
-	psk, err := spec.StreamPSK()
-	if err != nil {
-		return nil, err
-	}
-	clientID, err := spec.StreamClientID()
-	if err != nil {
-		return nil, err
-	}
-	pins, err := spec.StreamSPKIPins()
-	if err != nil {
-		return nil, err
-	}
-	return stream.NewClient(stream.ClientConfig{
-		ListenAddr:  spec.Listen,
-		DeliverAddr: spec.Deliver,
-		ServerAddr:  spec.Server,
-		ServerName:  spec.ServerName,
-		SPKIPins:    pins,
-		PSK:         psk,
-		ClientID:    clientID,
-		OnSession:   onSession,
-	})
-}
-
 // pinTransportTables installs the bypass route in every routing table
 // wg-quick's policy rules select for *unmarked* packets. Called right after
 // wg-quick up: the rules (and their tables) only exist from that point on.
@@ -251,47 +222,6 @@ func (m *Manager) downTransport(ctx context.Context) error {
 		return &protocol.OpError{Code: protocol.CodeInternal, Err: errors.Join(errs...)}
 	}
 	return m.removeTransportPinRecord()
-}
-
-// transportErrorCode reports the protocol code a transport failure should
-// surface as. Only a bad-config error carries its own; anything else is a
-// daemon fault by default. The client's reaction depends on the distinction —
-// a bad spec means it must not retry this region, an internal error may be
-// transient — so it is worth preserving rather than flattening.
-func transportErrorCode(err error) string {
-	var opErr *protocol.OpError
-	if errors.As(err, &opErr) && opErr.Code == protocol.CodeBadConfig {
-		return protocol.CodeBadConfig
-	}
-	return protocol.CodeInternal
-}
-
-// noteStreamSession records the transport's session transitions in the log
-// and in the status the client reads.
-//
-// A session that will not come up is the interesting case, and it is *not* a
-// tunnel failure: the client already demotes on its own health policy, and
-// this path has no view of the tunnel's state to act on. So the daemon does
-// not second-guess the ladder — but it does publish the transition, because
-// the client's health policy needs to tell a stream rung still coming up
-// (no completed end-to-end handshake yet) from one whose path has died.
-//
-// The nil guard is what keeps a teardown's callbacks from resurrecting
-// state: downTransport clears streamSession before it stops the client,
-// so a session the client reports on its way down finds nothing to
-// write to and is dropped.
-func (m *Manager) noteStreamSession(up bool, err error) {
-	m.mu.Lock()
-	if m.streamSession != nil {
-		v := up
-		m.streamSession = &v
-	}
-	m.mu.Unlock()
-	if up {
-		slog.Info("stream transport session established", "interface", m.iface)
-		return
-	}
-	slog.Warn("stream transport session unavailable", "interface", m.iface, "error", err)
 }
 
 // recordTransportPins writes the pin record from the live set. A Linux pin
@@ -430,24 +360,4 @@ func indexToken(fields []string, want string) int {
 		}
 	}
 	return -1
-}
-
-// resolveServer // resolveServer turns the server host into addresses. A literal IP needs no
-// resolver; a hostname does, and the *current* (physical) resolver is the
-// right one: the transport comes up before any tunnel DNS state exists.
-func (m *Manager) resolveServer(ctx context.Context, host string) ([]net.IP, error) {
-	if literal := net.ParseIP(host); literal != nil {
-		return []net.IP{literal}, nil
-	}
-	resolver := m.resolveHost
-	if resolver == nil {
-		resolver = func(ctx context.Context, host string) ([]net.IP, error) {
-			return net.DefaultResolver.LookupIP(ctx, "ip", host)
-		}
-	}
-	ips, err := resolver(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve stream transport upstream %s: %w", host, err)
-	}
-	return ips, nil
 }
