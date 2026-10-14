@@ -39,10 +39,12 @@
 // keyring persists across tests in a run, so the session is restored between
 // them — which is itself the restore path being exercised.
 //
-// The Android ladder walk uses the `debugForceRung` seam to prove each data
-// plane carries bytes. Desktop instead drives production health recovery with
-// firewall blocks, including a down-server fast-track failover from stream,
-// followed by a restart on native at the replacement server.
+// The Android and Windows ladder walks use the `debugForceRung` seam to prove
+// each data plane carries bytes: Windows cannot blackhole its WireGuard for
+// Windows native transport, whose tunnel service permits its own packets past
+// the firewall. Linux drives production health recovery with firewall blocks,
+// including a down-server fast-track failover from stream, followed by a
+// restart on native at the replacement server.
 
 library;
 
@@ -95,14 +97,19 @@ void main() {
     await _ensureSignedIn(tester);
     await _shot('02-home');
 
-    final automaticLadder = !Platform.isAndroid;
+    // The explicit rung walk is the fallback for a host whose blackhole cannot
+    // reach the tunnel's transport. Android has no host firewall from its app
+    // uid. Windows' native rung is WireGuard for Windows, whose tunnel service
+    // installs a WFP permit rule for its own packets (weight 15) that outranks
+    // an outbound firewall block, so blackholing the endpoint never kills that
+    // rung. Linux's nftables filter is evaluated per packet and has no such
+    // permit ahead of it, so Linux alone exercises production recovery by
+    // blackholing each rung endpoint and the stream TLS port.
+    final automaticLadder = !Platform.isAndroid && !Platform.isWindows;
     if (automaticLadder) {
       addTearDown(_host.clearEndpointBlocks);
     }
 
-    // Android cannot install host firewall rules from its app uid, so it
-    // retains the explicit rung walk. Desktop runs exercise production
-    // recovery by blackholing each rung endpoint and the stream TLS port.
     final ladder = automaticLadder
         ? const [TransportRung.native, TransportRung.awg, TransportRung.stream]
         : const [
@@ -619,21 +626,6 @@ Future<List<String>> _resolveFirewallAddresses(String endpoint) async {
   return unique.toList();
 }
 
-Future<void> _runWindowsFirewallHelper(List<String> args) async {
-  final script = '${Directory.current.path}\\tool\\e2e\\firewall_windows.ps1';
-  final result = await Process.run('powershell', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    script,
-    ...args,
-  ]);
-  if (result.exitCode != 0) {
-    throw StateError('E2E firewall helper failed: ${result.stderr}');
-  }
-}
-
 class _LinuxHost extends _Host {
   const _LinuxHost();
 
@@ -728,32 +720,28 @@ class _WindowsHost extends _Host {
   bool get helperEndpointExists =>
       Process.runSync('sc.exe', ['query', 'boltmeshd']).exitCode == 0;
 
+  // Windows cannot blackhole an endpoint: the native rung's transport is
+  // WireGuard for Windows, whose tunnel service permits its own packets past
+  // the firewall, so a block rule does not stop it. The ladder test therefore
+  // walks the rungs explicitly here (see `automaticLadder`) and never calls
+  // these; they exist only to satisfy the seam.
   @override
   Future<void> setEndpointBlocked(
     String endpoint,
     int port,
     bool blocked, {
     bool tcp = false,
-  }) async {
-    for (final address in await _resolveFirewallAddresses(endpoint)) {
-      await _runWindowsFirewallHelper([
-        blocked ? 'block' : 'unblock',
-        address,
-        '$port',
-        if (tcp) 'tcp',
-      ]);
-    }
-  }
+  }) => throw UnsupportedError(
+    'Windows E2E cannot blackhole the WireGuard for Windows transport',
+  );
 
   @override
-  Future<void> blockEndpointAddress(String endpoint) async {
-    for (final address in await _resolveFirewallAddresses(endpoint)) {
-      await _runWindowsFirewallHelper(['block-ip', address]);
-    }
-  }
+  Future<void> blockEndpointAddress(String endpoint) => throw UnsupportedError(
+    'Windows E2E cannot blackhole the WireGuard for Windows transport',
+  );
 
   @override
-  Future<void> clearEndpointBlocks() => _runWindowsFirewallHelper(['clear']);
+  Future<void> clearEndpointBlocks() async {}
 
   @override
   Future<bool> tunnelExists() async {

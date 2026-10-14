@@ -183,21 +183,25 @@ one test update per line instead of redrawing the compact progress display.
    starts from a fresh store (a scratch keyring on Linux, no secure-storage
    file on Windows, `pm clear` on Android), so a scripted run does drive the
    form.
-2. **walks the transport ladder native, awg, stream, native** — on Linux and
-   Windows, connects through the Home power control, then adds outbound UDP
-   blocks for the active server endpoint and current rung's advertised port.
-   The real health/recovery path must demote native → AWG → stream; each rung
-   must reach `connected` and carry traffic. It then blocks all outbound
-   traffic to the failed server's resolved IP addresses, waits for fast-track
-   failover to another server on stream, clears the rules, restarts that
-   replacement on native, and verifies traffic there.
-   Android cannot control the host firewall from its app uid, so it retains the
-   explicit `debugForceRung` walk. The desktop firewall helper is installed by
-   the elevated helper setup: Linux grants this user passwordless sudo for the
-   validating, root-owned `boltmesh-e2e-firewall` command; Windows installs a
-   fixed SYSTEM scheduled task with a validated request interface. Neither the
-   app nor the E2E runner runs elevated. Test teardown and runner cleanup remove
-   all E2E rules, including after a failed ladder assertion. For each rung the
+2. **walks the transport ladder native, awg, stream, native** — each rung must
+   reach `connected` and carry traffic. On Linux the run drives the real
+   health/recovery path: it connects through the Home power control, then adds
+   outbound UDP blocks for the active server endpoint and current rung's
+   advertised port, so the health path must demote native → AWG → stream; it
+   then blocks all outbound traffic to the failed server's resolved IP
+   addresses, waits for fast-track failover to another server on stream, clears
+   the rules, restarts that replacement on native, and verifies traffic there.
+   Android cannot control the host firewall from its app uid, and Windows
+   cannot blackhole its native rung at all: that transport is WireGuard for
+   Windows, whose tunnel service installs a WFP permit rule for its own packets
+   (weight 15) that outranks an outbound firewall block, so the rung never dies
+   and the demotion never fires. Both therefore keep the explicit
+   `debugForceRung` walk, and neither installs a firewall helper. The Linux
+   helper is installed by the elevated helper setup, which grants this user
+   passwordless sudo for the validating, root-owned `boltmesh-e2e-firewall`
+   command. Neither the app nor the E2E runner runs elevated. Test teardown and
+   runner cleanup remove all E2E rules, including after a failed ladder
+   assertion. For each rung the
    test checks the UI agrees (the
    header names the server, the button reads Disconnect), and asserts on bytes:
    the app's own received counter, the kernel's `wg` counters when the kernel

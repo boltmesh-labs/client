@@ -171,38 +171,6 @@ try {
     }
     ok "staged boltmeshd.exe, wintun.dll, wireguard_svc.exe, wireguard.dll in $InstallDir"
 
-    # The app run stays unprivileged. A fixed SYSTEM task is the only elevated
-    # entry point for temporary E2E endpoint blocks; the request directory is
-    # writable by this interactive user, while the worker itself is installed
-    # beside the protected helper binaries.
-    $worker = Join-Path $InstallDir 'firewall_windows_worker.ps1'
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'firewall_windows_worker.ps1') -Destination $worker -Force
-    $controlDir = Join-Path (Join-Path $env:ProgramData 'BoltMesh\e2e') 'firewall-control'
-    New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $controlAcl = Get-Acl -LiteralPath $controlDir
-    $controlRule = New-Object Security.AccessControl.FileSystemAccessRule($currentSid, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $controlAcl.SetAccessRule($controlRule)
-    Set-Acl -LiteralPath $controlDir -AclObject $controlAcl
-
-    $taskName = '\BoltMesh\E2EFirewall'
-    $taskDir = '\BoltMesh'
-    $scheduler = New-Object -ComObject 'Schedule.Service'
-    $scheduler.Connect()
-    try { $folder = $scheduler.GetFolder($taskDir) }
-    catch { $folder = $scheduler.GetFolder('\').CreateFolder('BoltMesh', $null) }
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$worker`""
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName 'E2EFirewall' -TaskPath $taskDir -Action $action -Principal $principal -Force | Out-Null
-    # Grant only generic read/execute so this account can start the fixed task.
-    # Its action and SYSTEM principal remain controlled by the installer.
-    $registered = $scheduler.GetFolder($taskDir).GetTask('E2EFirewall')
-    $taskSddl = "D:P(A;;GRGX;;;$currentSid)(A;;GA;;;SY)(A;;GA;;;BA)"
-    $registered.SetSecurityDescriptor($taskSddl, 0)
-    $folderSddl = "D:P(A;;GRGX;;;$currentSid)(A;;GA;;;SY)(A;;GA;;;BA)"
-    $scheduler.GetFolder($taskDir).SetSecurityDescriptor($folderSddl, 0)
-    ok 'installed the unprivileged E2E firewall task'
-
     # --- install and start the service --------------------------------------
     $installed = Invoke-Step 'boltmeshd.exe -install' {
         Invoke-Native { & $helper -install } | Out-Null
