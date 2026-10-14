@@ -255,19 +255,29 @@ jobs:
       # each attempt is a ~700 MB fetch.
       - name: Install the Flutter-pinned Android NDK
         run: |
+          ndk_version="28.2.13676358"
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           for attempt in 1 2 3; do
-            if "$sdkmanager" "ndk;28.2.13676358"; then
+            if "$sdkmanager" "ndk;$ndk_version"; then
+              # The runner image exports ANDROID_NDK_HOME/ANDROID_NDK_ROOT for its
+              # own default NDK (27.3.13750724 on ubuntu-24.04), and
+              # build_awg_android.py prefers those over the pinned copy under
+              # $ANDROID_HOME/ndk -- so without pointing them at the install this
+              # step just made, the AWG check below vets and lints against a
+              # toolchain the shipped build never uses. Gradle is unaffected
+              # either way: android/app/build.gradle.kts passes the pinned path
+              # to the JNI build explicitly.
+              echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk_version" >> "$GITHUB_ENV"
               exit 0
             fi
             echo "::warning::NDK install attempt $attempt failed; clearing the partial download and retrying"
             rm -rf \
-              "$ANDROID_HOME/ndk/28.2.13676358" \
+              "$ANDROID_HOME/ndk/$ndk_version" \
               "$ANDROID_HOME/.temp" \
               "$ANDROID_HOME/temp"
             sleep $((attempt * 15))
           done
-          echo "::error::Could not install NDK 28.2.13676358 after 3 attempts"
+          echo "::error::Could not install NDK $ndk_version after 3 attempts"
           exit 1
 
       - name: Install dependencies
