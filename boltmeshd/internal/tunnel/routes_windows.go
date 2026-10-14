@@ -96,9 +96,6 @@ type windowsRoutes interface {
 	// nil nextHop means on-link, which is what a route into the tunnel wants: the
 	// next hop is the tunnel adapter the prefix already names.
 	addPrefixRoute(prefix net.IP, bits uint8, luid uint64, nextHop net.IP, metric uint32) error
-	// deletePrefixRoute removes it. As with deleteHostRoute, an absent route is
-	// success.
-	deletePrefixRoute(prefix net.IP, bits uint8) error
 }
 
 // liveWindowsRoutes reads and writes this machine's IP forward table.
@@ -251,17 +248,6 @@ func (liveWindowsRoutes) deleteHostRoute(dst net.IP) error {
 		return err
 	}
 	return removeRoute(fmt.Sprintf("bypass route for %s", dst), prefix, bits)
-}
-
-// deletePrefixRoute removes a tunnel route. The tunnel's routes live on the Wintun
-// adapter and go with it, so this exists for the paths that remove them while the
-// adapter is still there.
-func (liveWindowsRoutes) deletePrefixRoute(prefix net.IP, bits uint8) error {
-	sa, _, err := rawInet(prefix)
-	if err != nil {
-		return err
-	}
-	return removeRoute(fmt.Sprintf("tunnel route for %s/%d", prefix, bits), sa, bits)
 }
 
 // removeRoute deletes a forward entry, looking it up first because the delete entry

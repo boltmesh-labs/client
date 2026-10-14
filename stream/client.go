@@ -50,11 +50,6 @@ type ClientConfig struct {
 	PSK      []byte
 	ClientID []byte
 
-	// RootCAs, when set, additionally requires a normal chain to validate.
-	// Pinning alone already defeats an active middlebox; the pool is for
-	// deployments that also want issuer and expiry checks.
-	RootCAs *x509.CertPool
-
 	ReconnectMin time.Duration
 	ReconnectMax time.Duration
 
@@ -479,19 +474,16 @@ func (c *Client) tlsConfig() *tls.Config {
 		NextProtos: alpnProtocols,
 		// The chain check is replaced by the SPKI pin below, which is
 		// strictly narrower than a public-CA validation for a single known
-		// peer. RootCAs, when set, adds the normal verification on top.
+		// peer.
 		InsecureSkipVerify:    true, //nolint:gosec // see VerifyPeerCertificate
 		MinVersion:            tls.VersionTLS13,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error { return c.verifyPeer(rawCerts) },
 	}
-	if c.cfg.RootCAs != nil {
-		cfg.RootCAs = c.cfg.RootCAs
-	}
 	return cfg
 }
 
-// verifyPeer checks the leaf's SPKI against the pins, and the chain when a
-// pool was supplied. Pin comparison is constant-time.
+// verifyPeer checks the leaf's SPKI against the pins. Pin comparison is
+// constant-time.
 func (c *Client) verifyPeer(rawCerts [][]byte) error {
 	if len(rawCerts) == 0 {
 		return errors.New("stream: node presented no certificate")
@@ -499,21 +491,6 @@ func (c *Client) verifyPeer(rawCerts [][]byte) error {
 	leaf, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
 		return fmt.Errorf("stream: node certificate: %w", err)
-	}
-	if c.cfg.RootCAs != nil {
-		intermediates := x509.NewCertPool()
-		for _, raw := range rawCerts[1:] {
-			if cert, err := x509.ParseCertificate(raw); err == nil {
-				intermediates.AddCert(cert)
-			}
-		}
-		if _, err := leaf.Verify(x509.VerifyOptions{
-			Roots:         c.cfg.RootCAs,
-			Intermediates: intermediates,
-			DNSName:       c.cfg.ServerName,
-		}); err != nil {
-			return fmt.Errorf("stream: node certificate chain: %w", err)
-		}
 	}
 	sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
 	for _, pin := range c.cfg.SPKIPins {

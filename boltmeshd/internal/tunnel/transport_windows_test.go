@@ -89,16 +89,6 @@ func (f *fakeRoutes) addPrefixRoute(prefix net.IP, bits uint8, luid uint64, next
 	return nil
 }
 
-func (f *fakeRoutes) deletePrefixRoute(prefix net.IP, bits uint8) error {
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	// Truncated to the prefix's own length, because the host routes this fake also
-	// records are single addresses and one shape has to hold both.
-	f.deleted = append(f.deleted, prefix[:bits/8])
-	return nil
-}
-
 // fakeStream is the transport double: it counts its lifecycle so the privileged
 // side can be tested without a node or a real TLS session.
 type fakeStream struct {

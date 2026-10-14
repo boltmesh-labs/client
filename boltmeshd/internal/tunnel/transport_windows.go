@@ -48,7 +48,6 @@ type streamClient interface {
 // it. The bridge itself belongs to the shared stream package; this is only the daemon's
 // record of it and of the state teardown has to undo.
 type liveTransport struct {
-	spec   protocol.TransportSpec
 	client streamClient
 	// pinned are the destinations a bypass route was installed for, in every
 	// family. Teardown removes exactly these. Unlike Linux there is no per-table
@@ -83,7 +82,7 @@ func (m *Manager) bringUpTransport(ctx context.Context, spec *protocol.Transport
 		return fmt.Errorf("stream transport server %s resolved to no addresses", host)
 	}
 
-	tr := &liveTransport{spec: *spec, client: client}
+	tr := &liveTransport{client: client}
 	for _, ip := range ips {
 		// A loopback destination is resolved by the local table and is never
 		// captured by a tunnel route, so it needs no pin — the same reasoning
