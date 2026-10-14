@@ -52,7 +52,6 @@ import 'dart:io';
 
 import 'package:boltmesh/features/vpn/data/helper_socket.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
-import 'package:boltmesh/features/vpn/data/tcp_probe.dart';
 import 'package:boltmesh/features/vpn/state/vpn_providers.dart';
 import 'package:boltmesh/features/vpn/ui/home/power_button.dart';
 import 'package:boltmesh/l10n/gen/app_localizations.dart';
@@ -233,27 +232,10 @@ void main() {
     if (automaticLadder) {
       await _host.clearEndpointBlocks();
       final failedDial = state().dial!;
-      final streamCredential = failedDial
-          .transportFor(TransportRung.stream)!
-          .credential!;
-      final (streamHost, streamPort) = parseTcpHostPort(
-        streamCredential.server,
-      )!;
       final failedServer = failedDial.serverName;
-      // Make the serving node unavailable at every advertised data-plane
-      // endpoint. The live stream path is killed by TCP; the UDP rules also
-      // model the node being down when recovery considers its other rungs.
-      for (final rung in const [TransportRung.native, TransportRung.awg]) {
-        final transport = failedDial.transportFor(rung);
-        if (transport != null) {
-          await _host.setEndpointBlocked(
-            failedDial.endpoint,
-            transport.port,
-            true,
-          );
-        }
-      }
-      await _host.setEndpointBlocked(streamHost, streamPort, true, tcp: true);
+      // Make the node unreachable as a whole, including transports or control
+      // traffic not represented by this dial's advertised port list.
+      await _host.blockEndpointAddress(failedDial.endpoint);
       await _pumpUntil(
         tester,
         'fast-track failover from the down server to another stream server',
@@ -264,6 +246,7 @@ void main() {
         timeout: const Duration(minutes: 5),
         diagnose: state,
       );
+      await _host.clearEndpointBlocks();
       ctl.testHooks.forceRung = TransportRung.native;
       await _reconnect(tester, ctl, state);
       expect(ctl.transportRung, TransportRung.native);
@@ -563,6 +546,9 @@ sealed class _Host {
     bool tcp = false,
   });
 
+  /// Drops all outbound traffic to every resolved address for [endpoint].
+  Future<void> blockEndpointAddress(String endpoint);
+
   /// Removes every temporary endpoint block owned by this E2E harness.
   Future<void> clearEndpointBlocks();
 
@@ -677,6 +663,13 @@ class _LinuxHost extends _Host {
   }
 
   @override
+  Future<void> blockEndpointAddress(String endpoint) async {
+    for (final address in await _resolveFirewallAddresses(endpoint)) {
+      await _runFirewallHelper(['block-ip', address]);
+    }
+  }
+
+  @override
   Future<void> clearEndpointBlocks() => _runFirewallHelper(['clear']);
 
   @override
@@ -749,6 +742,13 @@ class _WindowsHost extends _Host {
         '$port',
         if (tcp) 'tcp',
       ]);
+    }
+  }
+
+  @override
+  Future<void> blockEndpointAddress(String endpoint) async {
+    for (final address in await _resolveFirewallAddresses(endpoint)) {
+      await _runWindowsFirewallHelper(['block-ip', address]);
     }
   }
 
@@ -855,6 +855,11 @@ class _AndroidHost extends _Host {
     bool blocked, {
     bool tcp = false,
   }) => throw UnsupportedError(
+    'Android E2E does not control host firewall rules',
+  );
+
+  @override
+  Future<void> blockEndpointAddress(String endpoint) => throw UnsupportedError(
     'Android E2E does not control host firewall rules',
   );
 

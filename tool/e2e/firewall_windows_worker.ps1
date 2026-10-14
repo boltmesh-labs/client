@@ -10,6 +10,15 @@ try {
         'clear' {
             Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         }
+        'block-ip' {
+            $ip = $null
+            if (-not [System.Net.IPAddress]::TryParse([string]$request.address, [ref]$ip)) { throw 'invalid endpoint IP' }
+            $name = 'BoltMeshE2E-' + $ip.ToString().Replace(':', '-') + '-ALL'
+            Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+            New-NetFirewallRule -Name $name -DisplayName $name -Group $group `
+                -Direction Outbound -Action Block -Protocol Any -RemoteAddress $ip.ToString() `
+                -Profile Any | Out-Null
+        }
         { $_ -in 'block', 'unblock' } {
             $ip = $null
             if (-not [System.Net.IPAddress]::TryParse([string]$request.address, [ref]$ip)) { throw 'invalid endpoint IP' }

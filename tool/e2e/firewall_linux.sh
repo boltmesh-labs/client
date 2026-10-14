@@ -10,6 +10,23 @@ if [[ $cmd == clear ]]; then
   fi
   exit 0
 fi
+if [[ $cmd == block-ip ]]; then
+  [[ $# -eq 2 ]] || { echo 'usage: boltmesh-e2e-firewall block-ip IP' >&2; exit 2; }
+  address=$2
+  python3 - "$address" <<'PY'
+import ipaddress, sys
+ipaddress.ip_address(sys.argv[1])
+PY
+  [[ $EUID -eq 0 ]] || { echo 'must run as root' >&2; exit 1; }
+  family=ip
+  [[ $address == *:* ]] && family=ip6
+  nft list table inet boltmesh_e2e >/dev/null 2>&1 || {
+    nft add table inet boltmesh_e2e
+    nft 'add chain inet boltmesh_e2e output { type filter hook output priority -5; policy accept; }'
+  }
+  nft add rule inet boltmesh_e2e output "$family" daddr "$address" drop
+  exit 0
+fi
 [[ ( $# -eq 3 || $# -eq 4 ) && ( $cmd == block || $cmd == unblock ) ]] || {
   echo 'usage: boltmesh-e2e-firewall {block|unblock} IP PORT [udp|tcp]' >&2; exit 2;
 }

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('block', 'unblock', 'clear')]
+    [ValidateSet('block', 'unblock', 'block-ip', 'clear')]
     [string] $Action,
     [Parameter(Position = 1)] [string] $Address,
     [Parameter(Position = 2)] [string] $Port,
@@ -15,8 +15,10 @@ $resultPath = Join-Path $root 'result.json'
 if ($Action -ne 'clear') {
     $parsed = $null
     if (-not [System.Net.IPAddress]::TryParse($Address, [ref] $parsed)) { throw 'invalid endpoint IP' }
-    $number = 0
-    if (-not [int]::TryParse($Port, [ref] $number) -or $number -lt 1 -or $number -gt 65535) { throw "invalid $Protocol port" }
+    if ($Action -eq 'block') {
+        $number = 0
+        if (-not [int]::TryParse($Port, [ref] $number) -or $number -lt 1 -or $number -gt 65535) { throw "invalid $Protocol port" }
+    }
 }
 $request = @{ action = $Action; address = $Address; port = $Port; protocol = $Protocol }
 $request | ConvertTo-Json -Compress | Set-Content -LiteralPath $requestPath -Encoding UTF8

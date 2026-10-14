@@ -187,9 +187,10 @@ one test update per line instead of redrawing the compact progress display.
    Windows, connects through the Home power control, then adds outbound UDP
    blocks for the active server endpoint and current rung's advertised port.
    The real health/recovery path must demote native → AWG → stream; each rung
-   must reach `connected` and carry traffic. It then blocks all advertised
-   transports for that server, waits for fast-track failover to another server
-   on stream, restarts that replacement on native, and verifies traffic there.
+   must reach `connected` and carry traffic. It then blocks all outbound
+   traffic to the failed server's resolved IP addresses, waits for fast-track
+   failover to another server on stream, clears the rules, restarts that
+   replacement on native, and verifies traffic there.
    Android cannot control the host firewall from its app uid, so it retains the
    explicit `debugForceRung` walk. The desktop firewall helper is installed by
    the elevated helper setup: Linux grants this user passwordless sudo for the
