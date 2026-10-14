@@ -15,11 +15,8 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"boltmeshd/internal/protocol"
+	"boltmeshd/internal/winsvc"
 )
-
-// servicePollInterval bounds how often the SCM is polled while waiting for a
-// start/stop transition.
-const servicePollInterval = 250 * time.Millisecond
 
 // winService drives the WireGuard tunnel through the Windows Service Control
 // Manager. It runs inside boltmeshd, which runs as LocalSystem, so creating
@@ -38,13 +35,13 @@ func (s *winService) openOrCreate(ctx context.Context, manager *mgr.Mgr, exe str
 		if err == nil {
 			return handle, nil
 		}
-		if isServiceMarkedForDelete(err) {
-			if err := waitForServiceGone(ctx, manager, s.name); err != nil {
+		if winsvc.IsMarkedForDelete(err) {
+			if err := winsvc.WaitForServiceGone(ctx, manager, s.name); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		if !isServiceMissing(err) {
+		if !winsvc.IsMissing(err) {
 			return nil, fmt.Errorf("open service %s: %w", s.name, err)
 		}
 
@@ -60,14 +57,14 @@ func (s *winService) openOrCreate(ctx context.Context, manager *mgr.Mgr, exe str
 		if err == nil {
 			return created, nil
 		}
-		if isServiceMarkedForDelete(err) {
-			if err := waitForServiceGone(ctx, manager, s.name); err != nil {
+		if winsvc.IsMarkedForDelete(err) {
+			if err := winsvc.WaitForServiceGone(ctx, manager, s.name); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		if errors.Is(err, windows.ERROR_SERVICE_EXISTS) {
-			if err := waitForServiceRetry(ctx); err != nil {
+			if err := winsvc.WaitForServiceRetry(ctx); err != nil {
 				return nil, err
 			}
 			continue
@@ -96,15 +93,15 @@ func (s *winService) start(ctx context.Context, exe string, args []string) error
 		if err == nil {
 			return nil
 		}
-		if isServiceMarkedForDelete(err) {
-			if err := waitForServiceGone(ctx, manager, s.name); err != nil {
+		if winsvc.IsMarkedForDelete(err) {
+			if err := winsvc.WaitForServiceGone(ctx, manager, s.name); err != nil {
 				return err
 			}
 			continue
 		}
-		if isServiceNotActive(err) || errors.Is(err, windows.ERROR_SERVICE_EXISTS) ||
+		if winsvc.IsNotActive(err) || errors.Is(err, windows.ERROR_SERVICE_EXISTS) ||
 			errors.Is(err, windows.ERROR_SERVICE_CANNOT_ACCEPT_CTRL) {
-			if err := waitForServiceRetry(ctx); err != nil {
+			if err := winsvc.WaitForServiceRetry(ctx); err != nil {
 				return err
 			}
 			continue
@@ -168,12 +165,12 @@ func (s *winService) stop(ctx context.Context) error {
 	handle, err := manager.OpenService(s.name)
 	if err != nil {
 		switch {
-		case isServiceMissing(err), isServiceNotActive(err):
+		case winsvc.IsMissing(err), winsvc.IsNotActive(err):
 			// The service is absent or already stopped, so there is nothing
 			// to stop.
 			return nil
-		case isServiceMarkedForDelete(err):
-			return waitForServiceGone(ctx, manager, s.name)
+		case winsvc.IsMarkedForDelete(err):
+			return winsvc.WaitForServiceGone(ctx, manager, s.name)
 		default:
 			return fmt.Errorf("open service %s: %w", s.name, err)
 		}
@@ -184,7 +181,7 @@ func (s *winService) stop(ctx context.Context) error {
 }
 
 func (s *winService) stopHandle(ctx context.Context, handle *mgr.Service) error {
-	ticker := time.NewTicker(servicePollInterval)
+	ticker := time.NewTicker(winsvc.PollInterval)
 	defer ticker.Stop()
 
 	var processID uint32
@@ -192,15 +189,15 @@ func (s *winService) stopHandle(ctx context.Context, handle *mgr.Service) error 
 		status, err := handle.Query()
 		if err != nil {
 			switch {
-			case isServiceMissing(err):
-				return waitForProcessExit(ctx, processID)
-			case isServiceNotActive(err):
+			case winsvc.IsMissing(err):
+				return winsvc.WaitForProcessExit(ctx, processID)
+			case winsvc.IsNotActive(err):
 				// Re-query on the next tick; a stopped service may briefly
 				// report ERROR_SERVICE_NOT_ACTIVE before its Stopped state.
-			case !isServiceMarkedForDelete(err):
+			case !winsvc.IsMarkedForDelete(err):
 				return fmt.Errorf("query service %s: %w", s.name, err)
 			default:
-				if err := requestServiceStop(handle, s.name, svc.State(0)); err != nil {
+				if err := winsvc.RequestStop(handle, s.name, svc.State(0)); err != nil {
 					return err
 				}
 			}
@@ -210,12 +207,12 @@ func (s *winService) stopHandle(ctx context.Context, handle *mgr.Service) error 
 			}
 			switch status.State {
 			case svc.Stopped:
-				return waitForProcessExit(ctx, processID)
+				return winsvc.WaitForProcessExit(ctx, processID)
 			case svc.StopPending:
 				// The service has already accepted Stop. Poll until it
 				// reports Stopped instead of sending duplicate controls.
 			default:
-				if err := requestServiceStop(handle, s.name, status.State); err != nil {
+				if err := winsvc.RequestStop(handle, s.name, status.State); err != nil {
 					return err
 				}
 			}
@@ -227,20 +224,6 @@ func (s *winService) stopHandle(ctx context.Context, handle *mgr.Service) error 
 		case <-ticker.C:
 		}
 	}
-}
-
-func requestServiceStop(handle *mgr.Service, name string, state svc.State) error {
-	_, err := handle.Control(svc.Stop)
-	if err == nil || errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) ||
-		errors.Is(err, windows.ERROR_SERVICE_CANNOT_ACCEPT_CTRL) ||
-		isServiceMarkedForDelete(err) {
-		return nil
-	}
-	if errors.Is(err, windows.ERROR_INVALID_SERVICE_CONTROL) &&
-		(state == svc.State(0) || state == svc.StartPending || state == svc.ContinuePending) {
-		return nil
-	}
-	return fmt.Errorf("stop service %s: %w", name, err)
 }
 
 // remove stops and deletes the tunnel service, then waits for SCM to finish
@@ -256,11 +239,11 @@ func (s *winService) remove(ctx context.Context) error {
 
 	handle, err := manager.OpenService(s.name)
 	if err != nil {
-		if isServiceMissing(err) || isServiceNotActive(err) {
+		if winsvc.IsMissing(err) || winsvc.IsNotActive(err) {
 			return nil
 		}
-		if isServiceMarkedForDelete(err) {
-			return waitForServiceGone(ctx, manager, s.name)
+		if winsvc.IsMarkedForDelete(err) {
+			return winsvc.WaitForServiceGone(ctx, manager, s.name)
 		}
 		return fmt.Errorf("open service %s: %w", s.name, err)
 	}
@@ -273,108 +256,19 @@ func (s *winService) remove(ctx context.Context) error {
 	deleteErr := handle.Delete()
 	closeErr := handle.Close()
 	var errs []error
-	if deleteErr != nil && !isServiceMarkedForDelete(deleteErr) && !isServiceMissing(deleteErr) {
+	if deleteErr != nil && !winsvc.IsMarkedForDelete(deleteErr) && !winsvc.IsMissing(deleteErr) {
 		errs = append(errs, fmt.Errorf("delete service %s: %w", s.name, deleteErr))
 	}
 	if closeErr != nil &&
 		!errors.Is(closeErr, windows.ERROR_INVALID_HANDLE) &&
-		!isServiceMissing(closeErr) &&
-		!isServiceMarkedForDelete(closeErr) {
+		!winsvc.IsMissing(closeErr) &&
+		!winsvc.IsMarkedForDelete(closeErr) {
 		errs = append(errs, fmt.Errorf("close service %s: %w", s.name, closeErr))
 	}
-	if err := waitForServiceGone(ctx, manager, s.name); err != nil {
+	if err := winsvc.WaitForServiceGone(ctx, manager, s.name); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
-}
-
-func isServiceMissing(err error) bool {
-	return errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) ||
-		errors.Is(err, windows.ERROR_SERVICE_NOT_FOUND)
-}
-
-func isServiceMarkedForDelete(err error) bool {
-	return errors.Is(err, windows.ERROR_SERVICE_MARKED_FOR_DELETE)
-}
-
-func isServiceNotActive(err error) bool {
-	return errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE)
-}
-
-func waitForServiceGone(ctx context.Context, manager *mgr.Mgr, name string) error {
-	ticker := time.NewTicker(servicePollInterval)
-	defer ticker.Stop()
-
-	for {
-		handle, err := manager.OpenService(name)
-		switch {
-		case err == nil:
-			_ = handle.Close()
-		case isServiceMissing(err):
-			return nil
-		case !isServiceMarkedForDelete(err):
-			return fmt.Errorf("check service %s deletion: %w", name, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for service %s to be deleted: %w", name, ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
-func waitForServiceRetry(ctx context.Context) error {
-	timer := time.NewTimer(servicePollInterval)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// waitForProcessExit closes the gap between SERVICE_STOPPED and the service
-// process actually exiting. SCM can report STOPPED while the executable is
-// still unwinding, which would otherwise leave a locked binary or config
-// file behind during an upgrade.
-func waitForProcessExit(ctx context.Context, processID uint32) error {
-	if processID == 0 {
-		return nil
-	}
-
-	process, err := windows.OpenProcess(windows.SYNCHRONIZE, false, processID)
-	if err != nil {
-		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
-			// The process has already exited and its PID is no longer valid.
-			return nil
-		}
-		return fmt.Errorf("open service process %d: %w", processID, err)
-	}
-	defer func() { _ = windows.CloseHandle(process) }()
-
-	waitMilliseconds := uint32(servicePollInterval / time.Millisecond)
-	for {
-		result, err := windows.WaitForSingleObject(process, waitMilliseconds)
-		if err != nil {
-			return fmt.Errorf("wait for service process %d: %w", processID, err)
-		}
-		switch result {
-		case windows.WAIT_OBJECT_0:
-			return nil
-		case uint32(windows.WAIT_TIMEOUT):
-			// Check cancellation between bounded waits.
-		default:
-			return fmt.Errorf("wait for service process %d returned %#x", processID, result)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for service process %d: %w", processID, ctx.Err())
-		default:
-		}
-	}
 }
 
 // stage reports the OS stage for the tunnel service. A missing or inactive
@@ -394,7 +288,7 @@ func (s *winService) stage(ctx context.Context) (string, error) {
 
 	handle, err := manager.OpenService(s.name)
 	if err != nil {
-		if isServiceMissing(err) || isServiceNotActive(err) {
+		if winsvc.IsMissing(err) || winsvc.IsNotActive(err) {
 			return protocol.StageDisconnected, nil
 		}
 		return "", fmt.Errorf("open service %s: %w", s.name, err)
@@ -425,13 +319,13 @@ func (s *winService) stage(ctx context.Context) (string, error) {
 }
 
 func (s *winService) waitFor(ctx context.Context, handle *mgr.Service, want svc.State) error {
-	ticker := time.NewTicker(servicePollInterval)
+	ticker := time.NewTicker(winsvc.PollInterval)
 	defer ticker.Stop()
 
 	for {
 		status, err := handle.Query()
 		if err != nil {
-			if want == svc.Stopped && isServiceMissing(err) {
+			if want == svc.Stopped && winsvc.IsMissing(err) {
 				return nil
 			}
 			return fmt.Errorf("query service %s: %w", s.name, err)
