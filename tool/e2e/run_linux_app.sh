@@ -97,6 +97,8 @@ done
 # and this user may speak to it; it never elevates.
 [[ -S /run/boltmesh/boltmeshd.sock ]] \
   || die "no /run/boltmesh/boltmeshd.sock: install it first with: sudo tool/e2e/install_boltmeshd.sh"
+sudo -n /usr/local/libexec/boltmesh-e2e-firewall clear \
+  || die 'E2E firewall helper is not installed or sudo access is not configured; rerun sudo tool/e2e/install_boltmeshd.sh'
 id -nG | tr ' ' '\n' | grep -qx boltmesh \
   || die "this user is not in the boltmesh group: run boltmesh-enroll-user (SETUP.md §4)"
 
@@ -108,6 +110,7 @@ xvfb_pid=""
 cleanup() {
   local status=$?
   set +e
+  sudo -n /usr/local/libexec/boltmesh-e2e-firewall clear >/dev/null 2>&1
   # A leftover full-tunnel would follow this box, not the run, so say so loudly
   # rather than leaving a silent default route into a tunnel nobody is watching.
   if ip link show boltmesh0 >/dev/null 2>&1; then

@@ -98,35 +98,32 @@ void main() {
     await _ensureSignedIn(tester);
     await _shot('02-home');
 
-    // The controller starts on the serving node's floor and only demotes on
-    // health evidence — a stalled path with the control plane still up — which
-    // a lab run cannot fabricate. The seam pins each rung in turn so the whole
-    // advertised ladder is exercised: the point of this run is that every data
-    // plane really carries bytes, not that the walk is re-picked here (that is
-    // the state suites' job).
-    //
-    // The walk ends by coming back down to `native`: the rung change *into*
-    // stock is the only transition the upward walk never makes (it hands the
-    // single Android VpnService from the in-process AWG host back to the stock
-    // plugin), and it is where the two-Go-runtime bug bites. Without it that
-    // transition only surfaces by luck, in whichever later test happens to land
-    // on stock after an obfuscated rung.
-    const ladder = [
-      TransportRung.native,
-      TransportRung.awg,
-      TransportRung.stream,
-      TransportRung.native,
-    ];
+    final automaticLadder = !Platform.isAndroid;
+    if (automaticLadder) {
+      addTearDown(_host.clearEndpointBlocks);
+    }
+
+    // Android cannot install host firewall rules from its app uid, so it
+    // retains the explicit rung walk. Desktop runs exercise the production
+    // health/recovery path by blackholing each server UDP endpoint in turn.
+    final ladder = automaticLadder
+        ? const [TransportRung.native, TransportRung.awg, TransportRung.stream]
+        : const [
+            TransportRung.native,
+            TransportRung.awg,
+            TransportRung.stream,
+            TransportRung.native,
+          ];
     for (var i = 0; i < ladder.length; i++) {
       final rung = ladder[i];
-      ctl.testHooks.forceRung = rung;
+      if (!automaticLadder) ctl.testHooks.forceRung = rung;
 
       // --- connect on this rung ------------------------------------------
       if (i == 0) {
         // The first rung comes up through the GUI, and is the one start that
         // binds the device's peer.
         await _connect(tester, state);
-      } else {
+      } else if (!automaticLadder) {
         // A rung change is a restart, not a new device session. Reconnecting
         // through the controller reconciles the still-bound peer from `config`
         // (a read) and replaces the live tunnel locally, where a GUI
@@ -134,13 +131,24 @@ void main() {
         // per-IP write budget on every rung.
         await _reconnect(tester, ctl, state);
       }
-      expect(
-        ctl.transportRung,
-        rung,
-        reason:
-            'the run asked for ${rung.name}, so that is the rung it must '
-            'be on',
-      );
+      if (automaticLadder && i > 0) {
+        final previous = ladder[i - 1];
+        final previousPort = state().dial!.transportFor(previous)!.port;
+        await _host.setEndpointBlocked(
+          state().dial!.endpoint,
+          previousPort,
+          true,
+        );
+        await _pumpUntil(
+          tester,
+          'automatic demotion to the ${rung.name} rung',
+          () =>
+              state().phase == ConnPhase.connected && ctl.transportRung == rung,
+          timeout: const Duration(minutes: 5),
+          diagnose: state,
+        );
+      }
+      expect(ctl.transportRung, rung, reason: 'expected ${rung.name} rung');
       // ignore: avoid_print
       print('e2e: connected on the ${rung.name} rung');
       await _shot('03-connected-$i-${rung.name}');
@@ -222,6 +230,29 @@ void main() {
       );
       expect((ping.stdout as String), contains(_host.zeroLossMarker));
       await _shot('04-tunnel-verified-$i-${rung.name}');
+    }
+
+    if (automaticLadder) {
+      await _host.clearEndpointBlocks();
+      ctl.testHooks.forceRung = TransportRung.native;
+      await _reconnect(tester, ctl, state);
+      expect(ctl.transportRung, TransportRung.native);
+      await _pumpUntil(
+        tester,
+        'native handoff traffic after automatic demotion',
+        () => (state().rxBytes ?? 0) > 0,
+        timeout: _trafficTimeout,
+        diagnose: state,
+      );
+      final nativeIp = _rungNodeIp(state(), TransportRung.native);
+      expect(nativeIp, isNotNull);
+      final ping = await Process.run(
+        _host.pingBinary,
+        _host.pingArgs(nativeIp!),
+      );
+      expect(ping.exitCode, isZero, reason: 'native handoff ping must succeed');
+      expect('${ping.stdout}', contains(_host.zeroLossMarker));
+      await _shot('04-native-handoff');
     }
 
     // --- one GUI disconnect leaves the host as it was --------------------
@@ -494,6 +525,12 @@ sealed class _Host {
   /// attempt is worth making.
   bool get helperEndpointExists;
 
+  /// Adds or removes a temporary outbound UDP block for the server endpoint.
+  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked);
+
+  /// Removes every temporary endpoint block owned by this E2E harness.
+  Future<void> clearEndpointBlocks();
+
   /// True when the tunnel is present on the host, read from the host's own
   /// view (the link table on Linux, the adapter table on Windows, the interface
   /// table on Android) rather than the daemon's: this is what "the box is clean
@@ -539,6 +576,32 @@ sealed class _Host {
 /// The host this run is on. Read once per call site so the tests stay readable.
 final _Host _host = _Host.current;
 
+Future<void> _runFirewallHelper(List<String> args) async {
+  final result = await Process.run('sudo', [
+    '-n',
+    '/usr/local/libexec/boltmesh-e2e-firewall',
+    ...args,
+  ]);
+  if (result.exitCode != 0) {
+    throw StateError('E2E firewall helper failed: ${result.stderr}');
+  }
+}
+
+Future<void> _runWindowsFirewallHelper(List<String> args) async {
+  final script = '${Directory.current.path}\\tool\\e2e\\firewall_windows.ps1';
+  final result = await Process.run('powershell', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    script,
+    ...args,
+  ]);
+  if (result.exitCode != 0) {
+    throw StateError('E2E firewall helper failed: ${result.stderr}');
+  }
+}
+
 class _LinuxHost extends _Host {
   const _LinuxHost();
 
@@ -549,6 +612,13 @@ class _LinuxHost extends _Host {
   bool get helperEndpointExists =>
       FileSystemEntity.typeSync(helperSocketPath) !=
       FileSystemEntityType.notFound;
+
+  @override
+  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
+      _runFirewallHelper([blocked ? 'block' : 'unblock', endpoint, '$port']);
+
+  @override
+  Future<void> clearEndpointBlocks() => _runFirewallHelper(['clear']);
 
   @override
   Future<bool> tunnelExists() async =>
@@ -605,6 +675,17 @@ class _WindowsHost extends _Host {
   @override
   bool get helperEndpointExists =>
       Process.runSync('sc.exe', ['query', 'boltmeshd']).exitCode == 0;
+
+  @override
+  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
+      _runWindowsFirewallHelper([
+        blocked ? 'block' : 'unblock',
+        endpoint,
+        '$port',
+      ]);
+
+  @override
+  Future<void> clearEndpointBlocks() => _runWindowsFirewallHelper(['clear']);
 
   @override
   Future<bool> tunnelExists() async {
@@ -698,6 +779,15 @@ class _AndroidHost extends _Host {
 
   @override
   bool get helperEndpointExists => false;
+
+  @override
+  Future<void> setEndpointBlocked(String endpoint, int port, bool blocked) =>
+      throw UnsupportedError(
+        'Android E2E does not control host firewall rules',
+      );
+
+  @override
+  Future<void> clearEndpointBlocks() async {}
 
   @override
   Future<bool> tunnelExists() async {

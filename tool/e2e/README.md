@@ -181,13 +181,20 @@ process and one store, so the session and the device identity carry across them
    starts from a fresh store (a scratch keyring on Linux, no secure-storage
    file on Windows, `pm clear` on Android), so a scripted run does drive the
    form.
-2. **walks the transport ladder native, awg, stream, native** — pins the
-   controller to each rung in turn through its `debugForceRung` seam (a walk the
-   health policy would only take on a blocked network, which a lab run cannot
-   fabricate). The first rung comes up through the Home power control; the
-   others are restarts through the controller, reusing the bound session rather
-   than spending the backend's shared write budget on a disconnect+connect pair
-   per rung. For each rung it waits for `connected`, checks the UI agrees (the
+2. **walks the transport ladder native, awg, stream, native** — on Linux and
+   Windows, connects through the Home power control, then adds outbound UDP
+   blocks for the active server endpoint and current rung's advertised port.
+   The real health/recovery path must demote native → AWG → stream; each rung
+   must reach `connected` and carry traffic. The test removes both blocks and
+   explicitly restarts on native to preserve stream → native handoff coverage.
+   Android cannot control the host firewall from its app uid, so it retains the
+   explicit `debugForceRung` walk. The desktop firewall helper is installed by
+   the elevated helper setup: Linux grants this user passwordless sudo for the
+   validating, root-owned `boltmesh-e2e-firewall` command; Windows installs a
+   fixed SYSTEM scheduled task with a validated request interface. Neither the
+   app nor the E2E runner runs elevated. Test teardown and runner cleanup remove
+   all E2E rules, including after a failed ladder assertion. For each rung the
+   test checks the UI agrees (the
    header names the server, the button reads Disconnect), and asserts on bytes:
    the app's own received counter, the kernel's `wg` counters when the kernel
    owns the data plane (Linux only; a userspace device has none, and the app's

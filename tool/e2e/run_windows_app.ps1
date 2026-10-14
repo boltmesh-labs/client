@@ -327,7 +327,13 @@ function Invoke-E2ERun {
     $env:BOLTMESH_E2E_API_PASSWORD = $credentials.Password
 
     $env:BOLTMESH_E2E_SHOT_DIR = $shotDir
-    $code = Invoke-Native { & flutter test integration_test/app_e2e.dart -d windows --dart-define-from-file $EnvFile }
+    & (Join-Path $PSScriptRoot 'firewall_windows.ps1') clear
+    try {
+        $code = Invoke-Native { & flutter test integration_test/app_e2e.dart -d windows --dart-define-from-file $EnvFile }
+    }
+    finally {
+        & (Join-Path $PSScriptRoot 'firewall_windows.ps1') clear
+    }
 
     # This box is the client host, so a tunnel left up outlives the run. The
     # helper tears its own tunnel down; this is only the warning for when it

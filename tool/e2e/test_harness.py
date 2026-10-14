@@ -470,6 +470,30 @@ class ClearDevicesTest(unittest.TestCase):
         self.assertEqual([c for c in calls if c[0] in ("DELETE", "POST")], [])
 
 
+class LinuxFirewallHelperValidationTest(unittest.TestCase):
+    """The root helper rejects malformed tuples before requiring elevation."""
+
+    def _run(self, address: str, port: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(_HERE / "firewall_linux.sh"), "block", address, port],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    @unittest.skipIf(_IS_WINDOWS, "the Linux helper is a bash script")
+    def test_rejects_a_non_ip_endpoint(self) -> None:
+        result = self._run("example.invalid", "51820")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("must run as root", result.stderr)
+
+    @unittest.skipIf(_IS_WINDOWS, "the Linux helper is a bash script")
+    def test_rejects_an_out_of_range_port(self) -> None:
+        result = self._run("192.0.2.1", "65536")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("must run as root", result.stderr)
+
+
 class WindowsScriptTest(unittest.TestCase):
     """Guards the Windows runner scripts against a PowerShell trap.
 

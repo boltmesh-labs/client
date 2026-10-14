@@ -27,6 +27,14 @@ printf '\n=== building boltmeshd from source\n'
 
 printf '\n=== installing boltmeshd\n'
 install -Dm755 "$workdir/boltmeshd" /usr/libexec/boltmesh/boltmeshd
+install -Dm755 "$here/firewall_linux.sh" /usr/local/libexec/boltmesh-e2e-firewall
+e2e_user="${SUDO_USER:-}"
+[[ -n $e2e_user && $e2e_user != root ]] \
+  || { printf 'e2e: invoke through sudo from the unprivileged test user so firewall access can be scoped\n' >&2; exit 1; }
+sudoers="/etc/sudoers.d/boltmesh-e2e-firewall-$e2e_user"
+printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/boltmesh-e2e-firewall\n' "$e2e_user" > "$sudoers"
+chmod 0440 "$sudoers"
+visudo -cf "$sudoers"
 systemctl restart boltmeshd.service
 # Wait for the socket to come back up
 for _ in $(seq 1 40); do
