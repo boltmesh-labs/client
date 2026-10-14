@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/endpoint.dart';
 import 'tcp_probe_stub.dart'
     if (dart.library.io) 'tcp_probe_io.dart'
     as probe_io;
@@ -61,13 +62,13 @@ final tcpProbeProvider = Provider<TcpProbe>((_) => SocketTcpProbe());
   if (defaultPort <= 0 || defaultPort > 65535) return null;
   final v = server.trim();
   if (v.isEmpty) return null;
-  final bracketed = RegExp(r'^\[(.+)\]:(\d+)$').firstMatch(v);
-  if (bracketed != null) {
-    return _halves(bracketed.group(1)!, bracketed.group(2)!);
-  }
-  final plain = RegExp(r'^([^:]+):(\d+)$').firstMatch(v);
-  if (plain != null) {
-    return _halves(plain.group(1)!, plain.group(2)!);
+  final split = splitHostPort(v);
+  if (split != null) {
+    final (host, port) = split;
+    if (port <= 0 || port > 65535 || host.isEmpty || host.contains(' ')) {
+      return null;
+    }
+    return split;
   }
   if (!v.contains(':')) {
     // A bare hostname or IP literal: resolution happens at connect time, so
@@ -80,13 +81,4 @@ final tcpProbeProvider = Provider<TcpProbe>((_) => SocketTcpProbe());
   // connect-time resolution decides whether it dials.
   if (':'.allMatches(v).length == 1) return null;
   return (v, defaultPort);
-}
-
-(String, int)? _halves(String host, String port) {
-  final h = host.trim();
-  final p = int.tryParse(port);
-  if (h.isEmpty || h.contains(' ') || p == null || p <= 0 || p > 65535) {
-    return null;
-  }
-  return (h, p);
 }

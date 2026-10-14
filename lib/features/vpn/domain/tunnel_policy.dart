@@ -1,8 +1,8 @@
 import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart';
 
+import '../../../core/endpoint.dart';
 import '../../../core/ip.dart';
 import '../data/models.dart';
-import '../data/wg_conf.dart';
 
 /// Pure tunnel-health policy extracted from [ConnectionController].
 ///
@@ -148,7 +148,7 @@ bool livePeerMatchesDial({
   if (key != dial.wgPublicKey.trim()) return false;
   return endpointAgreement(
         liveEndpoint.trim(),
-        formatEndpoint(dial.endpoint, dial.wgPort),
+        formatHostPort(dial.endpoint, dial.wgPort),
       ) !=
       EndpointAgreement.mismatch;
 }
@@ -182,8 +182,8 @@ enum EndpointAgreement {
 EndpointAgreement endpointAgreement(String live, String dial) {
   if (live.isEmpty || dial.isEmpty) return EndpointAgreement.unverifiable;
   if (live == dial) return EndpointAgreement.match;
-  final parsedLive = _splitEndpoint(live);
-  final parsedDial = _splitEndpoint(dial);
+  final parsedLive = splitHostPort(live);
+  final parsedDial = splitHostPort(dial);
   if (parsedLive == null || parsedDial == null) {
     return EndpointAgreement.unverifiable;
   }
@@ -216,24 +216,6 @@ String? _canonicalIp(String host) {
   } on ArgumentError {
     return null;
   }
-}
-
-/// The host and port halves of a `host:port` string, or null when the value has
-/// no separable shape.
-///
-/// The bracketed form is tried first because it is the only unambiguous one, and
-/// `[^:]+` in the plain pattern already refuses anything containing a colon, so a
-/// bare IPv6 literal (`2001:db8::9:51820`) is rejected rather than misread as a
-/// host with a port. Both patterns exist so such a value is unverifiable, which is
-/// the same answer [endpointAgreement] gives for any other unparseable input.
-(String, int)? _splitEndpoint(String endpoint) {
-  final bracketed = RegExp(r'^\[(.+)\]:(\d+)$').firstMatch(endpoint);
-  if (bracketed != null) {
-    return (bracketed.group(1)!, int.parse(bracketed.group(2)!));
-  }
-  final plain = RegExp(r'^([^:]+):(\d+)$').firstMatch(endpoint);
-  if (plain == null) return null;
-  return (plain.group(1)!, int.parse(plain.group(2)!));
 }
 
 /// Dead-peer signal from the last completed WireGuard handshake.

@@ -9,6 +9,7 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_platform_interface.dart
 
 import '../../../core/clock.dart';
 import '../../../core/dio_client.dart';
+import '../../../core/endpoint.dart';
 import '../../../core/env.dart';
 import '../../../core/errors.dart';
 import '../../../core/log.dart';

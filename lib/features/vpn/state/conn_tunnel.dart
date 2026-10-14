@@ -268,7 +268,7 @@ extension ConnectionTunnel on ConnectionController {
       // The node's own address is still what the adapter reports: it names the
       // tunnel's peer for the OS VPN surface, not the WireGuard endpoint, which
       // the conf (and the bridge) own on the stream rung.
-      serverAddress: formatEndpoint(dial.endpoint, dial.wgPort),
+      serverAddress: formatHostPort(dial.endpoint, dial.wgPort),
       wgQuickConfig: conf,
       providerBundleId: bundleId,
       transport: transport,

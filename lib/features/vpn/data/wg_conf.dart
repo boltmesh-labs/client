@@ -18,6 +18,7 @@
 // (see ConnectionController.switchServer/disconnect) — never move API
 // calls back inside a live tunnel.
 
+import '../../../core/endpoint.dart';
 import '../../../core/ip.dart';
 import 'models.dart';
 
@@ -25,14 +26,6 @@ String normalizeAddressCidr(String assignedIp) {
   final v = assignedIp.trim();
   final bare = v.contains('/') ? v.split('/').first.trim() : v;
   return '$bare/${bare.contains(':') ? 128 : 32}';
-}
-
-String formatEndpoint(String host, int port) {
-  final h = host.trim();
-  if (h.contains(':') && !(h.startsWith('[') && h.endsWith(']'))) {
-    return '[$h]:$port';
-  }
-  return '$h:$port';
 }
 
 /// Throws [ArgumentError] when [value] contains an ASCII control character
@@ -94,7 +87,7 @@ String buildWgQuickConfig({
   _requireNoControl(endpointHost, 'endpointHost');
   _requireNoControl(assignedIp, 'assignedIp');
   final normalizedDns = _normalizeDns(dns);
-  final endpoint = formatEndpoint(endpointHost, endpointPort);
+  final endpoint = formatHostPort(endpointHost, endpointPort);
   final address = normalizeAddressCidr(assignedIp);
   final priv = privateKey.trim();
   final srvPub = serverPublicKey.trim();
