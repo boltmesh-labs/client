@@ -246,9 +246,29 @@ jobs:
           cache: true
           cache-dependency-path: android/awg-native/go.sum
 
+      # `sdkmanager` downloads the NDK archive without an integrity check and
+      # feeds a truncated download straight to the unzipper -- "Error on ZipFile
+      # unknown archive", at whatever percentage the transfer died. It also keeps
+      # that partial archive, so a plain rerun fails identically; the retry has
+      # to clear the leftovers first. This is the flakiest step in the pipeline:
+      # two of the last several Android jobs died here, both mid-download, and
+      # each attempt is a ~700 MB fetch.
       - name: Install the Flutter-pinned Android NDK
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          for attempt in 1 2 3; do
+            if "$sdkmanager" "ndk;28.2.13676358"; then
+              exit 0
+            fi
+            echo "::warning::NDK install attempt $attempt failed; clearing the partial download and retrying"
+            rm -rf \
+              "$ANDROID_HOME/ndk/28.2.13676358" \
+              "$ANDROID_HOME/.temp" \
+              "$ANDROID_HOME/temp"
+            sleep $((attempt * 15))
+          done
+          echo "::error::Could not install NDK 28.2.13676358 after 3 attempts"
+          exit 1
 
       - name: Install dependencies
         run: flutter pub get
