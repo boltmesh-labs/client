@@ -33,22 +33,31 @@ git push origin v1.2.3
 
 ## 2. CI/CD pipeline
 
-CI is split by lifecycle. `.github/workflows/ci.yml` runs the validation jobs on
-pushes and pull requests to `main`/`develop`; `.github/workflows/release.yml`
-runs on `v*` tags, calls `ci.yml` as a reusable workflow (`workflow_call`) so a
-release is built on the same validated commit, then builds and publishes:
+CI is split by lifecycle. `.github/workflows/ci.yml` validates a pull request in
+full, and a push to `main` with the cheap subset only — `main` is unprotected and
+takes most commits here by direct push, so a push that ran nothing would land
+completely unchecked. `.github/workflows/release.yml` runs on `v*` tags, calls
+`ci.yml` as a reusable workflow (`workflow_call`) so a release is built on the
+same validated commit with every job, then builds and publishes:
 
 | Job | Workflow | Trigger | Checks |
 | - | - | - | - |
-| `validate` | `ci.yml` | every push/PR, and the release gate | `tool/check_generated.sh`, `flutter analyze --fatal-infos`, `dart format --set-exit-if-changed lib test`, `flutter test --coverage`, `tool/coverage_gate.sh 80` |
-| `validate-android` | `ci.yml` | every push/PR, and the release gate | `flutter build apk --release` (R8/minified) + emulator `:app:connectedReleaseAndroidTest` bridge smoke test |
-| `validate-windows` | `ci.yml` | every push/PR, and the release gate | `flutter build windows --debug`, Windows-tagged `boltmeshd` tests |
-| `validate-boltmeshd` | `ci.yml` | every push/PR, and the release gate | `gofmt`, golangci-lint (Linux + `GOOS=windows`), `deadcode`, `GOOS=windows` build/vet, `go test ./...` under `boltmeshd/` |
-| `security` | `ci.yml` | every push/PR, and the release gate | Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
-| `build-android` | `release.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key |
+| `validate` | `ci.yml` | PR, push to `main`, release gate | `tool/check_generated.sh`, `flutter analyze --fatal-infos`, `dart format --set-exit-if-changed lib test integration_test`, `flutter test --coverage`, `tool/coverage_gate.sh 80` |
+| `android-build` | `ci.yml` | PR, release gate | `make -C android/awg-native check` (vet + golangci-lint over all four ABIs, with the pinned NDK), then `flutter build apk --debug --config-only` + `(cd android && ./gradlew :app:lintDebug)` |
+| `validate-windows` | `ci.yml` | PR, release gate | `pwsh -File tool/verify_windows.ps1`: native runner build, the named-pipe C++ transport test, the Windows-tagged `boltmeshd` tests, staged helper/plugin bundle check |
+| `validate-native` | `ci.yml` | PR, push to `main`, release gate | `bash tool/verify_native.sh`: systemd units + staged Linux payload, the Android manifest contract, the Windows helper channel wiring, mingw-w64 cross-compile of the pipe test (compile only) |
+| `validate-boltmeshd` | `ci.yml` | PR, push to `main`, release gate | `gofmt`, golangci-lint (Linux, `GOOS=windows` and `GOOS=darwin`), `deadcode`, cross-compile build/vet for windows/darwin, `go test ./...` under `boltmeshd/`, plus gofmt/tidy/lint/tests for the `stream/` module |
+| `security` | `ci.yml` | PR, push to `main`, release gate | `gitleaks` over the full commit history, then Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
+| `dependency-review` | `ci.yml` | PR only | flags a newly introduced moderate-or-worse vulnerability in what the PR pulls in |
+| `build-android` | `release.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key. This is the only place the minified variant is assembled, so it is where R8 and `proguard-rules.pro` are exercised |
 | `build-linux` | `release.yml` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
 | `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
 | `release` | `release.yml` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
+
+`android-build` and `validate-windows` are the two expensive jobs and are skipped
+on a push to `main`; both still run in the release gate, because a tag arrives as
+a `push` event too and the jobs are gated on `ci.yml`'s `validate_all` input
+rather than on the event name.
 
 Each build job depends on `release.yml`'s single `validate` job — the whole
 `ci.yml` suite above — so a failing test or scan blocks the release. The signing
