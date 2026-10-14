@@ -337,17 +337,7 @@ func configureServiceRecovery(handle *mgr.Service) error {
 	return nil
 }
 
-// uninstallService accepts the parsed options when available, while keeping
-// the no-argument form useful to package callers that use the defaults.
-func uninstallService(option ...options) error {
-	opts := options{}
-	if len(option) > 0 {
-		opts = option[0]
-	}
-	return uninstallServiceWithOptions(opts)
-}
-
-func uninstallServiceWithOptions(opts options) error {
+func uninstallService(opts options) error {
 	manager, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("connect to service manager: %w", err)

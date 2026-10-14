@@ -37,27 +37,24 @@ var forbiddenDirectives = map[string]bool{
 // non-hook WireGuard, wg-quick, and AmneziaWG obfuscation directives
 // supported by the daemon. Rejecting unknown names keeps parser differences
 // from becoming a way to smuggle a privileged directive through validation.
+// The obfuscation names come from [awgDirectives], so the accepted set and the
+// all-or-none set below cannot drift apart.
 var allowedDirectives = map[string]map[string]bool{
-	"interface": {
-		"address":    true,
-		"dns":        true,
-		"fwmark":     true,
-		"listenport": true,
-		"mtu":        true,
-		"privatekey": true,
-		"table":      true,
-		"jc":         true,
-		"jmin":       true,
-		"jmax":       true,
-		"s1":         true,
-		"s2":         true,
-		"s3":         true,
-		"s4":         true,
-		"h1":         true,
-		"h2":         true,
-		"h3":         true,
-		"h4":         true,
-	},
+	"interface": func() map[string]bool {
+		m := map[string]bool{
+			"address":    true,
+			"dns":        true,
+			"fwmark":     true,
+			"listenport": true,
+			"mtu":        true,
+			"privatekey": true,
+			"table":      true,
+		}
+		for _, name := range awgDirectives {
+			m[name] = true
+		}
+		return m
+	}(),
 	"peer": {
 		"allowedips":          true,
 		"endpoint":            true,
