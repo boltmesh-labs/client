@@ -13,6 +13,7 @@ library;
 
 import 'dart:io';
 
+import '../../../core/endpoint.dart';
 import 'models.dart';
 
 /// A resolved stream transport: where the tunnel points, where datagrams go
@@ -57,12 +58,12 @@ class TunnelTransport {
   int get deliverPort => _portOf(deliver);
 
   static int _portOf(String address) {
-    final index = address.lastIndexOf(':');
-    if (index < 0) {
+    final split = splitHostPort(address);
+    if (split == null) {
       throw ArgumentError('Not a host:port address: $address');
     }
-    final port = int.tryParse(address.substring(index + 1));
-    if (port == null || port <= 0 || port > 65535) {
+    final port = split.$2;
+    if (port <= 0 || port > 65535) {
       throw ArgumentError('Bad port in address: $address');
     }
     return port;

@@ -1,3 +1,4 @@
+import 'package:boltmesh/core/endpoint.dart';
 import 'package:boltmesh/core/ip.dart';
 import 'package:boltmesh/features/vpn/data/models.dart';
 import 'package:boltmesh/features/vpn/data/platform_info.dart';
@@ -26,21 +27,21 @@ void main() {
     });
   });
 
-  group('formatEndpoint', () {
+  group('formatHostPort', () {
     test('ipv4 host', () {
-      expect(formatEndpoint('203.0.113.10', 51820), '203.0.113.10:51820');
+      expect(formatHostPort('203.0.113.10', 51820), '203.0.113.10:51820');
     });
 
     test('ipv6 literal is bracketed', () {
-      expect(formatEndpoint('fd00::1', 51820), '[fd00::1]:51820');
+      expect(formatHostPort('fd00::1', 51820), '[fd00::1]:51820');
     });
 
     test('hostname untouched', () {
-      expect(formatEndpoint('vpn.example.com', 51820), 'vpn.example.com:51820');
+      expect(formatHostPort('vpn.example.com', 51820), 'vpn.example.com:51820');
     });
 
     test('already bracketed ipv6 not double wrapped', () {
-      expect(formatEndpoint('[fd00::1]', 51820), '[fd00::1]:51820');
+      expect(formatHostPort('[fd00::1]', 51820), '[fd00::1]:51820');
     });
   });
 
