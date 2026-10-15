@@ -125,7 +125,10 @@ test cannot do for itself:
 
 The app is installed, the appop is granted, and then `flutter test` rebuilds
 and reinstalls the same package: a reinstall preserves both the appop and the
-cleared data.
+cleared data. That first install reuses the last debug APK when one is already
+built and only invokes Gradle when there is none; the binary the tests actually
+run is still rebuilt from source by `flutter test`, which carries the app's
+`--dart-define`s.
 
 The credentials reach the app as `--dart-define-from-file`, not through the
 environment — the test code runs *on the device*, where the host environment

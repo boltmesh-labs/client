@@ -103,13 +103,22 @@ app_id=com.boltmesh.boltmesh
 #     each run start from the form. `BOLTMESH_E2E_KEEP_SESSION=1` keeps the
 #     store instead, to exercise the restore path.
 #
-# The app has to exist before the appop can name it, so a debug APK is built and
-# installed first. `flutter test` below rebuilds and reinstalls the same
-# package; a reinstall preserves both the appop and the cleared data.
-log "building and installing a debug APK on $serial"
-flutter build apk --debug
+# The app has to exist before the appop can name it, so a debug APK is installed
+# first. `flutter test` below rebuilds and reinstalls the same package; a
+# reinstall preserves both the appop and the cleared data. That install only has
+# to put *an* APK of the package on the device, so the last build is reused when
+# it is there and rebuilt only when it is not -- one Gradle invocation per run
+# instead of two. The binary that actually runs the tests is still built fresh
+# from source by `flutter test`, which carries the app's `--dart-define`s that
+# this plain build does not.
 apk="$client_repo/build/app/outputs/flutter-apk/app-debug.apk"
-[[ -f $apk ]] || die "expected $apk after the build"
+if [[ -f $apk ]]; then
+  log "reusing the existing debug APK for the pre-install on $serial"
+else
+  log "building and installing a debug APK on $serial"
+  flutter build apk --debug
+  [[ -f $apk ]] || die "expected $apk after the build"
+fi
 adb -s "$serial" install -r -t "$apk" >/dev/null
 
 log "granting VPN consent for $app_id"
