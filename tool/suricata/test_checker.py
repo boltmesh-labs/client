@@ -67,7 +67,7 @@ def flow(*, src_ip: str, src_port: int, dest_ip: str, dest_port: int, proto: str
     }
 
 
-def tls(*, version: str = "TLS 1.3", sni: str = "test-1.us-east-99.boltmesh.mooo.com") -> dict:
+def tls(*, version: str = "TLS 1.3", sni: str = "test-1.us-east-99.example.com") -> dict:
     return {
         "event_type": "tls",
         "src_ip": "192.168.1.113",

@@ -15,7 +15,7 @@ app_id: A79C3DB7-DE52-4F6C-B2BF-8EF6767852F9
 # `publisher`. Set both so the installer's publisher is never blank.
 publisher_name: BoltMesh
 publisher: BoltMesh
-publisher_url: https://boltmesh.mooo.com
+publisher_url: https://boltmesh.net
 display_name: BoltMesh
 # Pin the app exe explicitly: the packager otherwise picks the first .exe it
 # enumerates from the bundle, which also contains boltmeshd.exe and the

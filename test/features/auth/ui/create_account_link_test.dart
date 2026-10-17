@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _url = 'https://boltmesh.mooo.com';
+const _url = 'https://boltmesh.net';
 
 Future<void> pumpLink(
   WidgetTester tester, {
@@ -27,7 +27,7 @@ Future<void> pumpLink(
 void main() {
   group('isLaunchableWebUrl', () {
     test('accepts absolute http and https URLs', () {
-      expect(isLaunchableWebUrl('https://boltmesh.mooo.com'), isTrue);
+      expect(isLaunchableWebUrl('https://boltmesh.net'), isTrue);
       expect(isLaunchableWebUrl('http://localhost:5173'), isTrue);
     });
 
@@ -35,7 +35,7 @@ void main() {
       // A stray define must not hand the platform a `file:` or app scheme.
       expect(isLaunchableWebUrl(''), isFalse);
       expect(isLaunchableWebUrl('   '), isFalse);
-      expect(isLaunchableWebUrl('boltmesh.mooo.com'), isFalse);
+      expect(isLaunchableWebUrl('boltmesh.net'), isFalse);
       expect(isLaunchableWebUrl('file:///etc/passwd'), isFalse);
       expect(isLaunchableWebUrl('boltmesh://auth/callback'), isFalse);
       expect(isLaunchableWebUrl('javascript:alert(1)'), isFalse);

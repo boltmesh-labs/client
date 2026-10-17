@@ -33,7 +33,7 @@ build. Requirements: Flutter 3.47.x, JDK 21, Go 1.27, Android SDK/build-tools
 36, and NDK `28.2.13676358`.
 
 ```bash
-flutter build apk --debug --dart-define=API_BASE_URL=https://api.boltmesh.mooo.com/v1
+flutter build apk --debug --dart-define=API_BASE_URL=http://localhost:8000/v1
 adb connect 127.0.0.1:5555
 adb install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
@@ -52,7 +52,6 @@ With the tunnel up:
 
 ```bash
 adb shell toybox ping -c 3 -W 3 10.2.0.1
-adb shell toybox ping -c 1 -W 5 boltmesh.mooo.com
 adb shell dumpsys connectivity | grep -A1 'ni{VPN CONNECTED'
 adb logcat -d | grep 'AmneziaWG/boltmesh0.*Received handshake response'
 ```
@@ -65,11 +64,10 @@ notification.
 ## Verified run and follow-up
 
 - Android 16, x86_64 emulator over ADB TCP (`127.0.0.1:5555`), staging API
-  `https://api.boltmesh.mooo.com/v1`.
+  `http://localhost:8000/v1`.
 - The final `CLOCK_BOOTTIME` overlay build connected to test2. The app showed
   `Connected · test2`; logcat recorded `Received handshake response`; ping was
-  3/3 to `10.2.0.1`; and `boltmesh.mooo.com` resolved through tunnel DNS to
-  `93.177.140.197` and replied. `dumpsys connectivity` showed `tun0`, address
+  3/3 to `10.2.0.1`. `dumpsys connectivity` showed `tun0`, address
   `10.2.130.125/32`, DNS `10.2.0.1`, and the VPN-owned full-tunnel routes. The
   Android status bar reported VPN on.
 - At the start of this verification test2 was online with zero peers. The final
@@ -175,7 +173,7 @@ a stall, temporarily pin the rung:
 # lib/features/vpn/state/connection_controller.dart
 -  ObfuscationRung _obfuscationRung = ObfuscationRung.native;
 +  ObfuscationRung _obfuscationRung = ObfuscationRung.stream;  // revert after
-flutter build apk --debug --dart-define=API_BASE_URL=https://api.boltmesh.mooo.com/v1
+flutter build apk --debug --dart-define=API_BASE_URL=http://localhost:8000/v1
 ```
 
 Connect to a region with a usable `stream` credential and enough capacity
@@ -199,8 +197,7 @@ Verified on the final build: with the rung pinned, the app connected to test1
 (stock inner config). Logcat showed
 `stream: session established with <node>:443`, the inner WireGuard handshake
 response, and `[BoltMesh] tunnel connected ... server=test1`. Ping to the
-region's gateway `10.1.0.1` was 3/3; `boltmesh.mooo.com` resolved through the
-tunnel to `93.177.140.197` and replied. The bridge booked one fail-closed dial
+region's gateway `10.1.0.1` was 3/3. The bridge booked one fail-closed dial
 before the VpnService registered, then connected. The pin was reverted after the
 run. A stream start no longer requires pinning: a confirmed local stall now steps
 AWG → stream before it spends a server move. Reaching that on a device still
@@ -211,15 +208,14 @@ Both inner formats are now proven. On the AWG region `test2`, with the rung
 pinned the same way, logcat showed `UAPI: Updating h1 padding` … `Updating
 header protection key` (the obfuscated inner config), `Received handshake
 response`, and `Connected · test2`; `tun0` came up on test2's overlay
-(`10.2.103.148/32`, DNS `10.2.0.1`), ping to `10.2.0.1` was 3/3, and
-`boltmesh.mooo.com` resolved through the tunnel. So the stream carries a stock
+(`10.2.103.148/32`, DNS `10.2.0.1`), ping to `10.2.0.1` was 3/3. So the stream carries a stock
 *and* an obfuscated inner config.
 
 Re-verified on the post-ladder-fix tree (Android 16 x86_64 emulator, rung
 pinned, staging API). Auto-provision picked test1: the bridge logged
 `stream: session established with 192.168.1.115:443`, the inner `Received
 handshake response` arrived, `tun0` came up `10.1.97.0/32` with DNS
-`10.1.0.1`, ping was 3/3, and `boltmesh.mooo.com` resolved to `93.177.140.197`.
+`10.1.0.1`, ping was 3/3.
 Switching to test2 logged `UAPI: Updating h1 padding` … `header protection key`
 then `stream: session established with 192.168.1.116:443` and an inner
 `Received handshake response`, with `tun0` on `10.2.84.210/32` / DNS
