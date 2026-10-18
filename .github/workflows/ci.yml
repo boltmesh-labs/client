@@ -497,6 +497,12 @@ jobs:
         with:
           args: git --redact --no-banner --verbose --exit-code 1 .
 
+      # Trivy's built-in DB caching (on by default) keys the vulnerability DB by
+      # date, so every day of CI left behind another ~90 MB entry that nothing
+      # evicts -- and a PR whose key differs gets its own copy, since caches are
+      # scoped per ref. Those entries filled the account's shared Actions
+      # storage allowance, which blocks artifact uploads account-wide. Re-pull
+      # the DB per run instead.
       - name: Run Trivy Filesystem Vulnerability Scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -505,3 +511,4 @@ jobs:
           ignore-unfixed: true
           severity: "CRITICAL"
           exit-code: "1"
+          cache: "false"

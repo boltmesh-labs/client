@@ -49,6 +49,7 @@ same validated commit with every job, then builds and publishes:
 | `validate-boltmeshd` | `ci.yml` | PR, push to `main`, release gate | `gofmt`, golangci-lint (Linux, `GOOS=windows` and `GOOS=darwin`), `deadcode`, cross-compile build/vet for windows/darwin, `go test ./...` under `boltmeshd/`, plus gofmt/tidy/lint/tests for the `stream/` module |
 | `security` | `ci.yml` | PR, push to `main`, release gate | `gitleaks` over the full commit history, then Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
 | `dependency-review` | `ci.yml` | PR only | flags a newly introduced moderate-or-worse vulnerability in what the PR pulls in |
+| `prepare-release` | `release.yml` | `v*` tags | creates the empty draft GitHub Release that the build jobs upload into (reusing it on a re-run) so the hand-off does not need Actions artifacts |
 | `build-android` | `release.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key. This is the only place the minified variant is assembled, so it is where R8 and `proguard-rules.pro` are exercised |
 | `build-linux` | `release.yml` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
 | `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
@@ -65,6 +66,19 @@ jobs stay in `release.yml` because the keyless cosign identity is bound to the
 workflow file path at the tag (see [Verifying a release](#verifying-a-release)).
 Each host runs only its own fastforge jobs, which is why the same
 `--name=production` release works from both the Linux and Windows runners.
+
+The build outputs reach `release` as **assets on the draft release**, not as
+Actions artifacts: `prepare-release` creates the draft, each build job uploads
+into it with `gh release upload --clobber`, and `release` pulls them back with
+`gh release download` so it can SBOM, sign and checksum them before adding its
+own files. The artifact hand-off had to go because Actions artifacts share the
+account's storage allowance with caches and Packages — once that allowance
+filled, the upload step failed the whole tag build with "Artifact storage quota
+has been hit". Release assets are kept in a separate store, so the draft doubles
+as a hand-off that cannot be starved by the account-wide allowance. A side
+effect worth knowing: the draft exists from the first uploaded asset onward, so
+a tag build that dies halfway leaves a visibly incomplete draft rather than
+nothing.
 
 Dependency updates are automated separately by `.github/dependabot.yml`:
 weekly grouped PRs (Flutter `pub`, Android Gradle, `boltmeshd` `gomod`, GitHub

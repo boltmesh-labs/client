@@ -13,10 +13,12 @@ on:
     tags:
       - "v*"
 
-# Least privilege by default: every job only reads the repository. The release
-# job grants itself the extra scopes it needs (contents/id-token/attestations)
-# for the signed release, so a compromised third-party action in the build jobs
-# cannot mint OIDC tokens or touch the security tab.
+# Least privilege by default: every job only reads the repository. The jobs that
+# publish add scopes for themselves: `prepare-release` and the three build jobs
+# take `contents: write`, because the build outputs go straight onto the draft
+# release, and only `release` also takes `id-token`/`attestations` for the signed
+# release. A compromised third-party action in the build jobs therefore cannot
+# mint OIDC tokens or touch the security tab.
 permissions:
   contents: read
 
@@ -42,12 +44,46 @@ jobs:
     name: "Validate"
     uses: ./.github/workflows/ci.yml
 
-  build-android:
-    name: "Build Android"
+  # The build outputs do not travel between jobs as Actions artifacts: artifacts
+  # share the account's storage allowance with Actions caches and Packages, and
+  # once that allowance filled, `actions/upload-artifact` failed the whole tag
+  # build with "Artifact storage quota has been hit". Release assets live in a
+  # separate store, so the draft release doubles as the hand-off -- this job
+  # creates it empty, the build jobs upload into it, and `release` adds the
+  # SBOMs, signatures and checksums before it is published.
+  #
+  # Creating it once here instead of letting the three build jobs race to do it
+  # keeps creation deterministic. The existence check makes a re-run of the same
+  # tag reuse the draft rather than fail on it.
+  prepare-release:
+    name: "Draft the release"
     needs: [validate]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Draft release $tag already exists; uploading into it."
+          else
+            gh release create "$tag" --draft --title "$tag" --generate-notes
+          fi
+
+  build-android:
+    name: "Build Android"
+    needs: [validate, prepare-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      # Upload into the draft release `prepare-release` created.
+      contents: write
 
     steps:
       - uses: actions/checkout@v7
@@ -131,22 +167,26 @@ jobs:
         if: always()
         run: rm -f android/key.properties android/app/upload-keystore.jks
 
-      - name: Upload Android Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: app-release-android
-          path: |
-            ${{ github.workspace }}/build/app/outputs/bundle/release/app-release.aab
-            ${{ github.workspace }}/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 1
+      # `--clobber` so a re-run of the same tag replaces its assets instead of
+      # failing on the duplicate name.
+      - name: Upload Android assets to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            build/app/outputs/bundle/release/app-release.aab \
+            build/app/outputs/flutter-apk/app-release.apk \
+            --clobber
 
   build-linux:
     name: "Build Linux"
-    needs: [validate]
+    needs: [validate, prepare-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      # Upload into the draft release `prepare-release` created.
+      contents: write
 
     steps:
       - uses: actions/checkout@v7
@@ -192,22 +232,27 @@ jobs:
       - name: Package Linux installers (deb, rpm)
         run: fastforge release --name=production
 
-      - name: Upload Linux packages
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-packages
-          path: |
-            ${{ github.workspace }}/dist/**/*.deb
-            ${{ github.workspace }}/dist/**/*.rpm
-          if-no-files-found: error
-          retention-days: 1
+      - name: Upload Linux packages to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar nullglob
+          packages=(dist/**/*.deb dist/**/*.rpm)
+          if [ ${#packages[@]} -eq 0 ]; then
+            echo "::error::fastforge produced no .deb/.rpm to release"
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${packages[@]}" --clobber
 
   build-windows:
     name: "Build Windows"
-    needs: [validate]
+    needs: [validate, prepare-release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 90
+    permissions:
+      # Upload into the draft release `prepare-release` created.
+      contents: write
 
     steps:
       - uses: actions/checkout@v7
@@ -316,13 +361,17 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx') -ErrorAction SilentlyContinue
 
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-installer
-          path: ${{ github.workspace }}/dist/**/*.exe
-          if-no-files-found: error
-          retention-days: 1
+      - name: Upload Windows installer to the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installers = @(Get-ChildItem -Path dist -Recurse -Filter *.exe -File)
+          if ($installers.Count -eq 0) {
+            Write-Host '::error::fastforge produced no installer to release'
+            exit 1
+          }
+          gh release upload "${{ github.ref_name }}" $installers.FullName --clobber
 
   release:
     name: "Create Release"
@@ -331,9 +380,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
-      # Write the drafted release and its assets; read this run's artifacts.
+      # Write the drafted release and its assets. The build outputs are already
+      # on the draft; this job adds the SBOMs, signatures and checksums.
       contents: write
-      actions: read
       # Mint the OIDC identity that keyless cosign and the Sigstore attestations
       # sign with, and persist the attestations under the repository.
       id-token: write
@@ -346,23 +395,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download Android Artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: app-release-android
-          path: artifacts/android
-
-      - name: Download Linux packages
-        uses: actions/download-artifact@v8
-        with:
-          name: linux-packages
-          path: artifacts/linux
-
-      - name: Download Windows installer
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-installer
-          path: artifacts/windows
+      # Read back what the build jobs put on the draft. Everything below works
+      # from the release's own assets rather than a transient artifact copy: the
+      # SBOMs catalogue these files, the checksum manifest covers them, and
+      # cosign signs the Linux packages.
+      - name: Download the build outputs from the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.ref_name }}" --dir artifacts/android --pattern '*.aab' --pattern '*.apk'
+          gh release download "${{ github.ref_name }}" --dir artifacts/linux --pattern '*.deb' --pattern '*.rpm'
+          gh release download "${{ github.ref_name }}" --dir artifacts/windows --pattern '*.exe'
 
       # Pinned to a release tag, not the mutable `@v0` moving ref: this job
       # holds `id-token: write`, so the action resolves into a context that can
@@ -462,11 +505,10 @@ jobs:
       - name: Draft GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # Only the files this job produced: the build outputs are already on
+          # the draft, having been uploaded by the build jobs themselves.
           files: |
-            artifacts/android/**/*.aab
-            artifacts/android/**/*.apk
-            artifacts/linux/**/*
-            artifacts/windows/**/*.exe
+            artifacts/linux/**/*.sigstore.json
             artifacts/sbom/**/*
             artifacts/attestations/**/*
             artifacts/SHA256SUMS
