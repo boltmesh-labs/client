@@ -132,16 +132,16 @@ on `test/support/vpn_harness.dart`).
 
 ## Platform status
 
-Where each target actually stands. "Shipping" means the tunnel works and CI
-validates the platform; "blocked" names what is missing rather than implying
-progress that has not been made.
+Where each target actually stands. "Shipping" means the tunnel works and the
+manual validation gate checks the platform; "blocked" names what is missing
+rather than implying progress that has not been made.
 
-| Target | Tunnel | Privileged helper | CI | State |
+| Target | Tunnel | Privileged helper | Validation | State |
 | --- | --- | --- | --- | --- |
-| **Android** | in-process AWG, every rung (`VpnService`) | not needed | lint + AWG module check (the minified build is a tag-time check) | **AWG and stream emulator proofs passed** |
-| **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | build + `verify_native.sh` | **shipping** |
-| **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
-| **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | cross-compile, `vet`, lint | **blocked on Apple hardware** |
+| **Android** | in-process AWG, every rung (`VpnService`) | not needed | manual lint + AWG module check (the minified build is a tag-time check) | **AWG and stream emulator proofs passed** |
+| **Linux** | kernel (`wg-quick` + `wgctrl`) | `boltmeshd` (systemd) | manual build + `verify_native.sh` | **shipping** |
+| **Windows** | stock WireGuard service + in-process AWG | `boltmeshd` (LocalSystem) | manual build, C++ pipe test, Go tests | **shipping** (AWG + stream ladder verified on hardware) |
+| **macOS** | Network Extension, *or* the helper | `boltmeshd` (launchd) — written, not wired up, untested | manual cross-compile, `vet`, lint | **blocked on Apple hardware** |
 | **iOS** | Network Extension only | not possible (sandbox) | none | **blocked on Apple hardware** |
 
 ### What blocks iOS and macOS
@@ -180,8 +180,8 @@ Not everything was blocked, and the parts that were not are landed and tested:
   LaunchDaemon running the WireGuard data plane in userspace over `utun`, since
   macOS has no kernel WireGuard and `wgctrl` has no darwin backend. It
   cross-compiles for `darwin/amd64` and `darwin/arm64`, is vetted and linted
-  with `GOOS=darwin` in CI, and shares its platform-independent UAPI
-  translation with the other backends. **It has never been run on a Mac.**
+  with `GOOS=darwin` in the manual gate, and shares its platform-independent
+  UAPI translation with the other backends. **It has never been run on a Mac.**
 
 ### Known macOS gaps
 
@@ -241,11 +241,11 @@ Not everything was blocked, and the parts that were not are landed and tested:
 - **Android minified release**: the release APK is minified and
   `android/app/proguard-rules.pro` keeps only what the JNI shim resolves, so R8
   cannot silently break the AWG config parser or the native symbol names.
-  Nothing in CI samples that combination any more: the minified variants are
-  assembled only on a tag (release.yml `build-android`), which proves they
-  *build*, and the instrumentation suite that used to run against a minified
-  build (`AmneziaWgConnectSmokeTest`, API 36) is a device-run proof now — see
-  [Tests](#tests). PR CI lints instead.
+  Nothing samples that combination automatically any more: the minified
+  variants are assembled only on a tag (release.yml `build-android`), which
+  proves they *build*, and the instrumentation suite that used to run against a
+  minified build (`AmneziaWgConnectSmokeTest`, API 36) is a device-run proof
+  now — see [Tests](#tests). The manual gate lints instead.
 - **iOS/macOS**: the tunnel is a **Network Extension**, so the app itself is
   only half of it. The `networkextension` (Packet Tunnel) and App Group
   entitlements are declared in `ios/Runner/Runner.entitlements` and
@@ -262,8 +262,8 @@ Not everything was blocked, and the parts that were not are landed and tested:
   A **privileged-helper path also exists for macOS** (`boltmeshd`'s darwin
   backend, a launchd LaunchDaemon), which would remove the Network Extension
   dependency entirely and match Linux/Windows. It cross-compiles and is vetted
-  and linted in CI, but the client does not use it yet and it has never run on
-  a Mac — see `boltmeshd/README.md` and Platform status.
+  and linted by the manual gate, but the client does not use it yet and it has
+  never run on a Mac — see `boltmeshd/README.md` and Platform status.
 - **Windows**: hands all privileged work to the `boltmeshd` helper
   (`boltmeshd/`, installed as a LocalSystem service by the Inno Setup `.exe`).
   The plugin still bundles Wintun, `wireguard_svc.exe` and `wireguard.dll`,
@@ -448,7 +448,7 @@ fastforge release --name=production
 
 To check the Windows build and its privileged helper without packaging
 anything, run `pwsh -File tool/verify_windows.ps1` (see [Tests](#tests)); it is
-the script the `validate-windows` CI job runs.
+the Windows validation gate.
 
 The Windows package is an Inno Setup `.exe`, not MSIX. The pre-packing hook
 `windows/packaging/stage_boltmeshd.ps1` builds `boltmeshd.exe` into the
@@ -466,7 +466,7 @@ uninstall quiesces the daemon, removes the tunnel service and private-key
 config, and then removes the helper service. The Flutter-free
 `helper_pipe_io_tests` target is `EXCLUDE_FROM_ALL` so it is never built into
 that bundle (fastforge copies the runner output directory verbatim into the
-installer); the `validate-windows` job builds it by name. If the helper binary
+installer); the manual Windows check builds it by name. If the helper binary
 is missing (a damaged or partially removed install), the uninstaller fails
 closed: it probes for the `boltmeshd`/`boltmesh0` services and the private-key
 config and aborts when any survives, instead of completing with privileged
@@ -961,14 +961,14 @@ platforms that have no reader.
 ## Tests
 
 ```sh
-# The root Makefile wraps these: `make check` runs the CI order end to end,
-# and `make test`, `make coverage`, `make analyze`, `make generated`,
+# The root Makefile wraps these: `make check` runs the whole manual gate in
+# order, and `make test`, `make coverage`, `make analyze`, `make generated`,
 # `make format-check`, `make verify-native` cover them one at a time.
 flutter test
 # Coverage (report-only unless the floor is passed):
 flutter test --coverage && bash tool/coverage_gate.sh 80
 
-# The rest of what CI enforces locally:
+# The rest of the manual gate:
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
@@ -978,14 +978,17 @@ bash tool/check_generated.sh
 bash tool/verify_native.sh
 # The Windows half, which only a Windows host can run (native runner build, the
 # named-pipe transport test, the Windows-tagged boltmeshd tests, and the
-# packaging staging hook). Same script the validate-windows CI job runs:
+# packaging staging hook):
 pwsh -File tool/verify_windows.ps1
-# Minified-release Android bridge smoke tests (with an emulator running). Not
-# run by CI -- the minified variants are only assembled on a tag:
+# Minified-release Android bridge smoke tests (with an emulator running). The
+# minified variants are only assembled on a tag:
 (cd android && ./gradlew :app:connectedReleaseAndroidTest)
 # Android GUI end-to-end against a live node (attached device/emulator):
 tool/e2e/run_android_app.sh
 ```
+
+Nothing above runs on GitHub: CI keeps only `security` and `dependency-review`,
+so a change that skips these steps ships unchecked.
 
 The Go helper has its own gates (`boltmeshd/`), including the two that keep the
 build-tagged backends from rotting invisibly on a Linux host:
@@ -1000,9 +1003,7 @@ make build-darwin      # cross-compiles darwin/amd64 + darwin/arm64
 
 `make lint`, `lint-windows` and `lint-darwin` (and their pre-commit hooks) need
 **golangci-lint v2** — the v1 line is EOL and cannot target Go 1.27. Install it
-with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0`
-(matching the version the `validate-boltmeshd` job pins); a different v2 release
-can report differently from CI.
+with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0`.
 
 `make test-darwin` type-checks the darwin-tagged tests but cannot **run** them:
 they need a macOS host with a `utun` interface and root. There is no Apple CI
@@ -1012,34 +1013,32 @@ runner, so the macOS data plane has no executed test.
 output and fails on drift: those files are excluded from analysis, so a stale
 one would otherwise ship green. The `check-generated` pre-commit hook runs it on
 any commit touching `lib/**.dart`, an `.arb`, `l10n.yaml` or `pubspec.*`, and
-`make generated` is the same gate, so the drift is caught at commit time as well
-as in `validate`. `tool/coverage_gate.sh` enforces a floor
+`make generated` is the same gate, so the drift is caught at commit time and by
+the manual gate. `tool/coverage_gate.sh` enforces a floor
 (currently 80%) on hand-written lines only — generated code is excluded.
-`tool/verify_native.sh` covers checks the Dart suite cannot reach (see the
-`validate-native` CI job). Timer behaviour is tested with `package:fake_async`
+`tool/verify_native.sh` covers checks the Dart suite cannot reach (run it by
+hand). Timer behaviour is tested with `package:fake_async`
 (`async.elapse`), never real sleeps, so the suite is deterministic and fast.
 
 The Windows named-pipe transport is covered by a Flutter-free C++ test
 (`windows/runner/tests/helper_pipe_io_test.cpp`, built as the
-`EXCLUDE_FROM_ALL` `helper_pipe_io_tests` target and run by the
-`validate-windows` job, which builds it by name so it never enters the
-installer bundle);
+`EXCLUDE_FROM_ALL` `helper_pipe_io_tests` target and run by the manual Windows
+check, which builds it by name so it never enters the installer bundle);
 `tool/verify_native.sh` also cross-compiles that test with mingw-w64 on Linux,
-so a Windows-only C++ break fails the `validate-native` job too. It is not
+so a Windows-only C++ break is caught by the manual native check too. It is not
 executed on Linux — the test drives overlapped named-pipe I/O, which Wine
-emulates incompletely. Android is
-additionally checked by `make -C android/awg-native check` (vet + golangci-lint
-over all four ABIs) and `./gradlew :app:lintDebug` in the `android-build` job.
-The minified-release `AmneziaWgConnectSmokeTest` instrumentation tests are **not**
-run by CI; they are a device-run proof (see [Tests](#tests)).
+emulates incompletely. Android is additionally checked by
+`make -C android/awg-native check` (vet + golangci-lint over all four ABIs) and
+`./gradlew :app:lintDebug`, both run by hand. The minified-release
+`AmneziaWgConnectSmokeTest` instrumentation tests are **not** run
+automatically; they are a device-run proof (see [Tests](#tests)).
 
 Apple is the one platform with no executed test of any kind — no emulator, no
-simulator, no runner. What CI does instead is compile and analyse: the
-`validate-boltmeshd` job cross-compiles the helper for `darwin/amd64` and
-`darwin/arm64` and runs `golangci-lint` with `GOOS=darwin`, and
-`verify_native.sh` asserts the Apple entitlements. The platform-independent
-UAPI translation the macOS backend depends on *is* unit-tested on Linux. See
-Platform status.
+simulator, no runner. What the manual gate does instead is compile and analyse:
+it cross-compiles the helper for `darwin/amd64` and `darwin/arm64` and runs
+`golangci-lint` with `GOOS=darwin`, and `verify_native.sh` asserts the Apple
+entitlements. The platform-independent UAPI translation the macOS backend
+depends on *is* unit-tested on Linux. See Platform status.
 
 Test paths mirror `lib/` (e.g. `flutter test
 test/features/vpn/data/wg_conf_test.dart`). Shared doubles live in

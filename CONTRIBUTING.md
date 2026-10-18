@@ -42,8 +42,9 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ## Local Hooks
 
-Install the git hook once after cloning. It runs the checks CI does not, so a
-violation is caught before you push:
+Install the git hook once after cloning. CI does not run the per-commit
+validation any more (only `security` and `dependency-review`); the hooks and the
+manual gate below are what catch a violation before you push:
 
 ```bash
 pre-commit install
@@ -56,6 +57,42 @@ has. To run everything else, skip those by id:
 ```bash
 SKIP=dart-format,flutter-analyze,go-fmt-boltmeshd,golangci-lint-boltmeshd,golangci-lint-boltmeshd-windows,golangci-lint-boltmeshd-darwin,go-vet-boltmeshd-darwin,go-test-boltmeshd,go-mod-tidy-boltmeshd,check-generated,flutter-lockfile pre-commit run --all-files
 ```
+
+## Full validation gate
+
+The checks that used to run in CI are now manual. Run them before pushing —
+`make check` covers the Flutter half in the documented order:
+
+```bash
+make check                      # deps, generated, analyze, format-check, test, coverage
+
+# Native-platform contracts (systemd units + staged Linux payload, the Android
+# manifest, the Windows helper channel, and the mingw-w64 C++ cross-compile):
+bash tool/verify_native.sh
+
+# The Windows half, Windows host only: native runner build, the named-pipe
+# transport test, the Windows-tagged boltmeshd tests, packaging staging hook.
+pwsh -File tool/verify_windows.ps1
+
+# Android: the cgo JNI module needs the pinned NDK, then Gradle lint.
+bash tool/install_android_ndk.sh
+make -C android/awg-native check
+flutter build apk --debug --config-only && (cd android && ./gradlew :app:lintDebug)
+
+# The Go helper and the shared stream module, from boltmeshd/:
+make lint lint-windows lint-darwin mod-tidy-check vet test test-darwin
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build ./...
+go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...
+make -C ../stream lint test mod-tidy-check
+```
+
+`tool/verify_windows.ps1` only runs on Windows; `tool/install_android_ndk.sh`
+and `make -C android/awg-native check` need the Android SDK/NDK. Skip what the
+machine cannot run, and rely on a maintainer or CI-hosted release build for the
+rest. Nothing on GitHub re-runs these checks, including on a tagged release.
 
 ## Style Guides
 
@@ -72,7 +109,7 @@ flutter analyze --fatal-infos
 ```
 
 `dart format` is the formatter; `flutter analyze` is the linter and type
-checker. Both run in CI and via pre-commit.
+checker. Both run via pre-commit and in the manual gate above.
 
 ### Go Style Guide
 
@@ -111,7 +148,7 @@ flutter test
 # Coverage (report-only unless the 80% floor is passed):
 flutter test --coverage && bash tool/coverage_gate.sh 80
 
-# Everything CI enforces (or run it all in CI order with `make check`):
+# The full manual gate (or run it all with `make check`):
 flutter analyze --fatal-infos
 dart format --set-exit-if-changed lib test
 bash tool/check_generated.sh
@@ -120,9 +157,9 @@ bash tool/check_generated.sh
 `tool/check_generated.sh` (`make generated`) is also the `check-generated`
 pre-commit hook: it fires on any commit touching `lib/**.dart`, an `.arb`,
 `l10n.yaml` or `pubspec.*`, so with the hook installed the stale-generator
-mistake is caught before the push rather than in CI. The script regenerates the
-files in the working tree *before* it diffs, so when it fails, `git add` the
-regenerated output and commit again.
+mistake is caught before the push. Nothing on GitHub re-checks it. The script
+regenerates the files in the working tree *before* it diffs, so when it fails,
+`git add` the regenerated output and commit again.
 
 ### Writing Tests
 

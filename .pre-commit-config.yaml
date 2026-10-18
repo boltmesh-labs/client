@@ -171,7 +171,7 @@ repos:
         pass_filenames: false
 
       # --- Dart Format ---
-      # `lib`/`test`/`integration_test` is the scope the `validate` job gates
+      # `lib`/`test`/`integration_test` is the scope the manual gate runs
       # (`dart format --set-exit-if-changed lib test integration_test`), so the
       # hook formats exactly that and stays skipped for a `.dart` change outside
       # it. The formatter exits 0 even when it rewrites files; pre-commit fails
@@ -185,9 +185,8 @@ repos:
         pass_filenames: false
 
       # --- Flutter Analyze ---
-      # `--fatal-infos` is the form the `validate` job runs and AGENTS.md
-      # documents: without it an info-level diagnostic passes here and fails
-      # there.
+      # `--fatal-infos` is the form AGENTS.md documents and the manual gate
+      # runs: without it an info-level diagnostic passes here and fails there.
       - id: flutter-analyze
         name: flutter analyze
         entry: flutter analyze --fatal-infos
@@ -197,19 +196,17 @@ repos:
       # --- Prettier ---
       - id: prettier
         name: prettier
-        # Pinned, and the version is the point: these hooks run in CI with
-        # `--all-files`, so a resolved-version change reformats every covered
-        # file at once and fails a PR that touched none of them -- including
-        # `.github/workflows/*.yml`, meaning a prettier default change could
-        # break the workflow that defines CI. Bump by hand (Dependabot has no
+        # Pinned, and the version is the point: the hooks are meant to be run
+        # with `--all-files`, so a resolved-version change reformats every
+        # covered file at once and fails a tree that touched none of them --
+        # including `.github/workflows/*.yml`. Bump by hand (Dependabot has no
         # `npm` ecosystem here and does not read versions out of this file) and
         # land the resulting reformat in its own commit.
         #
         # `language: node` with the pin in `additional_dependencies`, for the
         # same reason as markdownlint below: pre-commit installs the version
-        # once into `~/.cache/pre-commit`, which the `pre-commit` CI job caches,
-        # instead of `npx --yes` fetching it into an uncached `~/.npm/_npx` on
-        # every run.
+        # once into `~/.cache/pre-commit`, instead of `npx --yes` fetching it
+        # into an uncached `~/.npm/_npx` on every run.
         entry: prettier --write
         language: node
         additional_dependencies: ["prettier@3.9.10"]
@@ -239,8 +236,7 @@ repos:
         # `katex/dist/katex.mjs`, which markdownlint pulls in via
         # micromark-extension-math) killed the hook with a bare ESM SyntaxError
         # before it read a file, and re-running reproduced it. pre-commit
-        # installs this tree once into `~/.cache/pre-commit`, which the
-        # `pre-commit` CI job already caches and restores, so the download
+        # installs this tree once into `~/.cache/pre-commit`, so the download
         # happens on a cache miss rather than on every run.
         entry: markdownlint-cli2 --fix
         language: node

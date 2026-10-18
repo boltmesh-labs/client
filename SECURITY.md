@@ -43,18 +43,25 @@ Please include:
 
 Non-vulnerability security questions may be raised as public GitHub issues with the `security` label — without including sensitive detail.
 
-## Automated Security Controls
+## Security Controls
 
-CI runs on every push and pull request targeting `main`/`develop` through `.github/workflows/ci.yml`. Tagged releases (`.github/workflows/release.yml`) reuse that same validation suite via `workflow_call` before building and signing artifacts:
+CI runs on every push and pull request targeting `main`/`develop` through
+`.github/workflows/ci.yml`, which now carries only two jobs: `dependency-review`
+(PRs) and `security`. Tagged releases (`.github/workflows/release.yml`) reuse
+that same workflow via `workflow_call` before building and signing artifacts.
+The per-commit validation gate is manual and documented in
+[CONTRIBUTING.md](CONTRIBUTING.md#full-validation-gate); it no longer runs on
+GitHub.
 
 - **Trivy filesystem scanning** (`security` job): fails the build on CRITICAL findings and ignores advisories without an available fix.
-- **Test coverage gate**: `flutter test --coverage` plus `tool/coverage_gate.sh 80` enforces a floor on hand-written Dart lines; `validate-boltmeshd` runs `gofmt`, golangci-lint, `deadcode` and `go test ./...` on the Go helper.
-- **Generated-code drift check**: `tool/check_generated.sh` regenerates l10n/build_runner output and fails when the committed tree is stale (those files are excluded from analysis).
+- **Dependency review** (`dependency-review` job): flags a newly introduced moderate-or-worse vulnerability in what a PR pulls in.
+- **Coverage gate** (manual): `flutter test --coverage` plus `tool/coverage_gate.sh 80` enforces a floor on hand-written Dart lines. The Go helper's `gofmt`, golangci-lint (Linux, windows and darwin), `deadcode` and `go test ./...` are part of the same manual gate.
+- **Generated-code drift check** (manual and pre-commit): `tool/check_generated.sh` regenerates l10n/build_runner output and fails when the committed tree is stale (those files are excluded from analysis).
 - **Release signing gates**: tagged `build-android`/`build-windows` jobs fail when their signing secrets are missing rather than publish a debug-signed or unsigned artifact.
 - **Release artifact integrity**: tagged releases publish SHA-256 checksums, CycloneDX/SPDX SBOMs, keyless cosign signatures for the Linux packages, and Sigstore build-provenance/SBOM attestations, so downloads are verifiable with `gh attestation verify` and `cosign verify-blob` (see [DEPLOYMENT.md](DEPLOYMENT.md#verifying-a-release)).
-- **Pre-commit hooks** (`.pre-commit-config.yaml`, installed locally with `pre-commit install`): gofmt/golangci-lint for `boltmeshd`, `dart format` + `flutter analyze`, Prettier, markdownlint, and whitespace/YAML/large-file/merge-conflict guards. These are a local gate and are not re-checked in CI. The `validate*` jobs run the Flutter and Go commands independently, and the `security` job runs `gitleaks` over the full commit history before Trivy, using the `zricethezav/gitleaks:v8.30.1` container — the same version the local hook pins. `gitleaks-action` is not used: v3 requires a paid `GITLEAKS_LICENSE` for organisation-owned repos, and v2 runs on a Node 20 runtime GitHub removed from hosted runners on 2026-09-16. This repo's history is already clean, so it needs no `.gitleaksignore`. `actionlint` runs in `validate` as the `rhysd/actionlint:1.7.12` container, and ShellCheck runs there as `shellcheck -x` over `*.sh`, both matching the versions the local hooks pin. The hygiene guards, Prettier and markdownlint remain local-only. The `GIT_CONFIG_COUNT`/`safe.directory` env on that step is load-bearing: the container runs as root while the workspace belongs to the runner user, so git otherwise rejects the repo as dubious ownership, scans `0 commits`, and still exits 0 — the gate passing while checking nothing. The actionlint step needs it for the same reason, since it walks up looking for the git root.
+- **Pre-commit hooks** (`.pre-commit-config.yaml`, installed locally with `pre-commit install`): gofmt/golangci-lint for `boltmeshd`, `dart format` + `flutter analyze`, Prettier, markdownlint, actionlint, shellcheck, and whitespace/YAML/large-file/merge-conflict guards. These are the local gate and are not re-checked in CI. The `security` job runs `gitleaks` over the full commit history before Trivy, using the `zricethezav/gitleaks:v8.30.1` container — the same version the local hook pins. `gitleaks-action` is not used: v3 requires a paid `GITLEAKS_LICENSE` for organisation-owned repos, and v2 runs on a Node 20 runtime GitHub removed from hosted runners on 2026-09-16. This repo's history is already clean, so it needs no `.gitleaksignore`. The hygiene guards, Prettier, markdownlint, actionlint and ShellCheck remain local-only. The `GIT_CONFIG_COUNT`/`safe.directory` env on the gitleaks step is load-bearing: the container runs as root while the workspace belongs to the runner user, so git otherwise rejects the repo as dubious ownership, scans `0 commits`, and still exits 0 — the gate passing while checking nothing.
 - **CI secret hygiene**: workflows declare explicit least-privilege `permissions:` blocks, and signing material is supplied only through GitHub Actions secrets — never committed to the repository.
-- **Automated dependency updates** (`.github/dependabot.yml`): Dependabot opens weekly, grouped PRs per ecosystem — Flutter (`pub`), Android (Gradle), `boltmeshd` (`gomod`) and GitHub Actions — with a release cooldown, so updates land through normal review gated by the `validate*` and `security` jobs above.
+- **Automated dependency updates** (`.github/dependabot.yml`): Dependabot opens weekly, grouped PRs per ecosystem — Flutter (`pub`), Android (Gradle), `boltmeshd` (`gomod`) and GitHub Actions — with a release cooldown, so updates land through normal review gated by the `security` job above and by the contributor running the manual gate.
 
 Dependabot's **security** updates are a separate pipeline: an advisory with a fix opens a PR immediately, bypassing the weekly schedule and grouping rather than waiting for the next batch.
 

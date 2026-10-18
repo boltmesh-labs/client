@@ -8,9 +8,11 @@
 # reviewable on its own.
 #
 # Every Dependabot PR opens against `main`/`develop` and therefore runs the
-# `validate*` and `security` jobs in `.github/workflows/ci.yml`, which
-# need no secrets. Dependabot's own security updates bypass the `schedule`
-# and `groups` below and open immediately.
+# `dependency-review` and `security` jobs in `.github/workflows/ci.yml`, which
+# need no secrets. The per-commit validation is a manual gate now, so a
+# dependency bump still needs a local `make check` before merge. Dependabot's
+# own security updates bypass the `schedule` and `groups` below and open
+# immediately.
 version: 2
 updates:
   - package-ecosystem: "pub"

@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Runs the Windows half of the CI validation locally, in the same order.
+    Runs the Windows half of the validation gate locally, in the same order.
 
 .DESCRIPTION
-    Mirrors the `validate-windows` job in .github/workflows/ci.yml, so a
-    Windows-only break is caught on a Windows box instead of waiting for CI:
+    This is the only Windows validation now, so a Windows-only break has to be
+    caught on a Windows box before pushing:
 
       1. flutter pub get --enforce-lockfile
       2. flutter build windows            (compiles the native runner,
@@ -14,7 +14,7 @@
                                           transport test)
       4. go test ./... in boltmeshd/      (runs the Windows-tagged
                                           SCM/DLL-layout suites, which the
-                                          Linux validate job cannot execute)
+                                          Linux checks cannot execute)
       5. assert the bundle carries the WireGuard files the helper loads from
          beside itself, and that the packaging staging hook lands the helper
          in the bundle
@@ -24,7 +24,8 @@
     belong to the other jobs; this script does not repeat them.
 
 .PARAMETER Configuration
-    The CMake configuration to build: Debug (default, what CI uses) or Release.
+    The CMake configuration to build: Debug (default, what the release build
+    also uses) or Release.
 
 .PARAMETER SkipBuild
     Reuse the existing build/ tree. Skips step 2 only; the pipe test is still
@@ -76,8 +77,9 @@ function Invoke-Step([string] $name, [scriptblock] $action) {
     return $true
 }
 
-# cmake is on PATH in CI, but a plain developer shell often has only the copy
-# Visual Studio ships (which is also the one the Flutter build itself uses).
+# cmake is usually on PATH in a CI runner, but a plain developer shell often has
+# only the copy Visual Studio ships (which is also the one the Flutter build
+# itself uses).
 function Resolve-Cmake {
     $onPath = Get-Command cmake -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }

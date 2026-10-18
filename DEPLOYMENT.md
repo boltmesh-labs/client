@@ -33,20 +33,14 @@ git push origin v1.2.3
 
 ## 2. CI/CD pipeline
 
-CI is split by lifecycle. `.github/workflows/ci.yml` validates a pull request in
-full, and a push to `main` with the cheap subset only — `main` is unprotected and
-takes most commits here by direct push, so a push that ran nothing would land
-completely unchecked. `.github/workflows/release.yml` runs on `v*` tags, calls
-`ci.yml` as a reusable workflow (`workflow_call`) so a release is built on the
-same validated commit with every job, then builds and publishes:
+CI is security-only. `.github/workflows/ci.yml` runs two jobs: `dependency-review`
+on pull requests, and `security` (gitleaks then Trivy) on pull requests, pushes to
+`main` and the tag gate. `.github/workflows/release.yml` runs on `v*` tags, calls
+`ci.yml` as a reusable workflow (`workflow_call`) so a release is built on a
+commit that passed that scan, then builds and publishes:
 
 | Job | Workflow | Trigger | Checks |
 | - | - | - | - |
-| `validate` | `ci.yml` | PR, push to `main`, release gate | `tool/check_generated.sh`, `flutter analyze --fatal-infos`, `dart format --set-exit-if-changed lib test integration_test`, `flutter test --coverage`, `tool/coverage_gate.sh 80` |
-| `android-build` | `ci.yml` | PR, release gate | `make -C android/awg-native check` (vet + golangci-lint over all four ABIs, with the pinned NDK), then `flutter build apk --debug --config-only` + `(cd android && ./gradlew :app:lintDebug)` |
-| `validate-windows` | `ci.yml` | PR, release gate | `pwsh -File tool/verify_windows.ps1`: native runner build, the named-pipe C++ transport test, the Windows-tagged `boltmeshd` tests, staged helper/plugin bundle check |
-| `validate-native` | `ci.yml` | PR, push to `main`, release gate | `bash tool/verify_native.sh`: systemd units + staged Linux payload, the Android manifest contract, the Windows helper channel wiring, mingw-w64 cross-compile of the pipe test (compile only) |
-| `validate-boltmeshd` | `ci.yml` | PR, push to `main`, release gate | `gofmt`, golangci-lint (Linux, `GOOS=windows` and `GOOS=darwin`), `deadcode`, cross-compile build/vet for windows/darwin, `go test ./...` under `boltmeshd/`, plus gofmt/tidy/lint/tests for the `stream/` module |
 | `security` | `ci.yml` | PR, push to `main`, release gate | `gitleaks` over the full commit history, then Trivy filesystem scan (fails on CRITICAL, ignores unfixed advisories) |
 | `dependency-review` | `ci.yml` | PR only | flags a newly introduced moderate-or-worse vulnerability in what the PR pulls in |
 | `prepare-release` | `release.yml` | `v*` tags | creates the empty draft GitHub Release that the build jobs upload into (reusing it on a re-run) so the hand-off does not need Actions artifacts |
@@ -55,13 +49,18 @@ same validated commit with every job, then builds and publishes:
 | `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
 | `release` | `release.yml` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
 
-`android-build` and `validate-windows` are the two expensive jobs and are skipped
-on a push to `main`; both still run in the release gate, because a tag arrives as
-a `push` event too and the jobs are gated on `ci.yml`'s `validate_all` input
-rather than on the event name.
+The per-commit validation — generated code, `flutter analyze`/format, the Dart
+tests and coverage floor, the Go lint/test matrix, the native contract checks
+and the Windows/Android validation — is a manual gate run before pushing, listed
+in [CONTRIBUTING.md](CONTRIBUTING.md#full-validation-gate). It left CI because
+the toolchains it needs (Flutter SDK, Go build cache, Gradle, the Android NDK)
+populated gigabytes of Actions caches, and the account's shared storage
+allowance — the same one whose exhaustion forced the artifact hand-off below —
+could not sustain them. The trade is explicit: nothing on GitHub tests a tag
+before it is signed.
 
-Each build job depends on `release.yml`'s single `validate` job — the whole
-`ci.yml` suite above — so a failing test or scan blocks the release. The signing
+Each build job depends on `release.yml`'s single `validate` job — the security
+scan — so a leaked secret blocks the release. The signing
 jobs stay in `release.yml` because the keyless cosign identity is bound to the
 workflow file path at the tag (see [Verifying a release](#verifying-a-release)).
 Each host runs only its own fastforge jobs, which is why the same
@@ -82,8 +81,9 @@ nothing.
 
 Dependency updates are automated separately by `.github/dependabot.yml`:
 weekly grouped PRs (Flutter `pub`, Android Gradle, `boltmeshd` `gomod`, GitHub
-Actions) run these same `validate*`/`security` jobs before merge, and
+Actions) run the `security` and `dependency-review` jobs before merge, and
 security-advisory updates open immediately rather than waiting for the batch.
+The manual validation gate is the contributor's responsibility on those PRs.
 
 ## 3. Artifacts and signing
 
@@ -145,11 +145,12 @@ verify the same way (the latter hold the provenance and SBOM predicates).
 
 ## 4. Troubleshooting
 
-- **`validate` fails on `tool/check_generated.sh`**: generated code
+- **The manual gate fails on `tool/check_generated.sh`**: generated code
   (`lib/l10n/gen/**`, `*.freezed.dart`, `*.g.dart`) is stale. Run
   `bash tool/check_generated.sh` locally and commit the regenerated files.
-- **`validate` fails the coverage floor**: `tool/coverage_gate.sh` enforces 80%
-  on hand-written lines only; add tests for the new code.
+- **The manual gate fails the coverage floor**: `tool/coverage_gate.sh` enforces
+  80% on hand-written lines only; add tests for the new code. Nothing on GitHub
+  re-runs either check, so this is caught before pushing or not at all.
 - **`build-android` fails with "ANDROID_KEYSTORE is not set"**: the repository
   secret is missing. Add the base64 keystore and password under Settings →
   Secrets and variables → Actions (see README).

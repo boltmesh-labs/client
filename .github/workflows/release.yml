@@ -1,13 +1,13 @@
 name: "Client Release"
 
 # Tag-driven release pipeline. The `validate` job reuses `ci.yml` via
-# `workflow_call`, so the release artifacts are built only after the same
-# generated-code/analyze/test/format/coverage, native-contract, Android and
-# boltmeshd checks as a PR — on this exact tagged commit — without duplicating
-# every step here. The signing jobs stay in this file because the keyless
-# cosign identity is bound to the workflow file path
-# (`.../.github/workflows/release.yml@refs/tags/v*`); renaming it would change
-# the certificate identity consumers verify against (see DEPLOYMENT.md).
+# `workflow_call`, so the release artifacts are built only after the security
+# scan (gitleaks + Trivy) passed on this exact tagged commit, without
+# duplicating that step here. The per-commit validation is a manual local gate
+# (see CONTRIBUTING.md), so a tag is not test-gated on GitHub. The signing jobs
+# stay in this file because the keyless cosign identity is bound to the workflow
+# file path (`.../.github/workflows/release.yml@refs/tags/v*`); renaming it would
+# change the certificate identity consumers verify against (see DEPLOYMENT.md).
 on:
   push:
     tags:
@@ -37,9 +37,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Runs every validation job in ci.yml (validate, validate-*, security). The
-  # build jobs below depend on this one job, so a failing test or scan blocks
-  # the release.
+  # Reuses ci.yml as a reusable workflow. That file now carries only the
+  # dependency review (PRs) and the security scan (gitleaks + Trivy), so the
+  # scan is what gates a tag: the per-commit validation is a manual local gate
+  # (see CONTRIBUTING.md). The build jobs below depend on this one job, so a
+  # failing scan still blocks the release.
   validate:
     name: "Validate"
     uses: ./.github/workflows/ci.yml

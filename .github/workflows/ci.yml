@@ -1,18 +1,20 @@
 name: "Client CI"
 
-# Validation only. The tag-driven release pipeline lives in `release.yml`,
-# which reuses this workflow via `workflow_call` so a tagged release is built
-# on the same validated commit without duplicating every check.
+# Security and dependency review only. The per-commit validation gate
+# (generated code, analyze, format, Dart tests and coverage, Go lint/tests, the
+# native contract checks, and the Windows/Android builds) lives in
+# CONTRIBUTING.md and AGENTS.md and is run manually. It is deliberately not
+# repeated here: the toolchains those checks need (Flutter SDK, Go build cache,
+# Gradle, the Android NDK) populated gigabytes of Actions caches, and the
+# account's shared storage allowance could not sustain them.
 #
-# Three trigger contexts, covered to two different depths:
-#   * a pull request runs everything;
-#   * a push to `main` runs the cheap subset -- `validate`, `validate-boltmeshd`,
-#     `validate-native` and `security`. `main` is unprotected and most commits
+# Three trigger contexts:
+#   * a pull request runs `dependency-review` and `security`;
+#   * a push to `main` runs `security`. `main` is unprotected and most commits
 #     here arrive by direct push rather than by PR, so without this a push lands
 #     with no check at all;
-#   * the tag gate (`workflow_call` from `release.yml`) runs everything again on
-#     the tagged commit. That is what `validate_all` is for: a tag is delivered
-#     as a `push` event too, so `github.event_name` cannot distinguish the two.
+#   * the tag gate (`workflow_call` from `release.yml`) runs `security` again on
+#     the tagged commit, which is what still gates a release.
 on:
   pull_request:
     branches:
@@ -22,30 +24,19 @@ on:
     branches:
       - main
   workflow_call:
-    inputs:
-      validate_all:
-        description: "Run the expensive build jobs (Android, Windows) as well."
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
-# A superseded commit must not keep burning the fan-out (Flutter, Android and
-# Windows setups). Cancel-in-progress on PRs and pushes alike; a tagged release
-# is driven by `release.yml`, which calls this workflow in its own `release`
-# context, where the same group is unique per run.
+# A superseded commit must not keep burning runner time. Cancel-in-progress on
+# PRs and pushes alike; a tagged release is driven by `release.yml`, which calls
+# this workflow in its own `release` context, where the same group is unique per
+# run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # The hooks in `.pre-commit-config.yaml` are the repo's documented local gate
-  # and are mostly not re-checked in CI. The `validate*` jobs run the Flutter and
-  # Go commands independently, and the `security` job runs `gitleaks`; everything
-  # else in that file is covered by running the hooks locally, as documented in
-  # CONTRIBUTING.md.
-
   # Dependabot covers four ecosystems here, but nothing checked the actions
   # and build tooling a PR actually pulls in. This catches a newly introduced
   # vulnerable or unexpectedly-licensed dependency before it merges.
@@ -66,394 +57,6 @@ jobs:
         with:
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
-
-  validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # The container, not the `actionlint` pre-commit hook: the hook is
-      # `language: golang`, so running it needs a Go toolchain. Pinned to the same
-      # v1.7.12 as the hook rev. `GIT_CONFIG_COUNT` marks the workspace safe
-      # because the container runs as root while the workspace belongs to the
-      # runner user; actionlint walks up looking for the git root and without
-      # this it reports "no project was found" and checks nothing.
-      - name: Lint GitHub Actions workflows
-        uses: docker://rhysd/actionlint:1.7.12
-        env:
-          GIT_CONFIG_COUNT: 1
-          GIT_CONFIG_KEY_0: safe.directory
-          GIT_CONFIG_VALUE_0: "*"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: true
-
-      # Flutter's native asset hooks resolve Linux desktop dependencies even
-      # when the test target itself is a VM test (cnativeapi probes GTK/X11).
-      - name: Install Linux native asset dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-3-dev libx11-dev libxi-dev
-
-      - name: Install dependencies
-        # --enforce-lockfile fails instead of silently rewriting pubspec.lock.
-        # This is the only place the lockfile is enforced; the `flutter-lockfile`
-        # pre-commit hook is local-only.
-        run: flutter pub get --enforce-lockfile
-
-      # Regenerates l10n/build_runner output and fails if it differs from the
-      # committed tree: those files are excluded from analyze, so a stale one
-      # could otherwise ship green.
-      - name: Verify generated code is up to date
-        run: bash tool/check_generated.sh
-
-      - name: Analyze
-        run: flutter analyze --fatal-infos
-
-      # `integration_test/` is in scope for the formatter but not for
-      # `flutter test` below: it holds the device-run GUI end-to-end, which
-      # needs a live node and real credentials, so it is run by
-      # tool/e2e/run_linux_app.sh / run_windows_app.ps1 (through the installed
-      # helper) or tool/e2e/run_android_app.sh (in-process, on a device) rather
-      # than by CI.
-      - name: Format Check
-        run: dart format --set-exit-if-changed lib test integration_test
-
-      # Same scope as the `shellcheck` pre-commit hook: every shell script, with
-      # `-x` so it follows `source`d files. `android/gradlew` is vendored
-      # verbatim from the Flutter SDK and its warnings are upstream, so it is
-      # skipped; it carries no `.sh` extension, so the glob already leaves it
-      # out. `-z`/`-0` keeps a path containing spaces intact, and
-      # `--no-run-if-empty` stops xargs invoking shellcheck with no arguments at
-      # all, which would read stdin and hang. shellcheck comes from the
-      # ubuntu-latest image, so this and the local hook are the same version.
-      - name: Shellcheck scripts
-        run: git ls-files -z '*.sh' | xargs -0 --no-run-if-empty shellcheck -x
-
-      - name: Run Tests
-        run: flutter test --coverage
-
-      - name: Enforce coverage floor
-        run: bash tool/coverage_gate.sh 80
-
-      - name: Upload coverage
-        # PR-only: a push to `main` runs this job too, and the artifact is a
-        # per-commit convenience for the PR, not something any later job reads.
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
-        with:
-          name: client-coverage
-          path: ${{ github.workspace }}/coverage/lcov.info
-          if-no-files-found: error
-          retention-days: 7
-
-  # The expensive half of the gate: it compiles and runs a native Windows
-  # runner, which is why it is PR/release-only and skipped on a push to `main`.
-  # NOTE: Windows runner minutes bill at twice the Linux rate.
-  validate-windows:
-    name: "Validate Windows runner"
-    if: inputs.validate_all || github.event_name == 'pull_request'
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: true
-
-      - name: Enable Windows desktop
-        run: flutter config --enable-windows-desktop
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: true
-          cache-dependency-path: boltmeshd/go.sum
-
-      # The Windows half of the validation, in one command: compiles the native
-      # runner (helper_pipe.cpp), builds and runs the Flutter-free named-pipe
-      # transport test (EXCLUDE_FROM_ALL, so `flutter build` never produces it
-      # and it must be built by name), runs the Windows-tagged boltmeshd tests
-      # (SCM/DLL-layout seams, which the Linux validate job cannot execute), and
-      # asserts the bundle carries the WireGuard files the helper loads from
-      # beside itself.
-      #
-      # This is the same script a developer runs locally
-      # (pwsh -File tool/verify_windows.ps1) so the two cannot drift: change the
-      # script, not the steps here. It re-runs the pub get above, which is
-      # cheap and keeps the script self-contained for local use.
-      - name: Verify Windows runner
-        shell: pwsh
-        run: pwsh -File tool/verify_windows.ps1
-
-  # The Android gate. PR/release-only; a push to `main` runs the cheap subset
-  # instead (see `on:` above).
-  #
-  # It deliberately does not compile the app. The minified release build is
-  # assembled once, on the tag, by release.yml's `build-android`
-  # (`flutter build appbundle --release` + `apk --release`), which is what
-  # exercises R8 and app/proguard-rules.pro. Compiling it on every PR cost
-  # 3.5-14 min of a job whose remaining checks are ~3 min, and the
-  # instrumentation suite that compared against the minified build in CI is gone
-  # (see README.md, Android), so the build was paying that cost to re-check a
-  # variant nothing here tests.
-  android-build:
-    name: "Validate Android"
-    if: inputs.validate_all || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: "temurin"
-          java-version: "21"
-          cache: "gradle"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: true
-
-      - name: Set up Go for the Android AWG JNI library
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: true
-          cache-dependency-path: android/awg-native/go.sum
-
-      # The pinned NDK, shared with release.yml through this script so the two
-      # cannot drift on the retry/cleanup that `sdkmanager`'s unverified,
-      # partially-cached downloads need. It also exports ANDROID_NDK_HOME, so
-      # the AWG check below resolves the same toolchain the shipped build uses
-      # instead of the runner image's default NDK.
-      - name: Install the Flutter-pinned Android NDK
-        run: bash tool/install_android_ndk.sh
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      # vet and lint for the JNI module need cgo with the NDK (this package
-      # includes <jni.h> and <android/log.h>), so a plain `go build` is not a
-      # gate on its own: it says nothing about vet, lint or formatting.
-      # tool/build_awg_android.py owns the toolchain wiring the APK build also
-      # uses and runs every ABI, mirroring the linux/Windows/macOS lint steps
-      # for boltmeshd. golangci-lint is installed rather than invoked as an
-      # action because the check needs that NDK environment for all four ABIs;
-      # that also means it gets no caching from golangci-lint-action, so the
-      # binary is cached here instead (`go install` is 40-110 s uncached).
-      - name: Cache golangci-lint
-        id: golangci-lint-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/go/bin/golangci-lint
-          key: golangci-lint-v2.14.0-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install golangci-lint
-        if: steps.golangci-lint-cache.outputs.cache-hit != 'true'
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-
-      - name: Check Android AWG Go module
-        run: |
-          GOPATH_BIN="$(go env GOPATH)/bin"
-          export PATH="$GOPATH_BIN:$PATH"
-          make -C android/awg-native check
-
-      # Writes android/local.properties (flutter.sdk and sdk.dir) that the direct
-      # ./gradlew below needs -- the Flutter Gradle plugin loader reads
-      # flutter.sdk from it unguarded, with no FLUTTER_ROOT fallback, which is
-      # also why anything invoking Gradle without `flutter build` must write it
-      # (see AGENTS.md). --config-only generates the build files without
-      # assembling an artifact, so the lint gate no longer waits on a build.
-      - name: Generate the Android project config
-        run: flutter build apk --debug --config-only
-
-      # Catches manifest/resource/API misuse the Dart suite cannot see.
-      - name: Run Android Lint
-        working-directory: android
-        run: ./gradlew :app:lintDebug
-
-  validate-native:
-    name: "Validate native platform contracts"
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: true
-          cache-dependency-path: boltmeshd/go.sum
-
-      # Cross-builds the Windows-only runner C++ (the Flutter-free named-pipe
-      # test) so a Windows-specific break is caught here, not only on the
-      # Flutter-gated validate-windows job.
-      - name: Install mingw-w64
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64
-
-      # systemd units + staged Linux payload, the Android manifest contract,
-      # and the Windows helper channel wiring.
-      - name: Verify native platform contracts
-        run: bash tool/verify_native.sh
-
-  validate-boltmeshd:
-    name: "Validate boltmeshd"
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: boltmeshd
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: true
-          cache-dependency-path: boltmeshd/go.sum
-
-      - name: Check Formatting (gofmt)
-        run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "The following files are not formatted properly according to gofmt:"
-            gofmt -l .
-            exit 1
-          fi
-
-      # `-diff` prints the required change instead of writing it, so this is
-      # check-only and cannot leave the tree dirty. The `go-mod-tidy-boltmeshd`
-      # pre-commit hook is local-only.
-      - name: Check go.mod/go.sum are tidy
-        run: go mod tidy -diff
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.14.0
-          working-directory: boltmeshd
-
-      # The Windows backend is build-tagged, so lint it separately or it is
-      # never analysed on this runner.
-      - name: Run golangci-lint (Windows)
-        uses: golangci/golangci-lint-action@v9
-        env:
-          GOOS: windows
-        with:
-          version: v2.14.0
-          working-directory: boltmeshd
-
-      - name: Cross-compile for Windows
-        run: |
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
-
-      # The macOS backend is build-tagged like the Windows one, so it needs the
-      # same treatment or it is never analysed. `go vet` type-checks the
-      # darwin-tagged tests too; they cannot be *run* here (they need a utun
-      # interface and root), which is what the macOS runner is for.
-      - name: Run golangci-lint (macOS)
-        uses: golangci/golangci-lint-action@v9
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-        with:
-          version: v2.14.0
-          working-directory: boltmeshd
-
-      - name: Cross-compile for macOS
-        run: |
-          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./...
-          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet ./...
-          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build ./...
-
-      # Host-platform only, deliberately. deadcode resolves build tags for the
-      # GOOS it runs under, so on Linux the macOS (and Windows) backends are
-      # invisible. The `go vet` steps above already type-check both tagged
-      # backends; this check exists to catch genuinely dead code in what the
-      # host actually builds.
-      #
-      # -test is required, not cosmetic. internal/tunnel/uapi.go carries no
-      # build tag by design — the wg-quick <-> UAPI translation is the
-      # unit-testable part of the macOS backend and its tests run on every
-      # runner — yet its only production callers live in the darwin-tagged
-      # tunnel_darwin.go. Without the test packages as entry points the whole
-      # file reads as unreachable here, even though it is compiled and covered
-      # by uapi_test.go. This mirrors golangci-lint's `unused`, which also
-      # counts test usage, which is why the lint steps above report nothing
-      # where this step did. The trade is that a helper used only by tests is
-      # no longer reported as dead.
-      - name: Check for unreachable functions (deadcode)
-        run: |
-          out="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...)"
-          if [ -n "$out" ]; then
-            echo "Unreachable functions detected:"
-            echo "$out"
-            exit 1
-          fi
-
-      - name: Run Go Unit Tests
-        run: go test -v ./...
-
-      # `boltmesh/stream` is a separate module (so the Android native build can
-      # import it), and the steps above all target `boltmeshd`. A change there
-      # fires the boltmeshd suite through the wire-format tests, but the module
-      # itself still needs formatting, tidiness, lint and its own tests checked
-      # here or it can rot between the two consumers.
-      - name: Check stream formatting (gofmt)
-        working-directory: stream
-        run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "The following files are not formatted properly according to gofmt:"
-            gofmt -l .
-            exit 1
-          fi
-
-      - name: Check stream go.mod/go.sum are tidy
-        working-directory: stream
-        run: go mod tidy -diff
-
-      - name: Run golangci-lint (stream)
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.14.0
-          working-directory: stream
-
-      - name: Run stream Go unit tests
-        working-directory: stream
-        run: go test -v ./...
 
   security:
     name: "Security Scan"

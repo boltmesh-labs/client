@@ -3,10 +3,10 @@
 # the systemd units and staged Linux package payload, the Android manifest the
 # background tunnel depends on, and the Windows helper channel wiring.
 #
-# Runs on Linux (CI's validate-native job). The Windows named-pipe transport is
+# Runs on Linux. The Windows named-pipe transport is
 # cross-compiled here with mingw-w64 but not executed (it drives overlapped
-# named-pipe I/O, which Wine does not emulate faithfully); the validate-windows
-# job builds and runs it.
+# named-pipe I/O, which Wine does not emulate faithfully); the Windows box's
+# `pwsh -File tool/verify_windows.ps1` builds and runs it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -513,7 +513,7 @@ fi
 # The Flutter-free test must be EXCLUDE_FROM_ALL. Flutter builds the INSTALL
 # target and the fastforge exe packager copies the whole runner output directory
 # into the installer's [Files] wildcard, so an ALL target would be built next to
-# boltmesh.exe and shipped. The validate-windows job builds it by name instead.
+# boltmesh.exe and shipped. The manual Windows check builds it by name instead.
 if grep -qF 'add_executable(helper_pipe_io_tests EXCLUDE_FROM_ALL' \
   windows/runner/CMakeLists.txt; then
   ok "Windows helper test is excluded from the packaged bundle"
@@ -540,7 +540,7 @@ fi
 #
 # No existing gate sees that bundle. The Go suite redirects the vendored path at
 # a temp directory, and TestWintunVendoredBinaryMatchesThePin skips unless the
-# driver is already beside the test binary, which it never is in CI. A bundle
+# driver is already beside the test binary, which it never is in a build tree. A bundle
 # without the driver still passes every Windows test and then fails each
 # obfuscated connect at runtime, so assert both halves here: the vendored file
 # still matches the pin constant, and the hook still stages it.
@@ -570,8 +570,8 @@ else
 fi
 
 # --- Windows: cross-compile the C++ transport test -------------------------
-# The named-pipe transport is Windows-only C++ that only the Flutter-gated
-# validate-windows job otherwise compiles. Cross-compile the standalone,
+# The named-pipe transport is Windows-only C++ that the Windows box's manual
+# `tool/verify_windows.ps1` otherwise compiles. Cross-compile the standalone,
 # Flutter-free test with mingw-w64 so a Windows-only C++ break is caught here
 # too. It is not executed here: the test drives overlapped named-pipe I/O,
 # which Wine emulates incompletely (the process can hang), so behavioural
