@@ -46,7 +46,7 @@ commit that passed that scan, then builds and publishes:
 | `prepare-release` | `release.yml` | `v*` tags | creates the empty draft GitHub Release that the build jobs upload into (reusing it on a re-run) so the hand-off does not need Actions artifacts |
 | `build-android` | `release.yml` | `v*` tags | `flutter build appbundle --release` + `flutter build apk --release`, signed with the upload key. This is the only place the minified variant is assembled, so it is where R8 and `proguard-rules.pro` are exercised |
 | `build-linux` | `release.yml` | `v*` tags | `fastforge release --name=production` → deb + rpm (stages `boltmeshd`) |
-| `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → Authenticode-signed Inno Setup `.exe` |
+| `build-windows` | `release.yml` | `v*` tags | `fastforge release --name=production` → unsigned Inno Setup `.exe` (no Authenticode certificate) |
 | `release` | `release.yml` | `v*` tags | SBOMs (`Syft`) + `SHA256SUMS`, keyless cosign signatures for the Linux packages, provenance/SBOM attestations, then drafts the GitHub Release with every asset |
 
 The per-commit validation — generated code, `flutter analyze`/format, the Dart
@@ -91,7 +91,7 @@ The manual validation gate is the contributor's responsibility on those PRs.
 | - | - | - |
 | Android | `.aab` (Play) + `.apk` | upload keystore (`ANDROID_KEYSTORE*` secrets) |
 | Linux | `.deb` + `.rpm` | keyless cosign; detached `.sigstore.json` per package |
-| Windows | Inno Setup `.exe` | Authenticode (`.pfx` via `WINDOWS_CERTIFICATE*` secrets) |
+| Windows | Inno Setup `.exe` | unsigned (no Authenticode certificate) |
 | All | `SHA256SUMS` | SHA-256 of every binary, itself keyless cosign-signed |
 | All | `*.cdx.json` / `*.spdx.json` | CycloneDX + SPDX SBOMs (Syft) |
 | All | `boltmesh-<tag>-*.sigstore.json` | raw Sigstore attestation bundles |
@@ -112,12 +112,12 @@ distributable. The attestations also live in GitHub's attestation API
 (`gh attestation verify`); the raw bundles are published for offline
 verification.
 
-Tagged `build-android` fails when `ANDROID_KEYSTORE` is unset, and tagged
-`build-windows` fails when `WINDOWS_CERTIFICATE` is unset — neither will publish
-a debug-signed or unsigned release. Local builds keep the debug fallback unless
-`REQUIRE_RELEASE_SIGNING=true` is set. Full instructions, including how to
-generate the keystore and where the signing hooks live, are in
-[README.md](README.md#android-release-build) and
+Tagged `build-android` fails when `ANDROID_KEYSTORE` is unset rather than publish
+a debug-signed release; local builds keep the debug fallback unless
+`REQUIRE_RELEASE_SIGNING=true` is set. The Windows installer is published
+unsigned — there is no Authenticode certificate — so it has no equivalent gate.
+Full instructions, including how to generate the keystore and where the signing
+hooks live, are in [README.md](README.md#android-release-build) and
 [README.md](README.md#windows-release-build).
 
 ### Verifying a release
@@ -154,8 +154,6 @@ verify the same way (the latter hold the provenance and SBOM predicates).
 - **`build-android` fails with "ANDROID_KEYSTORE is not set"**: the repository
   secret is missing. Add the base64 keystore and password under Settings →
   Secrets and variables → Actions (see README).
-- **`build-windows` fails with "WINDOWS_CERTIFICATE is not set"**: same, for the
-  base64 `.pfx` and its password.
 - **`release` fails in the cosign/attestation steps**: these need the job's
   `id-token: write` and `attestations: write` permissions and a public
   repository (the public-good Sigstore instance). Fix and re-run — the job fails

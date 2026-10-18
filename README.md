@@ -488,45 +488,16 @@ the installer is pinned to Inno's `x64compatible`. An x64 install still runs
 on Windows on ARM under emulation. The helper's `make build-windows-arm64`
 target remains a standalone artifact and is not part of this package.
 
-### Code signing (Authenticode)
+### Code signing
 
-`windows/packaging/sign.ps1` runs as the `windows-exe` job's pre/post hooks:
-it signs every executable in the freshly built bundle (the app, the
-`boltmeshd` helper, and the plugin-bundled `wireguard_svc.exe`) between the
-Flutter build and Inno packing, then signs the installer after packing,
-timestamped via RFC 3161 (default `http://timestamp.digicert.com`, override
-`WINDOWS_TIMESTAMP_URL`). Signing every bundled executable as well as the setup
-exe means the signature covers everything the installer later launches — the
-LocalSystem helper runs `wireguard_svc.exe` from `{app}`, so it is signed too.
-
-CI reads a base64 `.pfx` from two repo secrets (Settings → Secrets and
-variables → Actions):
-
-- `WINDOWS_CERTIFICATE` — base64 of the `.pfx`:
-  `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))` on one line.
-- `WINDOWS_CERTIFICATE_PASSWORD` — the `.pfx` password.
-
-The `build-windows` job runs only on tags and fails when
-`WINDOWS_CERTIFICATE` is unset rather than publish an unsigned installer,
-mirroring `build-android`'s keystore gate; a secret that is set but unusable
-also fails the release. Local `fastforge` builds still skip signing with a
-warning when `WINDOWS_CERTIFICATE_PATH` is unset. To sign locally, either set
-`WINDOWS_CERTIFICATE_PATH` + `WINDOWS_CERTIFICATE_PASSWORD` or pass them
-explicitly:
-
-```powershell
-pwsh -File windows/packaging/sign.ps1 `
-  -Path build/windows/x64/runner/Release/boltmesh.exe `
-  -CertificatePath cert.pfx -CertificatePassword hunter2
-```
-
-Certificates are never committed (`*.pfx`/`*.p12` are gitignored). An
-exportable OV certificate works but only builds SmartScreen reputation over
-time; EV (immediate reputation) ships on a hardware token or cloud HSM and
-cannot be exported to a `.pfx`, so for those swap the `signtool sign` line for
-the provider's tool/action — [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)
-(`azure/trusted-signing-action`), DigiCert KeyLocker or SSL.com eSigner. The
-rest of the pipeline (which files, when, verify) is unchanged.
+There is none. BoltMesh has no Authenticode certificate, so `build-windows`
+publishes an unsigned installer. Windows still runs it and the LocalSystem
+helper it installs, but users see SmartScreen's "Windows protected your PC"
+prompt and "Unknown publisher" in the elevation dialog. Re-adding signing means
+obtaining an Authenticode certificate (an exportable `.pfx`, or a cloud service
+such as Azure Trusted Signing, since CA/B rules put modern keys on non-exportable
+hardware) and then wiring a signing hook into `distribute_options.yaml` plus a
+decode step in `.github/workflows/release.yml`.
 
 ## Flows
 

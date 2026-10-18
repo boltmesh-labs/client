@@ -23,7 +23,8 @@ Thumbs.db
 .widget_preview/
 
 # ---> Code signing
-# Never commit certificates/keys (Windows Authenticode; Android keystores).
+# Never commit certificates/keys (Android keystores, and any other signing key
+# material).
 *.pfx
 *.p12
 *.jks

@@ -125,9 +125,9 @@ catch {
 # while a stock region's WireGuard-for-Windows path keeps working, which is what
 # makes the gap easy to miss.
 #
-# Not signed, deliberately. sign.ps1 selects *.exe, and re-signing would rewrite
-# the bytes and break wintunSHA256 -- the hash pin is this driver's trust
-# mechanism, not its (counter-signed, long-expired) Authenticode signature.
+# Shipped as-is, deliberately. The helper pins this driver's bytes by hash
+# (wintunSHA256) before loading it, and that hash pin is the trust mechanism,
+# not the file's (counter-signed, long-expired) upstream Authenticode signature.
 $wintunName = 'wintun.dll'
 $wintunSource = Join-Path $repoRoot "boltmeshd/internal/tunnel/third_party/wintun/$wintunName"
 if (-not (Test-Path -LiteralPath $wintunSource -PathType Leaf)) {

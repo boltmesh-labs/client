@@ -336,35 +336,12 @@ jobs:
           dart pub global activate fastforge "$FASTFORGE_VERSION"
           echo "$env:LOCALAPPDATA\Pub\Cache\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      # Decodes the base64 .pfx (repo secrets) to a temp file and exports its
-      # path/password so the fastforge signing hooks inherit them. Required on
-      # tags (this job only runs on tags): an unsigned installer is not
-      # distributable, matching build-android's keystore gate.
-      - name: Prepare signing certificate
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx'
-          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
-            Write-Host '::error::WINDOWS_CERTIFICATE is not set; refusing to publish an unsigned release. See README.md (Windows code signing).'
-            exit 1
-          }
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
-          "WINDOWS_CERTIFICATE_PATH=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "WINDOWS_CERTIFICATE_PASSWORD=$env:WINDOWS_CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       # Runs only the windows-exe job; the Linux jobs are skipped on Windows
-      # (and vice versa on the Linux runner) by fastforge. The job's hooks sign
-      # the app exe and the installer.
+      # (and vice versa on the Linux runner) by fastforge. The job's pre hook
+      # stages the boltmeshd helper into the bundle. The installer ships
+      # unsigned: BoltMesh has no Authenticode certificate.
       - name: Package Windows installer
         run: fastforge release --name=production
-
-      - name: Remove signing certificate
-        if: always()
-        shell: pwsh
-        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'boltmesh-codesign.pfx') -ErrorAction SilentlyContinue
 
       - name: Upload Windows installer to the draft release
         shell: pwsh

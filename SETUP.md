@@ -1,8 +1,8 @@
 # BoltMesh Client — Development Setup
 
 Fresh-machine setup for running the Flutter client from source. For release
-packaging (Android AAB + keystore, Windows Inno Setup + Authenticode), CI
-secrets and the test suite, see [README.md](README.md).
+packaging (Android AAB + keystore, Windows Inno Setup), CI secrets and the test
+suite, see [README.md](README.md).
 
 ## Shared prereqs
 
