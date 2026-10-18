@@ -27,6 +27,11 @@ permissions:
 # when the tag is built, so the same tag could package differently a day
 # later. Bump this deliberately (and re-verify the packaging hooks) rather
 # than letting it float.
+#
+# No `cache:` on any setup step below: every Actions cache is a keyed entry in
+# the account's shared storage allowance, and the dependency-keyed ones
+# accumulate with each lockfile change. These jobs are tag-only, so they fetch
+# their toolchains and modules per run rather than caching them.
 env:
   FASTFORGE_VERSION: "0.6.12"
 
@@ -97,14 +102,14 @@ jobs:
         with:
           distribution: "temurin"
           java-version: "21"
-          cache: "gradle"
+          cache: "false"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.x"
           channel: "stable"
-          cache: true
+          cache: false
 
       - name: Install dependencies
         run: flutter pub get
@@ -122,8 +127,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: "1.27"
-          cache: true
-          cache-dependency-path: android/awg-native/go.sum
+          cache: false
 
       # Shares the retry/cleanup with ci.yml, so the flake cannot be fixed in one
       # workflow and left in the other.
@@ -204,15 +208,14 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: "1.27"
-          cache: true
-          cache-dependency-path: boltmeshd/go.sum
+          cache: false
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.x"
           channel: "stable"
-          cache: true
+          cache: false
 
       - name: Enable Linux desktop
         run: flutter config --enable-linux-desktop
@@ -266,7 +269,7 @@ jobs:
         with:
           flutter-version: "3.47.x"
           channel: "stable"
-          cache: true
+          cache: false
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
@@ -287,8 +290,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: "1.27"
-          cache: true
-          cache-dependency-path: boltmeshd/go.sum
+          cache: false
 
       # Inno Setup 7, not 6: it adds extended-length path support and a
       # 64-bit compiler. Chocolatey publishes no 7.x package, so install the
