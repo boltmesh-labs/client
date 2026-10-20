@@ -1125,10 +1125,10 @@ packages:
     dependency: "direct main"
     description:
       name: wireguard_flutter_plus
-      sha256: "6a561135efdd8b9f1b62b6aa1957e53eb7bc4603dad2a13be00d7d1c592c9e0c"
+      sha256: "91619106beec898d8c739d4dc91dd2d5d621fe3701276526777ecff01954bede"
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.7"
+    version: "1.0.9"
   xdg_directories:
     dependency: transitive
     description:
