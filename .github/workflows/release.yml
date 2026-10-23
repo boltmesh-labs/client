@@ -83,6 +83,11 @@ jobs:
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job stages no checkout (it only needs the API), and `gh`
+          # resolves the repository from the git remotes it runs in. Without
+          # this it fails with "fatal: not a git repository" before creating
+          # anything.
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${{ github.ref_name }}"
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -448,7 +453,10 @@ jobs:
           cat SHA256SUMS
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        # Pinned to an exact release: sigstore/cosign-installer publishes no
+        # moving `v4` ref, so `@v4` does not resolve and the step fails before
+        # cosign runs.
+        uses: sigstore/cosign-installer@v4.1.2
 
       # Keyless signing: the signature carries this workflow's OIDC identity and
       # is recorded in the public Rekor transparency log, so no long-lived key
