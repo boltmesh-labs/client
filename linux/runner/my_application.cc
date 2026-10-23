@@ -60,6 +60,14 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_set_size_request(GTK_WIDGET(window), 360, 560);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
+  // Impeller is the desktop default as of Flutter 3.47, but its OpenGL ES
+  // backend presents no frame on software/virtual GL (VMware SVGA3D with
+  // "Accelerated: no", xrdp, llvmpipe): the engine never emits first-frame, so
+  // the window above is never shown at all. Skia renders the same build
+  // correctly, so opt out until upstream fixes that path. This is the
+  // documented deploy-time opt-out for Linux; the compile-time define does not
+  // exist, and the release (product) engine ignores FLUTTER_ENGINE_SWITCHES.
+  fl_dart_project_set_enable_impeller(project, FALSE);
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
 

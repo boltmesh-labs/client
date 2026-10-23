@@ -307,6 +307,13 @@ Not everything was blocked, and the parts that were not are landed and tested:
   corners — `flutter_launcher_icons` has no Linux target); keep it a
   512×512 RGBA copy of the app icon or the deb/rpm launcher shows black
   corners.
+  The build renders with Skia rather than Impeller: the runner
+  (`linux/runner/my_application.cc`) opts out with
+  `fl_dart_project_set_enable_impeller(project, FALSE)`, because Impeller's
+  OpenGL ES backend presents no frame on software/virtual GL (VMware SVGA3D,
+  xrdp, llvmpipe) and the window is only shown on Flutter's first frame, so
+  the app would otherwise open no window at all. Revisit when upstream fixes
+  that path, since Flutter plans to remove the opt-out.
 - **Desktop close-to-tray (Windows/macOS/Linux)**: the window's close button
   hides the window instead of quitting, and the tray/menu-bar icon restores
   it (see `lib/app/desktop_tray.dart` and `lib/core/desktop/`). The menu has a
