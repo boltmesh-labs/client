@@ -50,6 +50,15 @@ jobs:
   validate:
     name: "Validate"
     uses: ./.github/workflows/ci.yml
+    # The called workflow's dependency-review job requests pull-requests:
+    # write. A caller that grants only `contents: read` rejects that at
+    # startup ("Error calling workflow ... only allowed pull-requests: none"),
+    # even though the job is skipped on a tag (its `if:` is pull_request-only).
+    # Grant it on this job alone so no build job and not the signing job
+    # inherits it.
+    permissions:
+      contents: read
+      pull-requests: write
 
   # The build outputs do not travel between jobs as Actions artifacts: artifacts
   # share the account's storage allowance with Actions caches and Packages, and
