@@ -1,5 +1,5 @@
 name: boltmesh
-description: BoltMesh VPN WireGuard client (Flutter).
+description: BoltMesh VPN client.
 publish_to: "none"
 version: 0.1.0+1
 
