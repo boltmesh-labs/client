@@ -14,7 +14,7 @@ on:
       - "v*"
 
 # Least privilege by default: every job only reads the repository. The jobs that
-# publish add scopes for themselves: `prepare-release` and the three build jobs
+# publish add scopes for themselves: `prepare-release` and the build jobs
 # take `contents: write`, because the build outputs go straight onto the draft
 # release, and only `release` also takes `id-token`/`attestations` for the signed
 # release. A compromised third-party action in the build jobs therefore cannot
@@ -59,7 +59,7 @@ jobs:
   # creates it empty, the build jobs upload into it, and `release` adds the
   # SBOMs, signatures and checksums before it is published.
   #
-  # Creating it once here instead of letting the three build jobs race to do it
+  # Creating it once here instead of letting the build jobs race to do it
   # keeps creation deterministic. The existence check makes a re-run of the same
   # tag reuse the draft rather than fail on it.
   prepare-release:
@@ -82,108 +82,114 @@ jobs:
             gh release create "$tag" --draft --title "$tag" --generate-notes
           fi
 
-  build-android:
-    name: "Build Android"
-    needs: [validate, prepare-release]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      # Upload into the draft release `prepare-release` created.
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      # No `cache:` here: `setup-java`'s `cache` input names a package manager,
-      # so caching is disabled by omitting it.
-      - name: Set up Java 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: "temurin"
-          java-version: "21"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.x"
-          channel: "stable"
-          cache: false
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      # The JNI library is built by android/app/build.gradle.kts on `preBuild`
-      # through tool/build_awg_android.py, so this job needs a Go toolchain and
-      # the pinned NDK -- and the runner image supplies neither: its Go is older
-      # than android/awg-native/go.mod's `go 1.27.0`, and its NDK is not the
-      # 28.2.13676358 Flutter's Gradle plugin pins. Without these steps the
-      # release leans on Go's automatic toolchain download and on AGP fetching
-      # ~700 MB it never verifies, which is the download that truncates.
-      # `build.gradle.kts` hard-fails rather than building against a different
-      # NDK, so the first tag would have failed here.
-      - name: Set up Go for the Android AWG JNI library
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-          cache: false
-
-      # Shares the retry/cleanup with ci.yml, so the flake cannot be fixed in one
-      # workflow and left in the other.
-      - name: Install the Flutter-pinned Android NDK
-        run: bash tool/install_android_ndk.sh
-
-      # The git tag is the release source of truth; pubspec's checked-in
-      # version is dev-only. Android versionName and the fastforge artifact
-      # names both derive from pubspec.
-      - name: Sync version from tag
-        run: dart run tool/set_release_version.dart
-
-      # Decodes the base64 keystore and writes android/key.properties so the
-      # release build is signed with the upload key, never the debug key.
-      # Required on tags: a debug-signed artifact is not distributable.
-      - name: Configure release signing
-        env:
-          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          if [ -z "$ANDROID_KEYSTORE" ]; then
-            echo "::error::ANDROID_KEYSTORE is not set; refusing to publish a debug-signed release. See README.md (Android release build)."
-            exit 1
-          fi
-          printf '%s' "$ANDROID_KEYSTORE" | tr -d '[:space:]' | base64 -d > android/app/upload-keystore.jks
-          {
-            echo "storeFile=upload-keystore.jks"
-            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
-            echo "keyAlias=${ANDROID_KEY_ALIAS:-upload}"
-            echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
-          } > android/key.properties
-          echo "REQUIRE_RELEASE_SIGNING=true" >> "$GITHUB_ENV"
-
-      - name: Build Android App Bundle
-        run: flutter build appbundle --release
-
-      - name: Build Android APK
-        run: flutter build apk --release
-
-      - name: Remove signing material
-        if: always()
-        run: rm -f android/key.properties android/app/upload-keystore.jks
-
-      # `--clobber` so a re-run of the same tag replaces its assets instead of
-      # failing on the duplicate name.
-      - name: Upload Android assets to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ github.ref_name }}" \
-            build/app/outputs/bundle/release/app-release.aab \
-            build/app/outputs/flutter-apk/app-release.apk \
-            --clobber
+  # Android is disabled for the first release: `build-android` hard-fails
+  # without ANDROID_KEYSTORE, because it refuses to publish a debug-signed
+  # artifact, and no signing material is configured yet. Re-enable this job
+  # together with `release`'s `needs:` list, the asset download and both
+  # attestation `subject-path` lists below.
+  #
+  #   build-android:
+  #     name: "Build Android"
+  #     needs: [validate, prepare-release]
+  #     if: startsWith(github.ref, 'refs/tags/v')
+  #     runs-on: ubuntu-latest
+  #     timeout-minutes: 90
+  #     permissions:
+  #       # Upload into the draft release `prepare-release` created.
+  #       contents: write
+  #
+  #     steps:
+  #       - uses: actions/checkout@v7
+  #         with:
+  #           persist-credentials: false
+  #
+  #       # No `cache:` here: `setup-java`'s `cache` input names a package manager,
+  #       # so caching is disabled by omitting it.
+  #       - name: Set up Java 21
+  #         uses: actions/setup-java@v6
+  #         with:
+  #           distribution: "temurin"
+  #           java-version: "21"
+  #
+  #       - name: Set up Flutter
+  #         uses: subosito/flutter-action@v2
+  #         with:
+  #           flutter-version: "3.47.x"
+  #           channel: "stable"
+  #           cache: false
+  #
+  #       - name: Install dependencies
+  #         run: flutter pub get
+  #
+  #       # The JNI library is built by android/app/build.gradle.kts on `preBuild`
+  #       # through tool/build_awg_android.py, so this job needs a Go toolchain and
+  #       # the pinned NDK -- and the runner image supplies neither: its Go is older
+  #       # than android/awg-native/go.mod's `go 1.27.0`, and its NDK is not the
+  #       # 28.2.13676358 Flutter's Gradle plugin pins. Without these steps the
+  #       # release leans on Go's automatic toolchain download and on AGP fetching
+  #       # ~700 MB it never verifies, which is the download that truncates.
+  #       # `build.gradle.kts` hard-fails rather than building against a different
+  #       # NDK, so the first tag would have failed here.
+  #       - name: Set up Go for the Android AWG JNI library
+  #         uses: actions/setup-go@v7
+  #         with:
+  #           go-version: "1.27"
+  #           cache: false
+  #
+  #       # Shares the retry/cleanup with ci.yml, so the flake cannot be fixed in one
+  #       # workflow and left in the other.
+  #       - name: Install the Flutter-pinned Android NDK
+  #         run: bash tool/install_android_ndk.sh
+  #
+  #       # The git tag is the release source of truth; pubspec's checked-in
+  #       # version is dev-only. Android versionName and the fastforge artifact
+  #       # names both derive from pubspec.
+  #       - name: Sync version from tag
+  #         run: dart run tool/set_release_version.dart
+  #
+  #       # Decodes the base64 keystore and writes android/key.properties so the
+  #       # release build is signed with the upload key, never the debug key.
+  #       # Required on tags: a debug-signed artifact is not distributable.
+  #       - name: Configure release signing
+  #         env:
+  #           ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+  #           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  #           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+  #           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+  #         run: |
+  #           if [ -z "$ANDROID_KEYSTORE" ]; then
+  #             echo "::error::ANDROID_KEYSTORE is not set; refusing to publish a debug-signed release. See README.md (Android release build)."
+  #             exit 1
+  #           fi
+  #           printf '%s' "$ANDROID_KEYSTORE" | tr -d '[:space:]' | base64 -d > android/app/upload-keystore.jks
+  #           {
+  #             echo "storeFile=upload-keystore.jks"
+  #             echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+  #             echo "keyAlias=${ANDROID_KEY_ALIAS:-upload}"
+  #             echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+  #           } > android/key.properties
+  #           echo "REQUIRE_RELEASE_SIGNING=true" >> "$GITHUB_ENV"
+  #
+  #       - name: Build Android App Bundle
+  #         run: flutter build appbundle --release
+  #
+  #       - name: Build Android APK
+  #         run: flutter build apk --release
+  #
+  #       - name: Remove signing material
+  #         if: always()
+  #         run: rm -f android/key.properties android/app/upload-keystore.jks
+  #
+  #       # `--clobber` so a re-run of the same tag replaces its assets instead of
+  #       # failing on the duplicate name.
+  #       - name: Upload Android assets to the draft release
+  #         env:
+  #           GH_TOKEN: ${{ github.token }}
+  #         run: |
+  #           gh release upload "${{ github.ref_name }}" \
+  #             build/app/outputs/bundle/release/app-release.aab \
+  #             build/app/outputs/flutter-apk/app-release.apk \
+  #             --clobber
 
   build-linux:
     name: "Build Linux"
@@ -357,7 +363,7 @@ jobs:
 
   release:
     name: "Create Release"
-    needs: [build-android, build-linux, build-windows]
+    needs: [build-linux, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -385,7 +391,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "${{ github.ref_name }}" --dir artifacts/android --pattern '*.aab' --pattern '*.apk'
+          # Android is disabled for the first release; restore this download
+          # with the build job above.
+          # gh release download "${{ github.ref_name }}" --dir artifacts/android --pattern '*.aab' --pattern '*.apk'
           gh release download "${{ github.ref_name }}" --dir artifacts/linux --pattern '*.deb' --pattern '*.rpm'
           gh release download "${{ github.ref_name }}" --dir artifacts/windows --pattern '*.exe'
 
@@ -451,8 +459,6 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            artifacts/android/**/*.aab
-            artifacts/android/**/*.apk
             artifacts/linux/**/*.deb
             artifacts/linux/**/*.rpm
             artifacts/windows/**/*.exe
@@ -465,8 +471,6 @@ jobs:
         with:
           sbom-path: artifacts/sbom/boltmesh-${{ github.ref_name }}.cdx.json
           subject-path: |
-            artifacts/android/**/*.aab
-            artifacts/android/**/*.apk
             artifacts/linux/**/*.deb
             artifacts/linux/**/*.rpm
             artifacts/windows/**/*.exe
