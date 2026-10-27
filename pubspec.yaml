@@ -15,7 +15,7 @@ dependencies:
   intl: ^0.20.2
   # Cross-platform WireGuard native bridge (Android VpnService / Apple NE / Wintun / TUN).
   # NOTE: API is WireGuardFlutter.instance.
-  wireguard_flutter_plus: ^1.0.7
+  wireguard_flutter_plus: ^1.0.9
   # Device ID, private key, API token in Keychain/Keystore.
   flutter_secure_storage: ^11.2.0
   # X25519 keypair generation (Curve25519).
@@ -54,7 +54,7 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  build_runner: ^2.16.2
+  build_runner: ^2.17.1
   freezed: ^4.0.1
   json_serializable: ^6.14.1
   flutter_launcher_icons: ^0.14.4
